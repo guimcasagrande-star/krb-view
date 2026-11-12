@@ -38,7 +38,19 @@ html, body { height: 100%; margin: 0; background: var(--fundo); color: var(--tex
   border-bottom: 1px solid var(--borda);
 }
 .marca { font-weight: 600; letter-spacing: 0.2px; }
-#ferramentas { display: flex; gap: 6px; flex: 1; }
+#ferramentas { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }
+#ferramentas .grupo-botoes { display: flex; gap: 4px; flex-shrink: 0; }
+#ferramentas .separador { width: 1px; height: 20px; background: var(--borda); flex-shrink: 0; margin: 0 4px; }
+#ferramentas button { padding: 4px 8px; font-size: 13px; white-space: nowrap; }
+#ferramentas button[aria-pressed="true"] { background: #1f3a57; border-color: var(--destaque); }
+
+#ajuda { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; max-width: min(520px, calc(100vw - 32px)); }
+#ajuda::backdrop { background: rgba(0, 0, 0, 0.6); }
+#ajuda h2 { margin: 0 0 10px; font-size: 16px; }
+#ajuda table { border-collapse: collapse; width: 100%; }
+#ajuda td { padding: 4px 8px 4px 0; vertical-align: top; }
+#ajuda td:first-child { color: var(--destaque); white-space: nowrap; padding-right: 16px; }
+#ajuda button { margin-top: 12px; }
 
 #painel-lateral {
   grid-area: lateral;

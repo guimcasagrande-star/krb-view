@@ -1,5 +1,7 @@
+import { iniciarAtalhos } from './tools/atalhos';
 import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
+import { iniciarBarraFerramentas } from './ui/barraFerramentas';
 import { EVENTO_ABRIR_PILHA, renderizarPainelEstudos, type AbrirPilhaEvento } from './ui/painelEstudos';
 import { abrirPilha2d, configurarViewport2d } from './viewer/viewport2d';
 
@@ -12,6 +14,8 @@ function obter<T extends HTMLElement>(id: string): T {
 const lista = obter('lista-estudos');
 const vazio = obter('vazio');
 configurarViewport2d({ contentor: obter('area-viewports'), mensagem: vazio });
+iniciarBarraFerramentas(obter('ferramentas'));
+iniciarAtalhos();
 
 iniciarAbrirPasta(
   {

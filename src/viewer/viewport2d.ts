@@ -5,13 +5,12 @@
 
 import { Enums, imageLoader, type Types } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
-import { Enums as EnumsTools, StackScrollTool, ToolGroupManager } from '@cornerstonejs/tools';
 import type { StackNode } from '../io/organize';
+import { criarGrupoFerramentas, ID_ELEMENTO_2D } from '../tools/grupo';
 import { estado } from '../state/store';
-import { ID_MOTOR, iniciarCornerstone } from './iniciar';
+import { ID_VIEWPORT_2D, iniciarCornerstone } from './iniciar';
 
-const ID_VIEWPORT = 'vp-principal';
-const ID_GRUPO = 'grupo-principal';
+const ID_VIEWPORT = ID_VIEWPORT_2D;
 const CARGAS_SIMULTANEAS = 4;
 
 export interface ElementosViewport2d {
@@ -68,7 +67,7 @@ async function garantirViewport(): Promise<Types.IStackViewport> {
   const motor = await iniciarCornerstone();
   if (!elementoViewport) {
     elementoViewport = document.createElement('div');
-    elementoViewport.id = 'viewport-2d';
+    elementoViewport.id = ID_ELEMENTO_2D;
     elementoViewport.addEventListener('contextmenu', (e) => e.preventDefault());
     el.contentor.append(elementoViewport);
     motor.enableElement({
@@ -76,14 +75,7 @@ async function garantirViewport(): Promise<Types.IStackViewport> {
       type: Enums.ViewportType.STACK,
       element: elementoViewport,
     });
-    // A tarefa 1.5 amplia este grupo (janela, zoom, pan, medidas). Aqui só a rolagem.
-    const grupo = ToolGroupManager.createToolGroup(ID_GRUPO);
-    if (!grupo) throw new Error('Não foi possível criar o grupo de ferramentas.');
-    grupo.addTool(StackScrollTool.toolName);
-    grupo.addViewport(ID_VIEWPORT, ID_MOTOR);
-    grupo.setToolActive(StackScrollTool.toolName, {
-      bindings: [{ mouseButton: EnumsTools.MouseBindings.Wheel }],
-    });
+    criarGrupoFerramentas();
   }
   return motor.getViewport<Types.IStackViewport>(ID_VIEWPORT);
 }

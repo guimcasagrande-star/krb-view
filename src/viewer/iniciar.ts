@@ -5,9 +5,22 @@
 
 import { init as iniciarCore, RenderingEngine } from '@cornerstonejs/core';
 import { init as iniciarLoader } from '@cornerstonejs/dicom-image-loader';
-import { addTool, init as iniciarTools, StackScrollTool } from '@cornerstonejs/tools';
+import {
+  addTool,
+  AngleTool,
+  EllipticalROITool,
+  init as iniciarTools,
+  LengthTool,
+  PanTool,
+  ProbeTool,
+  RectangleROITool,
+  StackScrollTool,
+  WindowLevelTool,
+  ZoomTool,
+} from '@cornerstonejs/tools';
 
 export const ID_MOTOR = 'motor';
+export const ID_VIEWPORT_2D = 'vp-principal';
 
 let promessa: Promise<RenderingEngine> | undefined;
 
@@ -17,7 +30,19 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
     await iniciarCore();
     iniciarLoader({ maxWebWorkers: Math.max(1, Math.min(4, (navigator.hardwareConcurrency ?? 4) - 1)) });
     iniciarTools();
-    addTool(StackScrollTool);
+    for (const ferramenta of [
+      StackScrollTool,
+      WindowLevelTool,
+      ZoomTool,
+      PanTool,
+      LengthTool,
+      AngleTool,
+      EllipticalROITool,
+      RectangleROITool,
+      ProbeTool,
+    ]) {
+      addTool(ferramenta);
+    }
     return new RenderingEngine(ID_MOTOR);
   })();
   return promessa;
