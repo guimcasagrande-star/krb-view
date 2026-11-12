@@ -3,11 +3,13 @@
  */
 
 import { aplicarPredefinicao, apagarSelecionadas, cancelar } from './grupo';
+import { alternarOverlay } from '../viewer/overlay';
 
 const LINHAS_AJUDA: Array<[string, string]> = [
   ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível por padrão)'],
   ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
   ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
+  ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
   ['Esc', 'Cancela a medida em andamento e volta a janela/nível'],
   ['Delete', 'Apaga a medida selecionada'],
   ['?', 'Mostra ou esconde esta ajuda'],
@@ -80,6 +82,10 @@ export function iniciarAtalhos(): void {
     }
     if (e.key === '?') {
       alternarAjuda();
+      return;
+    }
+    if (e.key.toLowerCase() === 'o') {
+      alternarOverlay();
       return;
     }
     if (/^[1-6]$/.test(e.key)) {

@@ -8,6 +8,7 @@ import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode } from '../io/organize';
 import { criarGrupoFerramentas, ID_ELEMENTO_2D } from '../tools/grupo';
 import { estado } from '../state/store';
+import { atualizarOverlay, criarOverlay, ligarOverlay } from './overlay';
 import { ID_VIEWPORT_2D, iniciarCornerstone } from './iniciar';
 
 const ID_VIEWPORT = ID_VIEWPORT_2D;
@@ -76,6 +77,8 @@ async function garantirViewport(): Promise<Types.IStackViewport> {
       element: elementoViewport,
     });
     criarGrupoFerramentas();
+    criarOverlay(el.contentor);
+    ligarOverlay(elementoViewport, motor.getViewport<Types.IStackViewport>(ID_VIEWPORT));
   }
   return motor.getViewport<Types.IStackViewport>(ID_VIEWPORT);
 }
@@ -137,6 +140,7 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
     if (minhaGeracao !== geracao) return;
     await viewport.setStack(ids, meio);
     viewport.render();
+    atualizarOverlay(viewport);
     el.mensagem.hidden = true;
     void carregarRestante(ids, ordemDoMeio(ids.length, meio), minhaGeracao);
   } catch (e) {
