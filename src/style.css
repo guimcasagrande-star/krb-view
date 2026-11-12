@@ -1,0 +1,131 @@
+:root {
+  color-scheme: dark;
+  --fundo: #111316;
+  --painel: #1a1d21;
+  --painel-2: #22262b;
+  --borda: #2f343a;
+  --texto: #d8dce1;
+  --texto-fraco: #8b929b;
+  --destaque: #4aa3ff;
+  --aviso: #e6b422;
+  --erro: #ef6b6b;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; background: var(--fundo); color: var(--texto); }
+
+#app {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  grid-template-rows: 40px 1fr 24px;
+  grid-template-areas:
+    'topo topo'
+    'lateral viewports'
+    'rodape rodape';
+}
+
+#barra-ferramentas {
+  grid-area: topo;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  background: var(--painel);
+  border-bottom: 1px solid var(--borda);
+}
+.marca { font-weight: 600; letter-spacing: 0.2px; }
+#ferramentas { display: flex; gap: 6px; flex: 1; }
+
+#painel-lateral {
+  grid-area: lateral;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--painel);
+  border-right: 1px solid var(--borda);
+}
+
+#abrir { padding: 10px 12px; border-bottom: 1px solid var(--borda); }
+.linha-botoes { display: flex; align-items: center; gap: 10px; }
+.dica { margin: 8px 0 0; color: var(--texto-fraco); font-size: 12px; }
+
+button {
+  font: inherit;
+  color: var(--texto);
+  background: var(--painel-2);
+  border: 1px solid var(--borda);
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--destaque); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primario { background: #1f5f9e; border-color: #2b7cc9; }
+button.link { background: none; border: none; color: var(--texto-fraco); padding: 0; text-decoration: underline; font-size: 12px; }
+
+progress { width: 100%; height: 6px; margin-top: 8px; accent-color: var(--destaque); }
+
+#resumo { margin-top: 8px; font-size: 12px; color: var(--texto-fraco); }
+#resumo .erro { color: var(--erro); }
+#resumo details { margin-top: 6px; }
+#resumo summary { cursor: pointer; color: var(--aviso); }
+#resumo ul { margin: 4px 0 4px 16px; padding: 0; max-height: 220px; overflow: auto; }
+#resumo li { word-break: break-all; }
+#resumo .motivo { margin-left: 8px; }
+
+#lista-estudos { flex: 1; overflow: auto; padding: 6px 0 12px; }
+#lista-estudos .vazio { padding: 12px; color: var(--texto-fraco); }
+
+.paciente > summary, .estudo > summary { cursor: pointer; padding: 4px 12px; list-style-position: inside; }
+.paciente > summary { font-weight: 600; background: var(--painel-2); }
+.paciente .id { font-weight: 400; color: var(--texto-fraco); margin-left: 6px; font-size: 12px; }
+.estudo > summary { padding-left: 20px; }
+.estudo .detalhe { color: var(--texto-fraco); }
+.estudo .mod { color: var(--destaque); margin-left: 6px; font-size: 12px; }
+
+.serie { display: block; width: 100%; text-align: left; border: none; border-radius: 0; background: none; padding: 4px 12px 4px 36px; }
+.serie.pilha { padding-left: 52px; }
+.serie:hover:not(:disabled) { background: var(--painel-2); }
+.serie.ativa { background: #1f3a57; }
+.serie:disabled { color: var(--texto-fraco); }
+.serie .linha { display: flex; gap: 6px; align-items: baseline; }
+.serie .num { color: var(--texto-fraco); min-width: 2.2em; }
+.serie .quant { margin-left: auto; color: var(--texto-fraco); font-size: 12px; white-space: nowrap; }
+.serie .tipo { color: var(--texto-fraco); font-size: 12px; }
+.aviso-pilha { color: var(--aviso); cursor: help; }
+.titulo-serie { display: block; padding: 4px 12px 0 36px; color: var(--texto-fraco); font-size: 12px; }
+
+#area-viewports {
+  grid-area: viewports;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#vazio { text-align: center; color: var(--texto-fraco); line-height: 1.8; }
+#vazio span { font-size: 12px; }
+
+#rodape {
+  grid-area: rodape;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--painel);
+  border-top: 1px solid var(--borda);
+  color: var(--texto-fraco);
+  font-size: 12px;
+}
+
+body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-offset: -6px; }
+
+#viewport-2d { position: absolute; inset: 0; }
+#vazio { position: relative; z-index: 1; pointer-events: none; }
+#vazio .erro { color: var(--erro); font-weight: 600; }
+#vazio[hidden] { display: none; }

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visualizador DICOM</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="barra-ferramentas" aria-label="Barra de ferramentas">
+        <span class="marca">Visualizador DICOM</span>
+        <div id="ferramentas"></div>
+      </header>
+
+      <aside id="painel-lateral" aria-label="Exames">
+        <section id="abrir">
+          <div class="linha-botoes">
+            <button id="btn-abrir-pasta" type="button" class="primario">Abrir pasta</button>
+            <button id="btn-abrir-alternativo" type="button" class="link" title="Usa o seletor de pasta do navegador (sem permissão de leitura persistente)">seletor alternativo</button>
+          </div>
+          <input id="entrada-pasta" type="file" webkitdirectory multiple hidden />
+          <p class="dica">Ou arraste uma pasta para qualquer lugar da janela.</p>
+          <progress id="progresso" max="1" value="0" hidden></progress>
+          <div id="resumo" role="status" aria-live="polite"></div>
+        </section>
+        <nav id="lista-estudos" aria-label="Estudos e séries"></nav>
+      </aside>
+
+      <main id="area-viewports">
+        <div id="vazio">Nenhum exame aberto.<br /><span>Use “Abrir pasta” ou arraste uma pasta para cá.</span></div>
+      </main>
+
+      <footer id="rodape">Uso pessoal/estudo. Não validado para diagnóstico.</footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
