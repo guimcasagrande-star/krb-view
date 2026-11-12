@@ -6,13 +6,19 @@
 import {
   aplicarPredefinicao,
   apagarSelecionadas,
+  botaoAtribuido,
+  type Botao,
+  definirBotao,
   espelhar,
-  ferramentaPrimariaAtual,
   escolherFerramentaPrimaria,
+  ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
   girar90,
   inverter,
   limparMedidas,
+  OPCOES_RODA,
+  OPCOES_SECUNDARIAS,
+  type OpcaoBotao,
   PREDEFINICOES,
   restaurar,
 } from '../tools/grupo';
@@ -52,6 +58,35 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   });
   grupoFerramentas.append(...botoesFerramenta);
 
+  // Botões direito, meio e roda: escolha de ferramenta por seletor.
+  const grupoMouse = document.createElement('div');
+  grupoMouse.className = 'grupo-botoes';
+  const seletores: Array<[Botao, string, OpcaoBotao[]]> = [
+    ['direito', 'Direito', OPCOES_SECUNDARIAS],
+    ['meio', 'Meio', OPCOES_SECUNDARIAS],
+    ['roda', 'Roda', OPCOES_RODA],
+  ];
+  for (const [botaoMouse, rotulo, opcoes] of seletores) {
+    const rotuloCampo = document.createElement('label');
+    rotuloCampo.className = 'seletor-botao';
+    rotuloCampo.textContent = rotulo + ' ';
+    const seletor = document.createElement('select');
+    seletor.setAttribute('aria-label', `Ferramenta do botão ${rotulo.toLowerCase()}`);
+    for (const opcao of opcoes) {
+      const o = document.createElement('option');
+      o.value = opcao.nome;
+      o.textContent = opcao.rotulo;
+      seletor.append(o);
+    }
+    seletor.value = botaoAtribuido(botaoMouse);
+    seletor.addEventListener('change', () => {
+      definirBotao(botaoMouse, seletor.value);
+      atualizarEstado();
+    });
+    rotuloCampo.append(seletor);
+    grupoMouse.append(rotuloCampo);
+  }
+
   const grupoImagem = document.createElement('div');
   grupoImagem.className = 'grupo-botoes';
   grupoImagem.append(
@@ -79,7 +114,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const ajuda = botao('?', 'Atalhos de teclado', () => alternarAjuda());
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
 
-  contentor.append(grupoFerramentas, separador(), grupoImagem, separador(), grupoPresets, separador(), grupoMedidas, ajuda);
+  contentor.append(grupoFerramentas, separador(), grupoMouse, separador(), grupoImagem, separador(), grupoPresets, separador(), grupoMedidas, ajuda);
 
   function atualizarEstado(): void {
     const atual = ferramentaPrimariaAtual();

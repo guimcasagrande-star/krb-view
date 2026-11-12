@@ -43,6 +43,8 @@ html, body { height: 100%; margin: 0; background: var(--fundo); color: var(--tex
 #ferramentas .separador { width: 1px; height: 20px; background: var(--borda); flex-shrink: 0; margin: 0 4px; }
 #ferramentas button { padding: 4px 8px; font-size: 13px; white-space: nowrap; }
 #ferramentas button[aria-pressed="true"] { background: #1f3a57; border-color: var(--destaque); }
+#ferramentas .seletor-botao { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--texto-fraco); white-space: nowrap; }
+#ferramentas select { font: inherit; font-size: 13px; color: var(--texto); background: var(--painel-2); border: 1px solid var(--borda); border-radius: 4px; padding: 3px 4px; }
 
 #ajuda { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; max-width: min(520px, calc(100vw - 32px)); }
 #ajuda::backdrop { background: rgba(0, 0, 0, 0.6); }

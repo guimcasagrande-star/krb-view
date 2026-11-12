@@ -12,8 +12,7 @@ import {
   Enums as EnumsTools,
   LengthTool,
   PanTool,
-  ProbeTool,
-  RectangleROITool,
+  PlanarFreehandROITool,
   StackScrollTool,
   ToolGroupManager,
   utilities,
@@ -21,6 +20,7 @@ import {
   ZoomTool,
 } from '@cornerstonejs/tools';
 import { estado } from '../state/store';
+import { PolilinhaTool } from './polilinha';
 import { ID_MOTOR, ID_VIEWPORT_2D, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
@@ -36,9 +36,48 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: LengthTool.toolName, rotulo: 'Distância' },
   { nome: AngleTool.toolName, rotulo: 'Ângulo' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica' },
-  { nome: RectangleROITool.toolName, rotulo: 'ROI retangular' },
-  { nome: ProbeTool.toolName, rotulo: 'Sonda' },
+  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre' },
+  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha' },
 ];
+
+export type Botao = 'esquerdo' | 'direito' | 'meio' | 'roda';
+
+export interface OpcaoBotao {
+  nome: string;
+  rotulo: string;
+}
+
+/** Opções para os botões direito, meio e roda. Nome vazio = nenhuma ferramenta. */
+export const OPCOES_SECUNDARIAS: OpcaoBotao[] = [
+  { nome: '', rotulo: 'Nenhuma' },
+  { nome: ZoomTool.toolName, rotulo: 'Zoom' },
+  { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível' },
+  { nome: PanTool.toolName, rotulo: 'Pan' },
+  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes' },
+];
+
+/** A roda só responde a cortes e zoom (testado: janela/nível e pan não reagem a ela). */
+export const OPCOES_RODA: OpcaoBotao[] = OPCOES_SECUNDARIAS.filter((o) =>
+  ['', ZoomTool.toolName, StackScrollTool.toolName].includes(o.nome),
+);
+
+/** Opções do botão esquerdo: as ferramentas de medida e a janela. */
+export const OPCOES_ESQUERDO: OpcaoBotao[] = FERRAMENTAS_PRIMARIAS.map((f) => ({ nome: f.nome, rotulo: f.rotulo }));
+
+const BOTAO_DO_MOUSE: Record<Botao, EnumsTools.MouseBindings> = {
+  esquerdo: EnumsTools.MouseBindings.Primary,
+  direito: EnumsTools.MouseBindings.Secondary,
+  meio: EnumsTools.MouseBindings.Auxiliary,
+  roda: EnumsTools.MouseBindings.Wheel,
+};
+
+/** Padrão: esquerdo = janela/nível, direito = zoom, meio = pan, roda = passar cortes. */
+const atribuicao: Record<Botao, string | null> = {
+  esquerdo: WindowLevelTool.toolName,
+  direito: ZoomTool.toolName,
+  meio: PanTool.toolName,
+  roda: StackScrollTool.toolName,
+};
 
 export interface Predefinicao {
   rotulo: string;
@@ -57,7 +96,6 @@ export const PREDEFINICOES: Predefinicao[] = [
   { rotulo: 'Mediastino', centro: 50, largura: 350 },
 ];
 
-let ferramentaPrimaria = WindowLevelTool.toolName;
 let grupoCriado = false;
 
 /** Cria o grupo uma vez, com o viewport 2D já habilitado no motor. */
@@ -75,37 +113,50 @@ export function criarGrupoFerramentas(): void {
     grupo.addTool(nome);
   }
   grupo.addViewport(ID_VIEWPORT_2D, ID_MOTOR);
-
-  // Botões fixos: roda do mouse = cortes, direito = zoom, meio = pan.
-  grupo.setToolActive(StackScrollTool.toolName, {
-    bindings: [{ mouseButton: EnumsTools.MouseBindings.Wheel }],
-  });
-  grupo.setToolActive(ZoomTool.toolName, {
-    bindings: [{ mouseButton: EnumsTools.MouseBindings.Secondary }],
-  });
-  grupo.setToolActive(PanTool.toolName, {
-    bindings: [{ mouseButton: EnumsTools.MouseBindings.Auxiliary }],
-  });
   grupoCriado = true;
-  aplicarPrimaria();
+  aplicarAtribuicoes();
 }
 
-function aplicarPrimaria(): void {
+/**
+ * Liga cada ferramenta aos botões que a escolheram. setToolActive não desativa as
+ * outras ferramentas do mesmo botão, então cada uma é ajustada aqui.
+ */
+function aplicarAtribuicoes(): void {
   const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
   if (!grupo) return;
-  grupo.setToolActive(ferramentaPrimaria, {
-    bindings: [{ mouseButton: EnumsTools.MouseBindings.Primary }],
-  });
+  const nomes = new Set<string>([
+    StackScrollTool.toolName,
+    WindowLevelTool.toolName,
+    ZoomTool.toolName,
+    PanTool.toolName,
+    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome),
+  ]);
+  for (const nome of nomes) {
+    const bindings = (Object.keys(atribuicao) as Botao[])
+      .filter((b) => atribuicao[b] === nome)
+      .map((b) => ({ mouseButton: BOTAO_DO_MOUSE[b] }));
+    if (bindings.length > 0) grupo.setToolActive(nome, { bindings });
+    else grupo.setToolPassive(nome, { removeAllBindings: true });
+  }
 }
 
-/** Escolhe a ferramenta do botão esquerdo. Vale mesmo antes do grupo existir. */
+/** Escolhe a ferramenta de um botão. Vale mesmo antes do grupo existir. */
+export function definirBotao(botao: Botao, nome: string): void {
+  atribuicao[botao] = nome || null;
+  aplicarAtribuicoes();
+}
+
+export function botaoAtribuido(botao: Botao): string {
+  return atribuicao[botao] ?? '';
+}
+
+/** Ferramenta do botão esquerdo (atalho para definirBotao('esquerdo', ...)). */
 export function escolherFerramentaPrimaria(nome: string): void {
-  ferramentaPrimaria = nome;
-  aplicarPrimaria();
+  definirBotao('esquerdo', nome);
 }
 
 export function ferramentaPrimariaAtual(): string {
-  return ferramentaPrimaria;
+  return botaoAtribuido('esquerdo');
 }
 
 async function viewportAtivo(): Promise<Types.IStackViewport | undefined> {
@@ -128,17 +179,19 @@ export function inverter(): Promise<void> {
   });
 }
 
+// Rotação e espelhamento do stack viewport passam por setViewPresentation.
+// setCamera ignora o campo rotation.
 export function girar90(): Promise<void> {
   return comViewport((v) => {
-    const camera = v.getCamera();
-    v.setCamera({ ...camera, rotation: ((camera.rotation ?? 0) + 90) % 360 });
+    const atual = v.getViewPresentation();
+    v.setViewPresentation({ rotation: ((atual.rotation ?? 0) + 90) % 360 });
   });
 }
 
 export function espelhar(): Promise<void> {
   return comViewport((v) => {
-    const camera = v.getCamera();
-    v.setCamera({ ...camera, flipHorizontal: !(camera.flipHorizontal ?? false) });
+    const atual = v.getViewPresentation();
+    v.setViewPresentation({ flipHorizontal: !(atual.flipHorizontal ?? false) });
   });
 }
 

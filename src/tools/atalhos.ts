@@ -5,10 +5,8 @@
 import { aplicarPredefinicao, apagarSelecionadas, cancelar } from './grupo';
 
 const LINHAS_AJUDA: Array<[string, string]> = [
-  ['Botão esquerdo', 'Ferramenta ativa (janela/nível por padrão)'],
-  ['Botão direito, arrastando', 'Zoom'],
-  ['Botão do meio, arrastando', 'Pan (mover a imagem)'],
-  ['Roda do mouse', 'Passar cortes'],
+  ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível por padrão)'],
+  ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
   ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
   ['Esc', 'Cancela a medida em andamento e volta a janela/nível'],
   ['Delete', 'Apaga a medida selecionada'],

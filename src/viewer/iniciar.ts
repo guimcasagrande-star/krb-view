@@ -5,6 +5,7 @@
 
 import { init as iniciarCore, RenderingEngine } from '@cornerstonejs/core';
 import { init as iniciarLoader } from '@cornerstonejs/dicom-image-loader';
+import { PolilinhaTool } from '../tools/polilinha';
 import {
   addTool,
   AngleTool,
@@ -12,8 +13,7 @@ import {
   init as iniciarTools,
   LengthTool,
   PanTool,
-  ProbeTool,
-  RectangleROITool,
+  PlanarFreehandROITool,
   StackScrollTool,
   WindowLevelTool,
   ZoomTool,
@@ -38,8 +38,8 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       LengthTool,
       AngleTool,
       EllipticalROITool,
-      RectangleROITool,
-      ProbeTool,
+      PlanarFreehandROITool,
+      PolilinhaTool,
     ]) {
       addTool(ferramenta);
     }
