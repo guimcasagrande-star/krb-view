@@ -568,6 +568,39 @@ function aoRolarSlotEstudo(origem: number): void {
   }
 }
 
+let sincronizandoCameraEstudo = false;
+
+/**
+ * O sincronizador de zoom/pan do Cornerstone não atualiza viewports de volume (a fusão), então
+ * o zoom e o pan entre a fusão e as séries de pilha do grupo são copiados aqui.
+ */
+function aoMudarCameraEstudo(origem: number): void {
+  if (!sincroniaEstudoLigada || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
+  const so = slots[origem];
+  if (!so?.viewport || !so.pilha) return;
+  const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
+  if (!grupo) return;
+  const origemFusao = so.planoSlot === 'fusao';
+  const destinos = grupo.filter((d) => d !== so && (origemFusao ? d.planoSlot !== 'fusao' : d.planoSlot === 'fusao'));
+  if (destinos.length === 0) return;
+  const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
+  const pan = v.getPan?.();
+  const zoom = v.getZoom?.();
+  sincronizandoCameraEstudo = true;
+  try {
+    for (const d of destinos) {
+      const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport | undefined;
+      if (!t) continue;
+      if (zoom !== undefined && Math.abs((t.getZoom?.() ?? zoom) - zoom) > 1e-6) t.setZoom?.(zoom);
+      const pt = t.getPan?.();
+      if (pan && (!pt || Math.abs(pt[0] - pan[0]) > 0.01 || Math.abs(pt[1] - pan[1]) > 0.01)) t.setPan?.(pan);
+      t.render();
+    }
+  } finally {
+    sincronizandoCameraEstudo = false;
+  }
+}
+
 /** Liga ou desliga a sincronia automática entre séries do mesmo estudo. */
 export function alternarSincroniaEstudo(): void {
   sincroniaEstudoLigada = !sincroniaEstudoLigada;
@@ -846,10 +879,11 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
         name: colormap,
         // Fundo (SUV baixo) transparente; a captação aparece com a opacidade escolhida.
         opacity: [
-          // Abaixo do SUV mínimo o PET é transparente; sobe até a opacidade cheia em ~25% da faixa.
+          // Abaixo do SUV mínimo o PET é transparente; acima, a opacidade cresce com a captação
+          // (captação baixa discreta, alta forte), chegando ao valor escolhido no SUV máximo.
           { value: 0, opacity: 0 },
           { value: piso, opacity: 0 },
-          { value: piso + (teto - piso) * 0.1, opacity: opacidade },
+          { value: piso + (teto - piso) * 0.5, opacity: opacidade * 0.55 },
           { value: Math.max(teto, piso + 0.01), opacity: opacidade },
         ],
       },
@@ -2598,7 +2632,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 1, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
+    fusao: { opacidade: 0.7, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
@@ -2624,6 +2658,7 @@ function criarSlot(indice: number): Slot {
     atualizarMiraSlot(slot);
   });
   elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
+    aoMudarCameraEstudo(indice);
     atualizarMiraSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
