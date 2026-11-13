@@ -175,3 +175,118 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .controle-slab[hidden] { display: none; }
 .controle-slab input[type="range"] { width: 72px; accent-color: var(--destaque); cursor: pointer; }
 .controle-slab .valor-slab { min-width: 44px; font-variant-numeric: tabular-nums; color: var(--texto); }
+
+/* Controles flutuantes do MIP rotatório (3.2) */
+.controles-mip {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(17, 19, 22, 0.85);
+  border: 1px solid var(--borda);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.controles-mip[hidden] { display: none; }
+.btn-mip-play { padding: 3px 8px; font-size: 12px; }
+.btn-mip-play[aria-pressed="true"] { background: #1f3a57; border-color: var(--destaque); }
+.rotulo-mip-angulo { color: var(--texto-fraco); user-select: none; white-space: nowrap; }
+
+/* Modo Comparar (Fase 4: 4.1, 4.2, 4.3) */
+.etiqueta-comparacao {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: rgba(17, 19, 22, 0.9);
+  border: 1px solid var(--borda);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.etiqueta-comparacao[hidden] { display: none; }
+.linha-etiqueta-comparar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.selo-comparar {
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.selo-comparar.atual {
+  background: rgba(52, 211, 153, 0.22);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.55);
+}
+.selo-comparar.anterior {
+  background: rgba(251, 191, 36, 0.22);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+}
+.data-comparar { color: var(--texto); font-weight: 600; }
+
+.alerta-paciente-diferente {
+  color: var(--erro);
+  background: rgba(239, 107, 107, 0.16);
+  border: 1px solid rgba(239, 107, 107, 0.55);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+  white-space: nowrap;
+}
+
+.aviso-cobertura {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: rgba(20, 24, 28, 0.88);
+  border: 1px solid var(--aviso);
+  color: var(--aviso);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.aviso-cobertura[hidden] { display: none; }
+
+#ferramentas .controles-comparar[hidden] { display: none; }
+.offset-comparar {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--texto);
+}
+
+.canvas-mira {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+}

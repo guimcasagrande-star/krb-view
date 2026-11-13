@@ -32,6 +32,7 @@ iniciarAbrirPasta(
   {
     botao: obter<HTMLButtonElement>('btn-abrir-pasta'),
     botaoAlternativo: obter<HTMLButtonElement>('btn-abrir-alternativo'),
+    botaoLimpar: obter<HTMLButtonElement>('btn-limpar-lista'),
     entradaPasta: obter<HTMLInputElement>('entrada-pasta'),
     zonaDrop: document.body,
     progresso: obter<HTMLProgressElement>('progresso'),
@@ -39,9 +40,15 @@ iniciarAbrirPasta(
   },
   (resultado) => {
     estado.resultado = resultado;
-    void limparViewports();
     renderizarPainelEstudos(lista, resultado.index);
+    marcarPilhaAtiva(lista, estado.pilhaAtiva?.id ?? null);
     vazio.hidden = true;
+  },
+  () => {
+    estado.resultado = null;
+    void limparViewports();
+    lista.replaceChildren();
+    vazio.hidden = false;
   },
 );
 

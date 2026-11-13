@@ -116,18 +116,20 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     if (plano) {
       const partes: string[] = [];
       if (plano.rotulo !== 'Original') partes.push(plano.rotulo);
-      if (rotuloModo && rotuloModo !== 'Normal') {
-        const mmFmt = slabAtual.toLocaleString('pt-BR', {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: 1,
-        });
-        partes.push(`${rotuloModo} (${mmFmt} mm)`);
-      } else if (slabAtual > 1) {
-        const mmFmt = slabAtual.toLocaleString('pt-BR', {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: 1,
-        });
-        partes.push(`Slab ${mmFmt} mm`);
+      if (plano.rotulo !== 'MIP rotatório') {
+        if (rotuloModo && rotuloModo !== 'Normal') {
+          const mmFmt = slabAtual.toLocaleString('pt-BR', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 1,
+          });
+          partes.push(`${rotuloModo} (${mmFmt} mm)`);
+        } else if (slabAtual > 1) {
+          const mmFmt = slabAtual.toLocaleString('pt-BR', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 1,
+          });
+          partes.push(`Slab ${mmFmt} mm`);
+        }
       }
       if (partes.length > 0) {
         texto.superiorEsquerdo.unshift(partes.join(' · '));

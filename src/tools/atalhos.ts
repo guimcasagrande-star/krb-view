@@ -11,12 +11,12 @@ import {
   rolarCortes,
 } from './grupo';
 import { alternarOverlay } from '../viewer/overlay';
-import { alternarCine, alternarMpr, proximoLayout } from '../viewer/viewport2d';
+import { alternarCine, alternarMpr, limparMirasLocalizador, proximoLayout } from '../viewer/viewport2d';
 
 const LINHAS_AJUDA: Array<[string, string]> = [
   ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível no 2D, crosshairs no MPR)'],
   ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
-  ['W S C D A E M P', 'Botão esquerdo: janela/nível, passar cortes, crosshairs (MPR), distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
+  ['W S X C D A E M P', 'Botão esquerdo: janela/nível, passar cortes, ┼ localizar ponto (mesmo exame ou comparado), crosshairs (MPR), distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
   ['R', 'Entra ou sai do modo MPR (axial, coronal e sagital)'],
   ['Ctrl + roda', 'Ajusta a espessura do slab (mm) no viewport sob o cursor'],
   ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
@@ -25,7 +25,7 @@ const LINHAS_AJUDA: Array<[string, string]> = [
   ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2'],
   ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
   ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
-  ['Esc', 'Cancela a medida em andamento e volta à ferramenta padrão'],
+  ['Esc', 'Cancela a medida em andamento, limpa a cruzinha (┼) e volta à ferramenta padrão'],
   ['Delete', 'Apaga a medida selecionada'],
   ['?', 'Mostra ou esconde esta ajuda'],
 ];
@@ -88,6 +88,7 @@ export function iniciarAtalhos(): void {
         caixa.close();
         return;
       }
+      limparMirasLocalizador();
       void cancelar();
       return;
     }

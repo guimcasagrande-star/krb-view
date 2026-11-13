@@ -17,9 +17,11 @@ export interface ArquivoIgnorado {
 
 export interface ResultadoAbertura {
   index: DicomIndex;
+  /** Metadados válidos acumulados (para mesclar novas pastas abertas depois). */
+  metas: InstanceMeta[];
   /** fileId (caminho relativo) -> File, para carregar os pixels depois. */
   arquivos: Map<string, File>;
-  /** Arquivos encontrados na pasta. */
+  /** Arquivos encontrados no total. */
   total: number;
   /** Arquivos que entraram no índice. */
   lidos: number;
@@ -87,22 +89,39 @@ function mensagemDeErro(e: unknown): string {
   return e instanceof Error && e.message ? e.message : String(e);
 }
 
-/** Lê o cabeçalho de todos os candidatos, com no máximo `LEITURAS_SIMULTANEAS` ao mesmo tempo. */
+let contadorLotes = 0;
+
+function gerarFileIdUnico(caminho: string, arquivos: Map<string, File>, lote: number): string {
+  if (!arquivos.has(caminho)) return caminho;
+  let tentativa = `pasta-${lote}/${caminho}`;
+  let sufixo = 2;
+  while (arquivos.has(tentativa)) {
+    tentativa = `pasta-${lote}-${sufixo++}/${caminho}`;
+  }
+  return tentativa;
+}
+
+/**
+ * Lê o cabeçalho de todos os candidatos, com no máximo `LEITURAS_SIMULTANEAS` ao mesmo tempo.
+ * Se `anterior` for passado, acumula os novos arquivos junto com os estudos já carregados.
+ */
 export async function indexarCandidatos(
   candidatos: Candidato[],
   aoProgredir: (feitos: number, total: number) => void = () => {},
+  anterior?: ResultadoAbertura | null,
 ): Promise<ResultadoAbertura> {
-  const total = candidatos.length;
-  const metas: (InstanceMeta | undefined)[] = new Array(total);
-  const arquivos = new Map<string, File>();
-  const ignorados: ArquivoIgnorado[] = [];
+  const lote = ++contadorLotes;
+  const totalLote = candidatos.length;
+  const metasLote: (InstanceMeta | undefined)[] = new Array(totalLote);
+  const arquivos = new Map<string, File>(anterior?.arquivos);
+  const ignorados: ArquivoIgnorado[] = anterior ? [...anterior.ignorados] : [];
   let proximo = 0;
   let feitos = 0;
 
   async function trabalhador(): Promise<void> {
     for (;;) {
       const i = proximo++;
-      if (i >= total) return;
+      if (i >= totalLote) return;
       const c = candidatos[i]!;
       try {
         const nome = c.path.split('/').pop() ?? c.path;
@@ -110,31 +129,43 @@ export async function indexarCandidatos(
           ignorados.push({ fileId: c.path, reason: 'DICOMDIR (índice de mídia), não é uma imagem.' });
         } else {
           const arquivo = await c.obter();
-          const r = await readHeaderFromBlob(arquivo, c.path);
+          const fileId = gerarFileIdUnico(c.path, arquivos, lote);
+          const r = await readHeaderFromBlob(arquivo, fileId);
           if (r.ok) {
-            metas[i] = r.meta;
-            arquivos.set(c.path, arquivo);
+            metasLote[i] = r.meta;
+            arquivos.set(fileId, arquivo);
           } else {
-            ignorados.push({ fileId: c.path, reason: r.reason });
+            ignorados.push({ fileId, reason: r.reason });
           }
         }
       } catch (e) {
         ignorados.push({ fileId: c.path, reason: `Erro ao ler o arquivo: ${mensagemDeErro(e)}` });
       }
       feitos++;
-      if (feitos === total || feitos % 16 === 0) aoProgredir(feitos, total);
+      if (feitos === totalLote || feitos % 16 === 0) aoProgredir(feitos, totalLote);
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(LEITURAS_SIMULTANEAS, total) }, trabalhador));
+  await Promise.all(Array.from({ length: Math.min(LEITURAS_SIMULTANEAS, totalLote) }, trabalhador));
 
-  const lidasOk = metas.filter((m): m is InstanceMeta => m !== undefined);
-  const index = buildIndex(lidasOk);
+  const lidasNovas = metasLote.filter((m): m is InstanceMeta => m !== undefined);
+  const todasMetas = anterior ? [...anterior.metas, ...lidasNovas] : lidasNovas;
+  const index = buildIndex(todasMetas);
+  const idsDescartados = new Set(index.skipped.map((s) => s.fileId));
   for (const s of index.skipped) {
     ignorados.push({ fileId: s.fileId, reason: s.reason });
     arquivos.delete(s.fileId);
   }
-  return { index, arquivos, total, lidos: total - ignorados.length, ignorados };
+  const metasValidas = todasMetas.filter((m) => !idsDescartados.has(m.fileId));
+  const total = (anterior?.total ?? 0) + totalLote;
+  return {
+    index,
+    metas: metasValidas,
+    arquivos,
+    total,
+    lidos: metasValidas.length,
+    ignorados,
+  };
 }
 
 // ---------- interface ----------
@@ -142,6 +173,7 @@ export async function indexarCandidatos(
 export interface ElementosAbrirPasta {
   botao: HTMLButtonElement;
   botaoAlternativo: HTMLButtonElement;
+  botaoLimpar?: HTMLButtonElement;
   entradaPasta: HTMLInputElement;
   /** Área que aceita arrastar e soltar (a janela inteira). */
   zonaDrop: HTMLElement;
@@ -191,18 +223,27 @@ function mostrarResumo(resumo: HTMLElement, r: ResultadoAbertura): void {
   resumo.append(detalhes);
 }
 
-/** Liga os controles e chama `aoConcluir` com o índice pronto. */
+/** Liga os controles, acumula pastas abertas e chama `aoConcluir` com o índice unificado. */
 export function iniciarAbrirPasta(
   el: ElementosAbrirPasta,
   aoConcluir: (resultado: ResultadoAbertura) => void,
+  aoLimpar?: () => void,
 ): void {
   let ocupado = false;
+  let acumulado: ResultadoAbertura | null = null;
+
+  function atualizarBotaoLimpar(): void {
+    if (el.botaoLimpar) {
+      el.botaoLimpar.hidden = !acumulado || acumulado.lidos === 0;
+    }
+  }
 
   async function processar(coletar: () => Promise<Candidato[]>): Promise<void> {
     if (ocupado) return;
     ocupado = true;
     el.botao.disabled = true;
     el.botaoAlternativo.disabled = true;
+    if (el.botaoLimpar) el.botaoLimpar.disabled = true;
     el.resumo.textContent = 'Procurando arquivos…';
     el.progresso.hidden = false;
     el.progresso.max = 1;
@@ -210,12 +251,18 @@ export function iniciarAbrirPasta(
     try {
       const candidatos = await coletar();
       el.resumo.textContent = `Lendo ${candidatos.length} arquivos…`;
-      const resultado = await indexarCandidatos(candidatos, (feitos, total) => {
-        el.progresso.max = Math.max(total, 1);
-        el.progresso.value = feitos;
-        el.resumo.textContent = `Lendo cabeçalhos: ${feitos} de ${total}`;
-      });
+      const resultado = await indexarCandidatos(
+        candidatos,
+        (feitos, total) => {
+          el.progresso.max = Math.max(total, 1);
+          el.progresso.value = feitos;
+          el.resumo.textContent = `Lendo cabeçalhos: ${feitos} de ${total}`;
+        },
+        acumulado,
+      );
+      acumulado = resultado;
       mostrarResumo(el.resumo, resultado);
+      atualizarBotaoLimpar();
       aoConcluir(resultado);
     } catch (e) {
       el.resumo.replaceChildren();
@@ -227,9 +274,18 @@ export function iniciarAbrirPasta(
       el.progresso.hidden = true;
       el.botao.disabled = false;
       el.botaoAlternativo.disabled = false;
+      if (el.botaoLimpar) el.botaoLimpar.disabled = false;
       ocupado = false;
     }
   }
+
+  el.botaoLimpar?.addEventListener('click', () => {
+    if (ocupado) return;
+    acumulado = null;
+    el.resumo.replaceChildren();
+    atualizarBotaoLimpar();
+    aoLimpar?.();
+  });
 
   function abrirPorEntrada(): void {
     el.entradaPasta.value = '';

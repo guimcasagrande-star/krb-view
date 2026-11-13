@@ -27,8 +27,13 @@ import {
 import { alternarAjuda } from '../tools/atalhos';
 import { VELOCIDADES_CINE } from '../viewer/cine';
 import {
+  alternarCadeadoRolagemComparar,
   alternarCine,
+  alternarMipRotatorio,
+  alternarModoComparar,
   alternarMpr,
+  alternarSincronizacaoJanelaComparar,
+  alternarSincronizacaoZoomPanComparar,
   definirLayout,
   definirModoSlabAtivo,
   definirPlanoSlotAtivo,
@@ -37,9 +42,11 @@ import {
   EVENTO_ESTADO_VIEWPORTS,
   type EstadoViewports,
   LAYOUTS,
+  limparMirasLocalizador,
   type ModoSlab,
   ORDEM_LAYOUTS,
   type PlanoSlot,
+  zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
 
 function botao(texto: string, dica: string, acao: () => void): HTMLButtonElement {
@@ -62,11 +69,17 @@ function formatarMm(mm: number): string {
   return `${mm.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`;
 }
 
+function formatarDeslocamentoMm(mm: number): string {
+  const sinal = mm > 0 ? '+' : '';
+  return `Δ ${sinal}${mm.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`;
+}
+
 const OPCOES_PLANO: Array<{ valor: PlanoSlot; rotulo: string }> = [
   { valor: 'original', rotulo: 'Original' },
   { valor: 'axial', rotulo: 'Axial' },
   { valor: 'coronal', rotulo: 'Coronal' },
   { valor: 'sagital', rotulo: 'Sagital' },
+  { valor: 'mip-rotatorio', rotulo: 'MIP rotatório' },
 ];
 
 const OPCOES_MODO_SLAB: Array<{ valor: ModoSlab; rotulo: string }> = [
@@ -130,14 +143,17 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botao('Inverter', 'Inverter preto e branco', () => void inverter()),
     botao('Girar 90°', 'Girar a imagem 90° no sentido horário', () => void girar90()),
     botao('Espelhar', 'Espelhar na horizontal', () => void espelhar()),
-    botao('Restaurar', 'Restaurar janela, zoom, rotação, espelhamento e crosshairs', () => void restaurar()),
+    botao('Restaurar', 'Restaurar janela, zoom, rotação, espelhamento e crosshairs', () => {
+      limparMirasLocalizador();
+      void restaurar();
+    }),
   );
 
-  // Layout da grade, seletor de plano, modo de projeção (Normal/MIP/MinIP/Média), slab e MPR.
+  // Layout da grade, seletor de plano, modo de projeção (Normal/MIP/MinIP/Média), slab, MPR, MIP 3D e Comparar.
   const grupoLayout = document.createElement('div');
   grupoLayout.className = 'grupo-botoes';
   grupoLayout.setAttribute('role', 'group');
-  grupoLayout.setAttribute('aria-label', 'Layout dos viewports, plano, projeção e MPR');
+  grupoLayout.setAttribute('aria-label', 'Layout dos viewports, plano, projeção, MPR e comparação');
   const botoesLayout = ORDEM_LAYOUTS.map((id) => {
     const b = botao(LAYOUTS[id].rotulo, `Layout ${LAYOUTS[id].rotulo} (tecla L alterna)`, () => void definirLayout(id));
     b.dataset.layout = id;
@@ -201,8 +217,62 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   controleSlab.append(textoSlab, sliderSlab, valorSlab);
 
   const botaoMpr = botao('MPR', 'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)', () => void alternarMpr());
+  const botaoMip3d = botao(
+    'MIP 3D',
+    'Abrir MIP rotatório 3D ao lado do corte 2D (clique num ponto intenso para ir ao corte correspondente)',
+    () => void alternarMipRotatorio(),
+  );
+  const botaoComparar = botao(
+    'Comparar',
+    'Modo Comparar: dois exames lado a lado (ATUAL × ANTERIOR) com rolagem ligada por posição',
+    () => void alternarModoComparar(),
+  );
 
-  grupoLayout.append(...botoesLayout, rotuloPlano, rotuloModo, controleSlab, botaoMpr);
+  // Controles exclusivos do modo Comparar (4.2 e 4.3):
+  const grupoComparar = document.createElement('div');
+  grupoComparar.className = 'grupo-botoes controles-comparar';
+  grupoComparar.hidden = true;
+  const botaoCadeadoRolagem = botao(
+    '🔒 Rolagem',
+    'Ligar ou desligar o vínculo de rolagem por posição (ao religar, recalcula o deslocamento a partir dos cortes atuais)',
+    () => alternarCadeadoRolagemComparar(),
+  );
+  const rotuloOffsetComparar = document.createElement('span');
+  rotuloOffsetComparar.className = 'offset-comparar';
+  rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
+  const botaoZerarOffset = botao(
+    'Zerar',
+    'Restaurar o alinhamento inicial automático entre os dois exames',
+    () => zerarVinculoRolagemComparar(),
+  );
+  const botaoSyncJanela = botao(
+    '🔗 Janela',
+    'Sincronizar janela/nível entre os dois exames',
+    () => alternarSincronizacaoJanelaComparar(),
+  );
+  const botaoSyncZoom = botao(
+    '🔗 Zoom/Pan',
+    'Sincronizar zoom e pan entre os dois exames',
+    () => alternarSincronizacaoZoomPanComparar(),
+  );
+  grupoComparar.append(
+    botaoCadeadoRolagem,
+    rotuloOffsetComparar,
+    botaoZerarOffset,
+    botaoSyncJanela,
+    botaoSyncZoom,
+  );
+
+  grupoLayout.append(
+    ...botoesLayout,
+    rotuloPlano,
+    rotuloModo,
+    controleSlab,
+    botaoMpr,
+    botaoMip3d,
+    botaoComparar,
+    grupoComparar,
+  );
 
   const grupoCine = document.createElement('div');
   grupoCine.className = 'grupo-botoes';
@@ -233,7 +303,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoMedidas.className = 'grupo-botoes';
   grupoMedidas.append(
     botao('Apagar selecionada', 'Apagar a medida selecionada (Delete)', () => void apagarSelecionadas()),
-    botao('Limpar medidas', 'Apagar todas as medidas da série', () => void limparMedidas()),
+    botao('Limpar medidas', 'Apagar todas as medidas da série e limpar a cruzinha (┼)', () => {
+      limparMirasLocalizador();
+      void limparMedidas();
+    }),
   );
 
   const ajuda = botao('?', 'Atalhos de teclado', () => alternarAjuda());
@@ -272,12 +345,15 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   function atualizarViewports(e: EstadoViewports): void {
     for (const b of botoesLayout) {
-      b.setAttribute('aria-pressed', String(!e.mprAtivo && b.dataset.layout === e.layout));
+      b.setAttribute(
+        'aria-pressed',
+        String(!e.mprAtivo && !e.comparacao.ativo && b.dataset.layout === e.layout),
+      );
     }
     seletorPlano.value = e.planoAtivo;
     seletorPlano.disabled = e.mprAtivo || !e.mprDisponivel;
 
-    const podeVolume = e.mprAtivo || e.mprDisponivel;
+    const podeVolume = (e.mprAtivo || e.mprDisponivel) && e.planoAtivo !== 'mip-rotatorio';
     seletorModo.value = e.modoSlabAtivo;
     seletorModo.disabled = !podeVolume;
     sliderSlab.disabled = !podeVolume;
@@ -286,6 +362,31 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
     botaoMpr.setAttribute('aria-pressed', String(e.mprAtivo));
     botaoMpr.disabled = !e.mprAtivo && !e.mprDisponivel;
+
+    botaoMip3d.setAttribute('aria-pressed', String(e.mipRotatorioVisivel));
+    botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
+
+    const cmp = e.comparacao;
+    botaoComparar.setAttribute('aria-pressed', String(cmp.ativo));
+    botaoComparar.disabled = !cmp.ativo && e.pilhaId === null;
+    grupoComparar.hidden = !cmp.ativo;
+    if (cmp.ativo) {
+      botaoCadeadoRolagem.textContent = cmp.rolagemLigada ? '🔒 Rolagem' : '🔓 Rolagem';
+      botaoCadeadoRolagem.setAttribute('aria-pressed', String(cmp.rolagemLigada));
+      botaoCadeadoRolagem.disabled = cmp.erroVinculo !== null;
+      if (cmp.erroVinculo) {
+        rotuloOffsetComparar.textContent = 'Independente';
+        rotuloOffsetComparar.title = cmp.erroVinculo;
+      } else if (cmp.deslocamentoMm !== null) {
+        rotuloOffsetComparar.textContent = formatarDeslocamentoMm(cmp.deslocamentoMm);
+        rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
+      } else {
+        rotuloOffsetComparar.textContent = '—';
+      }
+      botaoZerarOffset.disabled = cmp.erroVinculo !== null;
+      botaoSyncJanela.setAttribute('aria-pressed', String(cmp.janelaLigada));
+      botaoSyncZoom.setAttribute('aria-pressed', String(cmp.zoomPanLigado));
+    }
 
     botaoCine.disabled = e.mprAtivo || e.pilhaId === null;
     botaoCine.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
@@ -306,5 +407,14 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     planoAtivo: 'original',
     modoSlabAtivo: 'normal',
     slabMm: 1,
+    mipRotatorioVisivel: false,
+    comparacao: {
+      ativo: false,
+      rolagemLigada: false,
+      deslocamentoMm: null,
+      erroVinculo: null,
+      janelaLigada: false,
+      zoomPanLigado: false,
+    },
   });
 }

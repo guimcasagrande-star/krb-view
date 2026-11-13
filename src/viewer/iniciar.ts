@@ -6,6 +6,7 @@
 import { init as iniciarCore, RenderingEngine } from '@cornerstonejs/core';
 import { init as iniciarLoader } from '@cornerstonejs/dicom-image-loader';
 import { CrosshairsMprTool } from '../tools/crosshairsMpr';
+import { MIPJumpToClickTool } from '../tools/mipRotatorio';
 import { PolilinhaTool } from '../tools/polilinha';
 import {
   addTool,
@@ -53,6 +54,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       PlanarFreehandROITool,
       PolilinhaTool,
       CrosshairsMprTool,
+      MIPJumpToClickTool,
     ]) {
       addTool(ferramenta);
     }

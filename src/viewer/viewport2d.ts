@@ -18,20 +18,40 @@ import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode } from '../io/organize';
 import {
   adicionarViewportAoGrupo,
+  botaoAtribuido,
   definirModoMprFerramentas,
   removerViewportDoGrupo,
 } from '../tools/grupo';
+import { desenharMiraNoCanvas, FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
+import {
+  aplicarCameraMipRotatorio,
+  type ControladorMipRotatorio,
+  criarControladorMipRotatorio,
+} from '../tools/mipRotatorio';
+import {
+  calcularCorteSincronizado,
+  calcularRotulosParaSlots,
+  criarVinculoComparacao,
+  destruirSincronizadoresComparacao,
+  escolherParInicialComparacao,
+  type EstadoComparacao,
+  obterPosicaoCorteAtual,
+  recalcularVinculoPorPosicoesAtuais,
+  sincronizarParCornerstone,
+  transformarPontoEntrePilhas,
+} from '../compare/modoComparar';
+import { invertLink, type ScrollLink } from '../compare/sync';
 import { estado } from '../state/store';
 import { adquirirVolume, liberarVolume } from '../volume/montarVolume';
 import { avaliarVolume } from '../volume/validarVolume';
 import { cineTocando, definirFps, fpsAtual, pararCine, pararTodosCines, tocarCine } from './cine';
-import { idElemento, idViewport, iniciarCornerstone, MAX_VIEWPORTS } from './iniciar';
+import { idElemento, ID_MOTOR, idViewport, iniciarCornerstone, MAX_VIEWPORTS } from './iniciar';
 import { criarOverlay, type Overlay, type PlanoMprOverlay } from './overlay';
 
 const CARGAS_SIMULTANEAS = 4;
 
 export type Layout = '1x1' | '1x2' | '2x2';
-export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital';
+export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio';
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
 export const LAYOUTS: Record<Layout, { rotulo: string; colunas: number; linhas: number }> = {
@@ -47,6 +67,7 @@ export const PLANOS_SLOTS: Record<PlanoSlot, PlanoMprOverlay> = {
   axial: { rotulo: 'Axial', eixo: Enums.OrientationAxis.AXIAL },
   coronal: { rotulo: 'Coronal', eixo: Enums.OrientationAxis.CORONAL },
   sagital: { rotulo: 'Sagital', eixo: Enums.OrientationAxis.SAGITTAL },
+  'mip-rotatorio': { rotulo: 'MIP rotatório', eixo: Enums.OrientationAxis.CORONAL },
 };
 
 export const MODOS_SLAB: Record<ModoSlab, { rotulo: string; blendMode: Enums.BlendModes }> = {
@@ -73,11 +94,15 @@ export interface EstadoViewports {
   fps: number;
   mprAtivo: boolean;
   mprDisponivel: boolean;
-  /** Plano individual do viewport ativo ('original', 'axial', 'coronal' ou 'sagital'). */
+  /** Plano individual do viewport ativo ('original', 'axial', 'coronal', 'sagital' ou 'mip-rotatorio'). */
   planoAtivo: PlanoSlot;
   /** Modo de projeção do slab ('normal', 'mip', 'minip' ou 'media'). */
   modoSlabAtivo: ModoSlab;
   slabMm: number;
+  /** Verdadeiro quando algum viewport visível exibe o MIP rotatório. */
+  mipRotatorioVisivel: boolean;
+  /** Estado do modo Comparar (Fase 4). */
+  comparacao: EstadoComparacao;
 }
 
 export interface ElementosViewport2d {
@@ -92,6 +117,12 @@ interface Slot {
   elemento: HTMLDivElement;
   mensagem: HTMLDivElement;
   avisoVolume: HTMLDivElement;
+  controlesMip: HTMLDivElement;
+  etiquetaComparacao: HTMLDivElement;
+  avisoCobertura: HTMLDivElement;
+  canvasMira: HTMLCanvasElement;
+  pontoMiraMundo: Types.Point3 | null;
+  controladorMip?: ControladorMipRotatorio;
   overlay: Overlay;
   viewport?: Types.IStackViewport | Types.IVolumeViewport;
   tipoViewport: Enums.ViewportType;
@@ -121,6 +152,15 @@ let modoSlabMpr: ModoSlab = 'normal';
 let slabMprMm = 1;
 let geracaoMpr = 0;
 let sincronizandoVoi = false;
+
+// Estado do modo Comparar (Fase 4)
+let compararAtivo = false;
+let rolagemCompararLigada = true;
+let linkRolagemComparar: ScrollLink | null = null;
+let erroVinculoComparar: string | null = null;
+let janelaCompararLigada = false;
+let zoomPanCompararLigado = false;
+let sincronizandoRolagemComparar = false;
 
 /** Pilhas, planos e slabs salvos antes de entrar no MPR, para restaurar ao sair. */
 let estadoAntesDoMpr: Array<{
@@ -262,6 +302,9 @@ function estadoAtual(): EstadoViewports {
   const slot = slots[ativo];
   const pilha = slot?.pilha ?? null;
   const mprDisponivel = pilha !== null && avaliarVolume(pilha).ok;
+  const mipRotatorioVisivel = slots.some(
+    (s) => !s.celula.hidden && s.planoSlot === 'mip-rotatorio',
+  );
   return {
     layout: layoutAtual,
     pilhaId: pilha?.id ?? null,
@@ -272,16 +315,26 @@ function estadoAtual(): EstadoViewports {
     planoAtivo: slot?.planoSlot ?? 'original',
     modoSlabAtivo: mprAtivo ? modoSlabMpr : (slot?.modoSlab ?? 'normal'),
     slabMm: mprAtivo ? slabMprMm : (slot?.slabMm ?? 1),
+    mipRotatorioVisivel,
+    comparacao: {
+      ativo: compararAtivo,
+      rolagemLigada: rolagemCompararLigada && linkRolagemComparar !== null,
+      deslocamentoMm: linkRolagemComparar?.offsetMm ?? null,
+      erroVinculo: erroVinculoComparar,
+      janelaLigada: janelaCompararLigada,
+      zoomPanLigado: zoomPanCompararLigado,
+    },
   };
 }
 
-/** Atualiza o estado global, a borda do slot ativo e avisa a interface. */
+/** Atualiza o estado global, a borda do slot ativo, os rótulos ATUAL/ANTERIOR e avisa a interface. */
 function sincronizar(): void {
   const s = slots[ativo];
   estado.pilhaAtiva = s?.pilha ?? null;
   estado.idViewportAtivo = s?.idViewport ?? null;
   const varios = mprAtivo || LAYOUTS[layoutAtual].colunas * LAYOUTS[layoutAtual].linhas > 1;
   for (const x of slots) x.celula.classList.toggle('ativa', varios && x.indice === ativo);
+  atualizarEtiquetasComparacao();
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
 
@@ -346,6 +399,10 @@ async function garantirViewportMpr(
 
 /** Desliga o viewport de um slot. A pilha continua nele para voltar depois. */
 async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
+  if (slot.controladorMip) {
+    slot.controladorMip.destruir();
+    slot.controladorMip = undefined;
+  }
   if (!slot.habilitado) return;
   pararCine(slot.indice);
   if (cancelarGeracao) slot.geracao++;
@@ -393,6 +450,128 @@ function aplicarSlabAoViewport(vp: Types.IVolumeViewport, modo: ModoSlab, mm: nu
   vp.setBlendMode(blendMode);
 }
 
+/**
+ * Encontra o corte de uma pilha 2D mais próximo ao ponto 3D `ponto` (em coordenadas de mundo LPS)
+ * e leva todos os viewports visíveis (2D ou MPR) até esse ponto.
+ */
+function indiceCorteMaisProximoDoPonto(stack: StackNode, ponto: Types.Point3): number {
+  let melhorIndice = 0;
+  let menorDistancia = Infinity;
+  for (let i = 0; i < stack.instances.length; i++) {
+    const inst = stack.instances[i]!;
+    const pos = inst.imagePositionPatient;
+    const iop = inst.imageOrientationPatient;
+    let dist: number;
+    if (pos && iop && iop.length >= 6) {
+      // Produto vetorial dos cossenos diretores (linha x coluna) = normal ao corte
+      const nx = iop[1] * iop[5] - iop[2] * iop[4];
+      const ny = iop[2] * iop[3] - iop[0] * iop[5];
+      const nz = iop[0] * iop[4] - iop[1] * iop[3];
+      dist = Math.abs((ponto[0] - pos[0]) * nx + (ponto[1] - pos[1]) * ny + (ponto[2] - pos[2]) * nz);
+    } else if (pos) {
+      dist = Math.abs(ponto[2] - pos[2]);
+    } else if (inst.sliceLocation !== undefined) {
+      dist = Math.abs(ponto[2] - inst.sliceLocation);
+    } else {
+      continue;
+    }
+    if (dist < menorDistancia) {
+      menorDistancia = dist;
+      melhorIndice = i;
+    }
+  }
+  return melhorIndice;
+}
+
+function atualizarMiraSlot(slot: Slot): void {
+  if (!slot.pontoMiraMundo || !slot.viewport || !slot.habilitado || slot.celula.hidden || slot.planoSlot === 'mip-rotatorio') {
+    desenharMiraNoCanvas(slot.canvasMira, null);
+    return;
+  }
+  try {
+    const pontoCanvas = slot.viewport.worldToCanvas(slot.pontoMiraMundo);
+    if (!pontoCanvas || !Number.isFinite(pontoCanvas[0]) || !Number.isFinite(pontoCanvas[1])) {
+      desenharMiraNoCanvas(slot.canvasMira, null);
+      return;
+    }
+    desenharMiraNoCanvas(slot.canvasMira, [pontoCanvas[0], pontoCanvas[1]]);
+  } catch {
+    desenharMiraNoCanvas(slot.canvasMira, null);
+  }
+}
+
+export function limparMirasLocalizador(): void {
+  for (const s of slots) {
+    s.pontoMiraMundo = null;
+    desenharMiraNoCanvas(s.canvasMira, null);
+  }
+}
+
+function aplicarLocalizador3d(origemIndice: number, pontoMundoOrigem: Types.Point3): void {
+  const slotOrigem = slots[origemIndice];
+  if (slotOrigem) {
+    slotOrigem.pontoMiraMundo = [pontoMundoOrigem[0], pontoMundoOrigem[1], pontoMundoOrigem[2]];
+    atualizarMiraSlot(slotOrigem);
+  }
+
+  const sincronizandoAnterior = sincronizandoRolagemComparar;
+  sincronizandoRolagemComparar = true;
+  try {
+    for (const s of slots) {
+      if (s.indice === origemIndice || s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha) {
+        continue;
+      }
+      if (s.planoSlot === 'mip-rotatorio') {
+        s.pontoMiraMundo = null;
+        desenharMiraNoCanvas(s.canvasMira, null);
+        continue;
+      }
+
+      const linkPreferencial =
+        linkRolagemComparar && origemIndice === 0 && s.indice === 1
+          ? linkRolagemComparar
+          : linkRolagemComparar && origemIndice === 1 && s.indice === 0
+            ? invertLink(linkRolagemComparar)
+            : null;
+
+      const pontoAlvo = slotOrigem?.pilha
+        ? transformarPontoEntrePilhas(
+            pontoMundoOrigem,
+            slotOrigem.pilha,
+            s.pilha,
+            linkPreferencial,
+          )
+        : ([pontoMundoOrigem[0], pontoMundoOrigem[1], pontoMundoOrigem[2]] as Types.Point3);
+      s.pontoMiraMundo = pontoAlvo;
+
+      if (s.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC && 'jumpToWorld' in s.viewport) {
+        s.viewport.jumpToWorld(pontoAlvo);
+        s.viewport.render();
+        s.overlay.atualizar();
+        atualizarMiraSlot(s);
+      } else if (s.tipoViewport === Enums.ViewportType.STACK && 'setImageIdIndex' in s.viewport) {
+        const idx = indiceCorteMaisProximoDoPonto(s.pilha, pontoAlvo);
+        const atualIdx = s.viewport.getCurrentImageIdIndex();
+        if (atualIdx !== idx) {
+          void s.viewport.setImageIdIndex(idx).then(() => {
+            s.viewport?.render();
+            s.overlay.atualizar();
+            atualizarMiraSlot(s);
+          });
+        } else {
+          atualizarMiraSlot(s);
+        }
+      }
+    }
+  } finally {
+    sincronizandoRolagemComparar = sincronizandoAnterior;
+  }
+}
+
+function saltarParaPontoMundo(origemIndice: number, ponto: Types.Point3): void {
+  aplicarLocalizador3d(origemIndice, ponto);
+}
+
 function salvarEstadoVisualSlot(slot: Slot): {
   corte?: number;
   voiPreservado?: { voiRange?: { lower: number; upper: number }; invert?: boolean };
@@ -414,7 +593,7 @@ function salvarEstadoVisualSlot(slot: Slot): {
 /**
  * Mostra no slot a pilha que ele já tem:
  * - Se `precisaVolumeViewport(slot)` for falso, abre em `STACK` 2D.
- * - Se o slot tiver plano reconstruído (`axial`, `coronal`, `sagital`) ou usar
+ * - Se o slot tiver plano reconstruído (`axial`, `coronal`, `sagital`, `mip-rotatorio`) ou usar
  *   projeção de slab (`mip`, `minip`, `media`, ou `slabMm > 1` mesmo no plano `original`),
  *   monta um `ORTHOGRAPHIC` (`VolumeViewport`) apenas neste slot, mantendo os demais intactos.
  */
@@ -489,8 +668,24 @@ async function exibirSlot(
 
       const voi = voiPreservado?.voiRange ?? voiPadraoDaPilha(stack);
       if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert });
-      aplicarSlabAoViewport(vp, slot.modoSlab, slot.slabMm);
-      vp.render();
+
+      if (slot.planoSlot === 'mip-rotatorio') {
+        aplicarCameraMipRotatorio(vp, 0);
+        slot.controladorMip = criarControladorMipRotatorio({
+          elemento: slot.elemento,
+          controles: slot.controlesMip,
+          obterViewport: () =>
+            slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC
+              ? (slot.viewport as Types.IVolumeViewport | undefined)
+              : undefined,
+          aoClicarPontoMaisIntenso: (ponto) => saltarParaPontoMundo(slot.indice, ponto),
+          iniciarGirando: true,
+        });
+      } else {
+        aplicarSlabAoViewport(vp, slot.modoSlab, slot.slabMm);
+        vp.render();
+      }
+
       slot.montandoVolume = false;
       esconderMensagem(slot);
       slot.overlay.atualizar();
@@ -541,7 +736,7 @@ async function exibirSlot(
 }
 
 /**
- * Muda apenas o plano do viewport ativo ('original', 'axial', 'coronal' ou 'sagital')
+ * Muda apenas o plano do viewport ativo ('original', 'axial', 'coronal', 'sagital' ou 'mip-rotatorio')
  * mantendo os demais viewports da grade (ex.: 2x2) intactos.
  */
 export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
@@ -562,6 +757,73 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
   const { corte, voiPreservado } = salvarEstadoVisualSlot(slot);
   slot.planoSlot = plano;
   await exibirSlot(slot, corte, voiPreservado);
+}
+
+/**
+ * Botão MIP 3D: abre ou fecha rapidamente uma janela de MIP rotatório ao lado do corte 2D:
+ * - Se estiver em 1x1 com uma série volumétrica, muda para 1x2 mantendo o corte 2D à esquerda
+ *   e abrindo o MIP rotatório à direita (clicar nas lesões do MIP leva o corte 2D ao ponto).
+ * - Se já houver um MIP rotatório no layout 1x2 ao lado da mesma série, fecha-o e volta para 1x1.
+ * - Nos demais layouts (ou no MPR), alterna o slot ativo entre 'mip-rotatorio' e 'original'.
+ */
+export async function alternarMipRotatorio(): Promise<void> {
+  if (mprAtivo) {
+    await sairDoMpr('1x2');
+  }
+
+  const slot0 = slots[0];
+  const slot1 = slots[1];
+  const slotAtivo = slots[ativo] ?? slot0;
+  const stack = slotAtivo?.pilha ?? slot0?.pilha ?? null;
+  const arquivos = estado.resultado?.arquivos;
+  if (!stack || !arquivos) return;
+
+  const av = avaliarVolume(stack);
+  if (!av.ok) {
+    if (slotAtivo) mostrarAvisoVolume(slotAtivo, av.mensagens);
+    sincronizar();
+    return;
+  }
+
+  // Se estamos em 1x2 e o slot 1 já é o MIP rotatório da mesma série, fecha e volta para 1x1:
+  if (
+    layoutAtual === '1x2' &&
+    slot1?.planoSlot === 'mip-rotatorio' &&
+    slot0?.pilha?.id === stack.id &&
+    slot1?.pilha?.id === stack.id
+  ) {
+    slot1.planoSlot = 'original';
+    ativo = 0;
+    await definirLayout('1x1');
+    return;
+  }
+
+  // Se estamos em 1x1, abre 1x2 com [Corte 2D | MIP rotatório]:
+  if (layoutAtual === '1x1' && slot0 && slot1) {
+    if (slot0.planoSlot === 'mip-rotatorio') {
+      await definirPlanoSlotAtivo('original');
+      return;
+    }
+    const anterior1 = slot1.pilha?.id;
+    const volAnterior1 = slot1.volumePilhaId;
+    slot1.ids = adquirirIds(stack, arquivos);
+    slot1.pilha = stack;
+    slot1.planoSlot = 'mip-rotatorio';
+    slot1.modoSlab = 'normal';
+    slot1.slabMm = 1;
+    slot1.volumePilhaId = null;
+    if (volAnterior1) liberarVolume(volAnterior1);
+    liberarIds(anterior1);
+    await definirLayout('1x2');
+    return;
+  }
+
+  // Em 1x2 ou 2x2: alterna o slot ativo entre MIP rotatório e Original
+  if (slotAtivo) {
+    const novoPlano: PlanoSlot =
+      slotAtivo.planoSlot === 'mip-rotatorio' ? 'original' : 'mip-rotatorio';
+    await definirPlanoSlotAtivo(novoPlano);
+  }
 }
 
 /**
@@ -639,6 +901,8 @@ function liberarRecursosSlot(slot: Slot): void {
   slot.slabMm = 1;
   slot.montandoVolume = false;
   slot.ids = [];
+  slot.pontoMiraMundo = null;
+  desenharMiraNoCanvas(slot.canvasMira, null);
 }
 
 // ---------- MPR (Axial, Coronal, Sagital) e Slab ----------
@@ -887,6 +1151,9 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
 
 /** Botão MPR / tecla R: entra ou sai do modo MPR para a série ativa. */
 export async function alternarMpr(): Promise<void> {
+  if (compararAtivo) {
+    desativarComparacaoInterno();
+  }
   if (mprAtivo) {
     await sairDoMpr();
     return;
@@ -894,6 +1161,319 @@ export async function alternarMpr(): Promise<void> {
   const stack = slots[ativo]?.pilha ?? slots[0]?.pilha ?? null;
   if (!stack) return;
   await montarLayoutMpr(stack);
+}
+
+// ---------- Modo Comparar (Fase 4: 4.1, 4.2 e 4.3) ----------
+
+function esconderAvisoCobertura(slot: Slot): void {
+  slot.avisoCobertura.hidden = true;
+}
+
+function mostrarAvisoCobertura(slot: Slot, foraDaCobertura: boolean): void {
+  slot.avisoCobertura.hidden = !foraDaCobertura;
+}
+
+function atualizarEtiquetasComparacao(): void {
+  if (mprAtivo) {
+    for (const s of slots) {
+      s.etiquetaComparacao.hidden = true;
+      s.etiquetaComparacao.replaceChildren();
+      esconderAvisoCobertura(s);
+    }
+    return;
+  }
+
+  if (!compararAtivo) {
+    for (const s of slots) {
+      esconderAvisoCobertura(s);
+    }
+  }
+
+  const quantidadeVisivel = LAYOUTS[layoutAtual].colunas * LAYOUTS[layoutAtual].linhas;
+  const pilhasVisiveis = slots
+    .slice(0, quantidadeVisivel)
+    .map((s) => (s.celula.hidden ? null : s.pilha));
+  const rotulos = calcularRotulosParaSlots(pilhasVisiveis, compararAtivo);
+
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i]!;
+    const r = i < quantidadeVisivel ? rotulos[i] : null;
+    s.etiquetaComparacao.replaceChildren();
+    if (!r) {
+      s.etiquetaComparacao.hidden = true;
+      continue;
+    }
+
+    const linhaPrincipal = document.createElement('div');
+    linhaPrincipal.className = 'linha-etiqueta-comparar';
+
+    const selo = document.createElement('span');
+    selo.className = `selo-comparar ${r.papel === 'ATUAL' ? 'atual' : 'anterior'}`;
+    selo.textContent = r.papel;
+
+    const data = document.createElement('span');
+    data.className = 'data-comparar';
+    data.textContent = r.dataFormatada;
+
+    linhaPrincipal.append(selo, data);
+    s.etiquetaComparacao.append(linhaPrincipal);
+
+    if (r.avisoPaciente) {
+      const alerta = document.createElement('div');
+      alerta.className = 'alerta-paciente-diferente';
+      alerta.textContent = '⚠ Paciente diferente (nome/ID)';
+      alerta.title = r.avisoPaciente;
+      s.etiquetaComparacao.append(alerta);
+    }
+
+    s.etiquetaComparacao.hidden = false;
+  }
+}
+
+function atualizarSincronizadoresCornerstoneComparar(): void {
+  if (!compararAtivo) {
+    destruirSincronizadoresComparacao();
+    return;
+  }
+  sincronizarParCornerstone(ID_MOTOR, [idViewport(0), idViewport(1)], {
+    janela: janelaCompararLigada,
+    zoomPan: zoomPanCompararLigado,
+  });
+}
+
+function recalcularVinculoInicialComparacao(): void {
+  if (!compararAtivo) return;
+  const s0 = slots[0];
+  const s1 = slots[1];
+  if (!s0 || !s1) return;
+  esconderAvisoCobertura(s0);
+  esconderAvisoCobertura(s1);
+
+  const res = criarVinculoComparacao(s0.pilha, s1.pilha);
+  linkRolagemComparar = res.link;
+  erroVinculoComparar = res.erro?.message ?? null;
+  if (res.erro) {
+    rolagemCompararLigada = false;
+    mostrarAvisoVolume(s1, [res.erro.message]);
+  } else {
+    esconderAvisoVolume(s1);
+  }
+  sincronizar();
+  if (rolagemCompararLigada && linkRolagemComparar) {
+    aoRolarSlotComparar(0);
+  }
+}
+
+function aoRolarSlotComparar(origemIndice: number): void {
+  if (!compararAtivo || !rolagemCompararLigada || !linkRolagemComparar || sincronizandoRolagemComparar) {
+    return;
+  }
+  if (origemIndice !== 0 && origemIndice !== 1) return;
+  const destinoIndice = origemIndice === 0 ? 1 : 0;
+  const slotOrigem = slots[origemIndice];
+  const slotDestino = slots[destinoIndice];
+  if (
+    !slotOrigem?.pilha ||
+    !slotOrigem.viewport ||
+    !slotDestino?.pilha ||
+    !slotDestino.viewport ||
+    !slotDestino.habilitado
+  ) {
+    return;
+  }
+
+  const posOrigem = obterPosicaoCorteAtual(slotOrigem.pilha, slotOrigem.viewport);
+  if (posOrigem === undefined) return;
+
+  const sincronizado = calcularCorteSincronizado(
+    linkRolagemComparar,
+    origemIndice,
+    posOrigem,
+    slotDestino.pilha,
+  );
+  if (!sincronizado) return;
+
+  esconderAvisoCobertura(slotOrigem);
+  mostrarAvisoCobertura(slotDestino, sincronizado.outOfRange);
+
+  sincronizandoRolagemComparar = true;
+  const vpDestino = slotDestino.viewport;
+  if (slotDestino.tipoViewport === Enums.ViewportType.STACK && 'setImageIdIndex' in vpDestino) {
+    const atualIdx = vpDestino.getCurrentImageIdIndex();
+    if (atualIdx !== sincronizado.index) {
+      void vpDestino
+        .setImageIdIndex(sincronizado.index)
+        .then(() => {
+          vpDestino.render();
+          slotDestino.overlay.atualizar();
+        })
+        .finally(() => {
+          sincronizandoRolagemComparar = false;
+        });
+      return;
+    }
+    sincronizandoRolagemComparar = false;
+    return;
+  }
+
+  try {
+    if (
+      slotDestino.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC &&
+      'jumpToWorld' in vpDestino
+    ) {
+      const instAlvo = slotDestino.pilha.instances[sincronizado.index];
+      const posMundo = instAlvo?.imagePositionPatient;
+      if (posMundo) {
+        vpDestino.jumpToWorld([posMundo[0], posMundo[1], posMundo[2]]);
+        vpDestino.render();
+        slotDestino.overlay.atualizar();
+      }
+    }
+  } finally {
+    sincronizandoRolagemComparar = false;
+  }
+}
+
+function desativarComparacaoInterno(): void {
+  if (!compararAtivo) return;
+  compararAtivo = false;
+  linkRolagemComparar = null;
+  erroVinculoComparar = null;
+  destruirSincronizadoresComparacao();
+  atualizarEtiquetasComparacao();
+}
+
+/** Entra ou sai do modo Comparar (4.1, 4.2, 4.3). */
+export async function alternarModoComparar(): Promise<void> {
+  if (compararAtivo) {
+    desativarComparacaoInterno();
+    sincronizar();
+    return;
+  }
+
+  const arquivos = estado.resultado?.arquivos;
+  if (!arquivos) return;
+
+  if (mprAtivo) {
+    await sairDoMpr('1x2');
+  }
+
+  compararAtivo = true;
+  rolagemCompararLigada = true;
+  erroVinculoComparar = null;
+
+  const s0 = slots[0]!;
+  const s1 = slots[1]!;
+
+  // Se ainda não temos duas pilhas abertas nos slots 0 e 1, preenche automaticamente
+  // a partir do índice (ex.: TC atual e TC anterior do phantom):
+  if (!s0.pilha || !s1.pilha || s0.pilha.id === s1.pilha.id) {
+    const [p0, p1] = escolherParInicialComparacao(
+      estado.resultado?.index,
+      slots[ativo]?.pilha ?? s0.pilha,
+    );
+    if (p0 && s0.pilha?.id !== p0.id) {
+      const ant0 = s0.pilha?.id;
+      const vol0 = s0.volumePilhaId;
+      s0.ids = adquirirIds(p0, arquivos);
+      s0.pilha = p0;
+      s0.planoSlot = 'original';
+      s0.modoSlab = 'normal';
+      s0.slabMm = 1;
+      s0.volumePilhaId = null;
+      if (vol0) liberarVolume(vol0);
+      liberarIds(ant0);
+    }
+    if (p1 && s1.pilha?.id !== p1.id) {
+      const ant1 = s1.pilha?.id;
+      const vol1 = s1.volumePilhaId;
+      s1.ids = adquirirIds(p1, arquivos);
+      s1.pilha = p1;
+      s1.planoSlot = 'original';
+      s1.modoSlab = 'normal';
+      s1.slabMm = 1;
+      s1.volumePilhaId = null;
+      if (vol1) liberarVolume(vol1);
+      liberarIds(ant1);
+    } else if (s1.planoSlot === 'mip-rotatorio') {
+      s1.planoSlot = 'original';
+    }
+  }
+
+  await definirLayout('1x2');
+  // Garante que ambos os slots estejam exibidos caso já estivessem habilitados:
+  await Promise.all([
+    s0.pilha ? exibirSlot(s0, s0.corteSalvo) : Promise.resolve(),
+    s1.pilha ? exibirSlot(s1, s1.corteSalvo) : Promise.resolve(),
+  ]);
+
+  atualizarEtiquetasComparacao();
+  atualizarSincronizadoresCornerstoneComparar();
+  recalcularVinculoInicialComparacao();
+}
+
+/**
+ * Botão de cadeado (4.2): liga ou desliga o vínculo de rolagem por posição.
+ * Ao religar, chama `relink` com as posições atuais dos dois lados para manter
+ * o alinhamento anatômico escolhido manualmente pelo usuário.
+ */
+export function alternarCadeadoRolagemComparar(): void {
+  if (!compararAtivo) return;
+  const s0 = slots[0];
+  const s1 = slots[1];
+  if (!s0?.pilha || !s1?.pilha) return;
+
+  if (rolagemCompararLigada && linkRolagemComparar) {
+    rolagemCompararLigada = false;
+    esconderAvisoCobertura(s0);
+    esconderAvisoCobertura(s1);
+    sincronizar();
+    return;
+  }
+
+  const pos0 = obterPosicaoCorteAtual(s0.pilha, s0.viewport);
+  const pos1 = obterPosicaoCorteAtual(s1.pilha, s1.viewport);
+  const res = recalcularVinculoPorPosicoesAtuais(
+    linkRolagemComparar,
+    s0.pilha,
+    s1.pilha,
+    pos0,
+    pos1,
+  );
+  linkRolagemComparar = res.link;
+  erroVinculoComparar = res.erro?.message ?? null;
+  if (res.erro || !res.link) {
+    rolagemCompararLigada = false;
+    if (res.erro) mostrarAvisoVolume(s1, [res.erro.message]);
+  } else {
+    rolagemCompararLigada = true;
+    esconderAvisoVolume(s1);
+    aoRolarSlotComparar(ativo === 1 ? 1 : 0);
+  }
+  sincronizar();
+}
+
+/** Botão "Zerar" (4.2): refaz o `createLink` inicial entre os dois exames. */
+export function zerarVinculoRolagemComparar(): void {
+  if (!compararAtivo) return;
+  rolagemCompararLigada = true;
+  recalcularVinculoInicialComparacao();
+}
+
+/** Liga ou desliga a sincronização de janela/nível entre os dois exames (4.3). */
+export function alternarSincronizacaoJanelaComparar(): void {
+  if (!compararAtivo) return;
+  janelaCompararLigada = !janelaCompararLigada;
+  atualizarSincronizadoresCornerstoneComparar();
+  sincronizar();
+}
+
+/** Liga ou desliga a sincronização de zoom/pan entre os dois exames (4.3). */
+export function alternarSincronizacaoZoomPanComparar(): void {
+  if (!compararAtivo) return;
+  zoomPanCompararLigado = !zoomPanCompararLigado;
+  atualizarSincronizadoresCornerstoneComparar();
+  sincronizar();
 }
 
 /** Abre a pilha no viewport ativo (ou nos 3 planos se já estiver em MPR e a pilha suportar volume). */
@@ -932,6 +1512,11 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
   sincronizar();
   try {
     await exibirSlot(slot);
+    if (compararAtivo) {
+      atualizarEtiquetasComparacao();
+      atualizarSincronizadoresCornerstoneComparar();
+      recalcularVinculoInicialComparacao();
+    }
   } finally {
     if (volumeAnterior) liberarVolume(volumeAnterior);
     liberarIds(anterior);
@@ -941,6 +1526,9 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
 /** Esvazia todos os viewports (ao abrir outra pasta). */
 export async function limparViewports(): Promise<void> {
   geracaoMpr++;
+  if (compararAtivo) {
+    desativarComparacaoInterno();
+  }
   if (mprAtivo) {
     mprAtivo = false;
     definirModoMprFerramentas(false);
@@ -966,7 +1554,30 @@ export async function limparViewports(): Promise<void> {
 
 // ---------- layout ----------
 
+async function redimensionarMotor(manterCamera = false): Promise<void> {
+  const motor = await iniciarCornerstone();
+  requestAnimationFrame(() => {
+    try {
+      motor.resize(true, manterCamera);
+      for (const s of slots) {
+        if (s.habilitado && !s.celula.hidden) {
+          if (s.controladorMip) {
+            s.controladorMip.definirAngulo(s.controladorMip.anguloAtual());
+          }
+          s.overlay.atualizar();
+          atualizarMiraSlot(s);
+        }
+      }
+    } catch {
+      /* ignora se ainda não houver viewports prontos */
+    }
+  });
+}
+
 export async function definirLayout(novo: Layout): Promise<void> {
+  if (compararAtivo && novo !== '1x2') {
+    desativarComparacaoInterno();
+  }
   if (mprAtivo) {
     await sairDoMpr(novo);
     return;
@@ -983,6 +1594,7 @@ export async function definirLayout(novo: Layout): Promise<void> {
   }
   if (ativo >= quantidade) ativo = 0;
   sincronizar();
+  await redimensionarMotor(false);
   for (const slot of slots) {
     if (slot.indice < quantidade && slot.pilha && !slot.habilitado) void exibirSlot(slot, slot.corteSalvo);
   }
@@ -1008,11 +1620,16 @@ function passoDoCine(indice: number): () => void {
   };
 }
 
-/** Toca ou pausa o cine do viewport ativo. */
+/** Toca ou pausa o cine (ou a rotação do MIP rotatório) do viewport ativo. */
 export function alternarCine(): void {
   if (mprAtivo) return;
   const slot = slots[ativo];
   if (!slot?.viewport || !slot.pilha) return;
+  if (slot.controladorMip) {
+    slot.controladorMip.alternarRotacao();
+    sincronizar();
+    return;
+  }
   if (cineTocando(slot.indice)) pararCine(slot.indice);
   else tocarCine(slot.indice, passoDoCine(slot.indice));
   sincronizar();
@@ -1060,7 +1677,19 @@ function criarSlot(indice: number): Slot {
   const avisoVolume = document.createElement('div');
   avisoVolume.className = 'aviso-volume';
   avisoVolume.hidden = true;
-  celula.append(elemento, mensagem, avisoVolume);
+  const controlesMip = document.createElement('div');
+  controlesMip.className = 'controles-mip';
+  controlesMip.hidden = true;
+  const etiquetaComparacao = document.createElement('div');
+  etiquetaComparacao.className = 'etiqueta-comparacao';
+  etiquetaComparacao.hidden = true;
+  const avisoCobertura = document.createElement('div');
+  avisoCobertura.className = 'aviso-cobertura';
+  avisoCobertura.textContent = 'Fora da cobertura';
+  avisoCobertura.hidden = true;
+  const canvasMira = document.createElement('canvas');
+  canvasMira.className = 'canvas-mira';
+  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, etiquetaComparacao, avisoCobertura);
 
   const slot: Slot = {
     indice,
@@ -1069,6 +1698,11 @@ function criarSlot(indice: number): Slot {
     elemento,
     mensagem,
     avisoVolume,
+    controlesMip,
+    etiquetaComparacao,
+    avisoCobertura,
+    canvasMira,
+    pontoMiraMundo: null,
     tipoViewport: Enums.ViewportType.STACK,
     planoSlot: 'original',
     modoSlab: 'normal',
@@ -1089,7 +1723,61 @@ function criarSlot(indice: number): Slot {
   });
   slot.overlay.ligar(elemento);
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => sincronizarVoiMpr(indice));
+  elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, () => {
+    aoRolarSlotComparar(indice);
+    atualizarMiraSlot(slot);
+  });
+  elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, () => {
+    aoRolarSlotComparar(indice);
+    atualizarMiraSlot(slot);
+  });
+  elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
+    atualizarMiraSlot(slot);
+  });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+
+  // Ferramenta Localizador 3D (┼ Localizar): clicando ou arrastando com o botão atribuído,
+  // marca a cruzinha neste viewport e sincroniza todos os demais (mesmo exame ou comparado).
+  elemento.addEventListener(
+    'mousedown',
+    (e) => {
+      if (!slot.viewport || !slot.habilitado || slot.planoSlot === 'mip-rotatorio') return;
+      const botao =
+        e.button === 0 ? 'esquerdo' : e.button === 1 ? 'meio' : e.button === 2 ? 'direito' : null;
+      if (!botao || botaoAtribuido(botao) !== FERRAMENTA_LOCALIZADOR_3D) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const atualizarPorEvento = (ev: MouseEvent) => {
+        if (!slot.viewport) return;
+        const rect = elemento.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const y = ev.clientY - rect.top;
+        if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+        try {
+          const mundo = slot.viewport.canvasToWorld([x, y]);
+          if (mundo && Number.isFinite(mundo[0]) && Number.isFinite(mundo[1]) && Number.isFinite(mundo[2])) {
+            aplicarLocalizador3d(indice, mundo);
+          }
+        } catch {
+          /* ignora se a imagem ainda não estiver pronta */
+        }
+      };
+
+      atualizarPorEvento(e);
+
+      const aoMover = (ev: MouseEvent) => atualizarPorEvento(ev);
+      const aoSoltar = () => {
+        window.removeEventListener('mousemove', aoMover, true);
+        window.removeEventListener('mouseup', aoSoltar, true);
+      };
+      window.addEventListener('mousemove', aoMover, true);
+      window.addEventListener('mouseup', aoSoltar, true);
+    },
+    true,
+  );
+
   celula.addEventListener(
     'wheel',
     (e) => {
@@ -1097,6 +1785,7 @@ function criarSlot(indice: number): Slot {
       e.preventDefault();
       e.stopPropagation();
       ativarViewport(indice);
+      if (slot.planoSlot === 'mip-rotatorio') return;
       const deltaMm = e.deltaY < 0 ? 1 : -1;
       const atual = mprAtivo ? slabMprMm : slot.slabMm;
       definirSlabMpr(atual + deltaMm);
@@ -1110,10 +1799,14 @@ function criarSlot(indice: number): Slot {
 export function configurarViewport2d(elementos: ElementosViewport2d): void {
   grade = document.createElement('div');
   grade.id = 'grade';
+  const observadorTamanho = new ResizeObserver(() => {
+    void redimensionarMotor(false);
+  });
   for (let i = 0; i < MAX_VIEWPORTS; i++) {
     const slot = criarSlot(i);
     slots.push(slot);
     grade.append(slot.celula);
+    observadorTamanho.observe(slot.elemento);
   }
   elementos.contentor.append(grade);
   eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, () => {

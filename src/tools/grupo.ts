@@ -21,6 +21,7 @@ import {
   ZoomTool,
 } from '@cornerstonejs/tools';
 import { estado } from '../state/store';
+import { FERRAMENTA_LOCALIZADOR_3D } from './localizador3d';
 import { PolilinhaTool } from './polilinha';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
@@ -45,6 +46,7 @@ export interface FerramentaPrimaria {
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w' },
   { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's' },
+  { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar', tecla: 'x' },
   { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true },
   { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd' },
   { nome: AngleTool.toolName, rotulo: 'Ângulo', tecla: 'a' },
@@ -53,14 +55,14 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p' },
 ];
 
-/** Todas as ferramentas do grupo, sem repetição. */
+/** Todas as ferramentas nativas do grupo Cornerstone, sem repetição. */
 const TODAS_AS_FERRAMENTAS = [
   ...new Set<string>([
     StackScrollTool.toolName,
     WindowLevelTool.toolName,
     ZoomTool.toolName,
     PanTool.toolName,
-    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome),
+    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome).filter((n) => n !== FERRAMENTA_LOCALIZADOR_3D),
   ]),
 ];
 
@@ -78,6 +80,7 @@ export const OPCOES_SECUNDARIAS: OpcaoBotao[] = [
   { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível' },
   { nome: PanTool.toolName, rotulo: 'Pan' },
   { nome: StackScrollTool.toolName, rotulo: 'Passar cortes' },
+  { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar' },
 ];
 
 /** A roda só responde a cortes e zoom (testado: janela/nível e pan não reagem a ela). */
