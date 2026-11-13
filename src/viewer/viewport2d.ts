@@ -730,14 +730,36 @@ function aplicarSlabAoViewport(vp: Types.IVolumeViewport, modo: ModoSlab, mm: nu
   if (modo === 'normal' && mm <= 1) {
     vp.resetSlabThickness();
     vp.setBlendMode(Enums.BlendModes.COMPOSITE);
-    return;
+  } else {
+    vp.setSlabThickness(mm);
+    const blendMode =
+      modo === 'normal'
+        ? Enums.BlendModes.AVERAGE_INTENSITY_BLEND
+        : MODOS_SLAB[modo].blendMode;
+    vp.setBlendMode(blendMode);
   }
-  vp.setSlabThickness(mm);
-  const blendMode =
-    modo === 'normal'
-      ? Enums.BlendModes.AVERAGE_INTENSITY_BLEND
-      : MODOS_SLAB[modo].blendMode;
-  vp.setBlendMode(blendMode);
+  corrigirOpacidadePeloSlab(vp);
+}
+
+/**
+ * Faz a opacidade dos volumes sobrepostos (o PET da fusão) valer o que foi pedido.
+ *
+ * O vtk.js trata a opacidade como "por unidade de distância": o que aparece na tela é
+ * 1 - (1 - opacidade)^(percurso do raio / unidade). Num corte fino o raio percorre ~0,125 mm e a
+ * unidade padrão é 1 mm, então 50% pedidos viravam ~9% na tela (fusão desbotada). Igualando a
+ * unidade ao percurso do raio no slab, o expoente vira 1 e 50% são 50%.
+ *
+ * Percurso medido no navegador (Cornerstone 5.17.1): 2 × slab + 0,025 mm
+ * (0,125 mm no slab mínimo de 0,05; 2,0 em 1 mm; 10 em 5 mm).
+ */
+function corrigirOpacidadePeloSlab(vp: Types.IVolumeViewport): void {
+  const percurso = 2 * vp.getSlabThickness() + 0.025;
+  for (const entrada of vp.getActors().slice(1)) {
+    const prop = (entrada.actor as { getProperty?: () => unknown }).getProperty?.() as
+      | { setScalarOpacityUnitDistance?: (componente: number, mm: number) => void }
+      | undefined;
+    prop?.setScalarOpacityUnitDistance?.(0, percurso);
+  }
 }
 
 /**
@@ -940,6 +962,7 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
     volumePetId,
   );
   void volumeCtId;
+  corrigirOpacidadePeloSlab(vp);
   slot.atualizarLegendaFusao?.();
   aplicarRegistroPet(slot, volumePetId);
   vp.render();
