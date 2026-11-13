@@ -613,3 +613,6 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .busca-series { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 180px; overflow: auto; }
 .busca-pastarow { margin-top: 10px; gap: 8px; }
 .busca-pasta { flex: 1; min-width: 200px; }
+
+.busca-modalidades { display: flex; gap: 10px; flex-wrap: wrap; }
+.busca-modalidade { white-space: nowrap; }

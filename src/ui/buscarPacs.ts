@@ -80,10 +80,26 @@ function desenhar(): void {
   const acesso = el('input', { type: 'text' });
   const de = el('input', { type: 'date' });
   const ate = el('input', { type: 'date' });
-  const modalidade = el('select');
-  for (const m of ['', 'CT', 'MR', 'PT', 'NM', 'US', 'CR', 'DX', 'MG', 'XA']) {
-    modalidade.append(el('option', { value: m, textContent: m || 'Todas' }));
-  }
+  // Modalidades: marque uma ou mais (nenhuma = todas).
+  const MODALIDADES: Array<[string, string]> = [
+    ['PT', 'PET'],
+    ['CT', 'TC'],
+    ['MR', 'RM'],
+    ['NM', 'Cintilografia'],
+    ['US', 'US'],
+    ['CR', 'CR'],
+    ['DX', 'DX'],
+    ['MG', 'Mamografia'],
+    ['XA', 'Angiografia'],
+  ];
+  const caixasModalidade = MODALIDADES.map(([codigo, rotulo]) => ({
+    codigo,
+    c: el('input', { type: 'checkbox' }),
+    rotulo: el('label', { class: 'busca-modalidade', title: codigo }),
+    texto: rotulo,
+  }));
+  for (const m of caixasModalidade) m.rotulo.append(m.c, ` ${m.texto}`);
+  const modalidade = el('div', { class: 'busca-modalidades' }, ...caixasModalidade.map((m) => m.rotulo));
   const atalho = (rotulo: string, dias: number): HTMLButtonElement => {
     const b = el('button', { type: 'button', textContent: rotulo });
     b.addEventListener('click', () => {
@@ -126,39 +142,64 @@ function desenhar(): void {
       dica('Escolha pelo menos um servidor.');
       return;
     }
+    const escolhidasModalidades = caixasModalidade.filter((m) => m.c.checked).map((m) => m.codigo);
     const filtros = {
       patientName: nome.value.trim(),
       patientId: idPac.value.trim(),
       accessionNumber: acesso.value.trim(),
       dateFrom: doCampoData(de.value),
       dateTo: doCampoData(ate.value),
-      modality: modalidade.value,
+      modality: '',
     };
-    if (Object.values(filtros).every((v) => v === '')) {
+    if (Object.values(filtros).every((v) => v === '') && escolhidasModalidades.length === 0) {
       dica('Informe pelo menos um filtro (nome, ID, número de acesso, período ou modalidade).');
       return;
+    }
+    // O PACS precisa de nome, ID, número de acesso ou data (a modalidade sozinha pediria o PACS
+    // inteiro): só com modalidade marcada, usa os últimos 30 dias.
+    let avisoPeriodo = '';
+    if (!filtros.patientName && !filtros.patientId && !filtros.accessionNumber && !filtros.dateFrom && !filtros.dateTo) {
+      const hoje = new Date();
+      const ini = new Date(hoje.getTime() - 30 * 86_400_000);
+      const fmt = (d: Date): string =>
+        `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+      filtros.dateFrom = fmt(ini);
+      filtros.dateTo = fmt(hoje);
+      avisoPeriodo = 'Sem outro filtro: mostrando os últimos 30 dias.';
     }
     buscar.disabled = true;
     areaResultados.replaceChildren();
     areaDetalhe.replaceChildren();
     dica('Buscando…', true);
     await definirServidoresPermitidos(config.servidores);
+    // Uma consulta por modalidade marcada (ou uma só, sem modalidade); os estudos repetidos entre
+    // consultas do mesmo servidor entram uma vez só.
+    const consultas = escolhidos.flatMap((s) =>
+      (escolhidasModalidades.length ? escolhidasModalidades : ['']).map((m) => ({ s, m })),
+    );
     const respostas = await Promise.allSettled(
-      escolhidos.map(async (s) => ({
+      consultas.map(async ({ s, m }) => ({
         s,
-        r: await findStudies(s, filtros, { connect: connectTauri, callingAeTitle: config.meuAeTitle, timeoutMs: 20_000 }),
+        r: await findStudies(s, { ...filtros, modality: m }, { connect: connectTauri, callingAeTitle: config.meuAeTitle, timeoutMs: 20_000 }),
       })),
     );
     buscar.disabled = false;
     const todos: Resultado[] = [];
     const problemas: string[] = [];
+    const vistos = new Set<string>();
     let truncado = false;
     respostas.forEach((r, i) => {
       if (r.status === 'fulfilled') {
         truncado ||= r.value.r.truncated;
-        for (const e of r.value.r.results) todos.push({ estudo: e, servidor: r.value.s });
+        for (const e of r.value.r.results) {
+          const chave = `${r.value.s.name}|${e.studyInstanceUid}`;
+          if (vistos.has(chave)) continue;
+          vistos.add(chave);
+          todos.push({ estudo: e, servidor: r.value.s });
+        }
       } else {
-        problemas.push(`${escolhidos[i]!.name}: ${mensagemDe(r.reason)}`);
+        const msg = `${consultas[i]!.s.name}: ${mensagemDe(r.reason)}`;
+        if (!problemas.includes(msg)) problemas.push(msg);
       }
     });
     // Mais recente primeiro, entre todos os servidores.
@@ -166,6 +207,7 @@ function desenhar(): void {
       `${b.estudo.studyDate ?? ''}${b.estudo.studyTime ?? ''}`.localeCompare(`${a.estudo.studyDate ?? ''}${a.estudo.studyTime ?? ''}`),
     );
     const avisos = [...problemas.map((p) => `⚠ ${p}`)];
+    if (avisoPeriodo) avisos.unshift(avisoPeriodo);
     if (truncado) avisos.push('Há mais resultados; refine a pesquisa.');
     if (todos.length === 0 && problemas.length === 0) avisos.push('Nenhum estudo encontrado.');
     dica(avisos.length ? avisos.join(' · ') : null);
