@@ -22,6 +22,7 @@ import {
   girar90,
   inverter,
   limparMedidas,
+  OPCOES_LATERAIS,
   OPCOES_RODA,
   OPCOES_SECUNDARIAS,
   type OpcaoBotao,
@@ -60,6 +61,7 @@ import {
   geometriaLayout,
   idLayout,
   alternarMaximizado,
+  alternarSincroniaEstudo,
   abrirLayoutPet,
   limparMirasLocalizador,
   type ModoSlab,
@@ -317,7 +319,15 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     () => zerarVinculoRolagemComparar(),
     menuComparar.fechar,
   );
+  const itemSincEstudo = itemMenu(
+    '🔗 Sincronizar séries do mesmo estudo (automático)',
+    undefined,
+    () => alternarSincroniaEstudo(),
+    menuComparar.fechar,
+  );
   menuComparar.painel.append(
+    itemSincEstudo,
+    divisorMenu(),
     itemMenu('Ativar / sair do modo Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar),
     divisorMenu(),
     itemCadeadoMenu,
@@ -522,13 +532,15 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   // Menu suspenso para configurar os botões Direito, Meio e Roda do mouse:
   const menuMouse = criarMenuSuspenso({
     rotulo: '🖱',
-    dica: 'Escolher a função dos botões Direito, Meio e Roda do mouse',
+    dica: 'Escolher a função dos botões Direito, Meio, laterais (voltar/avançar) e Roda do mouse',
   });
   const camposMouse: Array<[Botao, HTMLSelectElement]> = [];
   const seletores: Array<[Botao, string, OpcaoBotao[]]> = [
     ['direito', 'Botão direito', OPCOES_SECUNDARIAS],
     ['meio', 'Botão do meio', OPCOES_SECUNDARIAS],
     ['roda', 'Roda do mouse', OPCOES_RODA],
+    ['voltar', 'Botão lateral: voltar', OPCOES_LATERAIS],
+    ['avancar', 'Botão lateral: avançar', OPCOES_LATERAIS],
   ];
   for (const [botaoMouse, rotulo, opcoes] of seletores) {
     const linha = document.createElement('label');
@@ -713,6 +725,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
     botaoMip3d.setAttribute('aria-pressed', String(e.mipRotatorioVisivel));
     botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
+
+    itemSincEstudo.setAttribute('aria-pressed', String(e.sincroniaEstudo));
 
     // Estado do modo Comparar:
     const comp = e.comparacao;

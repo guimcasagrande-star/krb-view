@@ -36,8 +36,8 @@ export function teclaDaAcao(id: string): string {
 
 const LINHAS_AJUDA: Array<[string, string]> = [
   ['Ctrl+Shift+O / Ctrl+O', 'Abrir pasta DICOM / Abrir arquivo(s) DICOM'],
-  ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível no 2D, crosshairs no MPR)'],
-  ['Botões direito, meio e roda', 'Escolhidos no menu 🖱 Mouse da barra (padrão: zoom, pan e cortes)'],
+  ['Botão esquerdo', 'Ferramenta escolhida na barra (padrão: passar cortes no 2D, crosshairs no MPR)'],
+  ['Botões direito, meio, laterais e roda', 'Escolhidos no menu 🖱 da barra (padrão: zoom, pan, avançar = distância, voltar = nenhum, roda = cortes)'],
   ['S W H Z X C', 'Navegação: passar cortes, janela/nível, pan, zoom, ┼ localizar ponto, crosshairs (MPR)'],
   ['D B Q N', 'Medidas lineares: distância, desvio linha média, proporção L1/L2 (razão), relação de estenose (%)'],
   ['A K V T E M P', 'Ângulos e ROIs: ângulo (3 pts), ângulo de Cobb (4 pts), ângulo c/ eixo horiz./vert., seta, ROI elíptica, ROI mão livre, polilinha'],
@@ -108,6 +108,23 @@ function digitandoEmCampo(alvo: EventTarget | null): boolean {
 
 /** Instala os atalhos uma vez. Ignora teclas quando o foco está em campo de texto. */
 export function iniciarAtalhos(): void {
+  // Botões laterais do mouse (voltar/avançar) são ferramentas: não podem navegar o histórico.
+  for (const tipo of ['mousedown', 'mouseup', 'auxclick'] as const) {
+    document.addEventListener(
+      tipo,
+      (e) => {
+        if (e.button === 3 || e.button === 4) e.preventDefault();
+      },
+      true,
+    );
+  }
+  try {
+    history.pushState(null, '', location.href);
+    window.addEventListener('popstate', () => history.pushState(null, '', location.href));
+  } catch {
+    /* sem histórico (ex.: contexto restrito) */
+  }
+
   document.addEventListener('keydown', (e) => {
     if (digitandoEmCampo(e.target)) return;
 

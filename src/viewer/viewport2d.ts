@@ -18,6 +18,8 @@ import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode, StudyNode } from '../io/organize';
 import { gridFromVolumeProps } from '../io/geometry';
 import { ajustarZoomAoConteudo, exibicaoPadraoPet } from './exibicaoInicial';
+import { SynchronizerManager, synchronizers } from '@cornerstonejs/tools';
+import { nearestIndex } from '../compare/sync';
 import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
 import { esquecerSuvDaPilha, pilhaEmSuv, registrarSuvDaPilha } from '../pet/provedorSuv';
 import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from '../tools/voiEsfera';
@@ -137,6 +139,8 @@ export interface EstadoViewports {
   comparacao: EstadoComparacao;
   /** Um viewport está maximizado (tela cheia da grade). */
   maximizado: boolean;
+  /** Sincronia automática (rolagem, zoom, pan e janela) entre séries do mesmo estudo. */
+  sincroniaEstudo: boolean;
 }
 
 export interface ElementosViewport2d {
@@ -180,6 +184,12 @@ interface Slot {
 const slots: Slot[] = [];
 let grade: HTMLDivElement;
 let layoutAtual: Layout = '1x1';
+
+// Sincronia automática entre séries do mesmo estudo (fora do modo Comparar).
+let sincroniaEstudoLigada = true;
+let assinaturaSincroniaEstudo = '';
+let sincronizandoEstudo = false;
+const indicesImpostosPorEstudo = new Map<number, number>();
 
 // Viewport maximizado por duplo clique (null = grade normal).
 let maximizado: number | null = null;
@@ -358,6 +368,7 @@ function estadoAtual(): EstadoViewports {
     slabMm: mprAtivo ? slabMprMm : (slot?.slabMm ?? 1),
     mipRotatorioVisivel,
     maximizado: maximizado !== null,
+    sincroniaEstudo: sincroniaEstudoLigada,
     comparacao: {
       ativo: compararAtivo,
       rolagemLigada: rolagemCompararLigada && linkRolagemComparar !== null,
@@ -369,6 +380,115 @@ function estadoAtual(): EstadoViewports {
   };
 }
 
+// ---------- sincronia automática entre séries do mesmo estudo ----------
+
+const ID_SYNC_ESTUDO_ZOOM = 'sync-estudo-zoom-pan';
+const ID_SYNC_ESTUDO_VOI = 'sync-estudo-voi';
+
+/** Viewports 2D (pilha) visíveis agrupados por estudo + referencial; só grupos com 2 ou mais. */
+function gruposSincroniaEstudo(): Slot[][] {
+  if (compararAtivo || mprAtivo || maximizado !== null) return [];
+  const grupos = new Map<string, Slot[]>();
+  for (const s of slots) {
+    if (s.celula.hidden || !s.pilha || !s.habilitado || !s.viewport || s.planoSlot !== 'original') continue;
+    if (!('setImageIdIndex' in s.viewport)) continue;
+    const inst = s.pilha.instances[0];
+    if (!inst?.studyInstanceUid || !inst.frameOfReferenceUid) continue;
+    const chave = `${inst.studyInstanceUid}|${inst.frameOfReferenceUid}`;
+    const lista = grupos.get(chave) ?? [];
+    lista.push(s);
+    grupos.set(chave, lista);
+  }
+  return [...grupos.values()].filter((g) => g.length >= 2);
+}
+
+/** Refaz os sincronizadores de zoom/pan e janela só quando a composição dos grupos muda. */
+function atualizarSincroniaEstudo(): void {
+  const grupos = sincroniaEstudoLigada ? gruposSincroniaEstudo() : [];
+  const assinatura = grupos
+    .map((g) => g.map((s) => `${s.idViewport}:${s.pilha?.id}`).join(','))
+    .join('|');
+  if (assinatura === assinaturaSincroniaEstudo) return;
+  assinaturaSincroniaEstudo = assinatura;
+
+  SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_ZOOM);
+  SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_VOI);
+  if (grupos.length === 0) return;
+
+  // Os campos de visão (FOV) das séries diferem (PET x TC): o zoom/pan automático de cada uma
+  // não combina entre si. Ao formar o grupo todos voltam ao enquadramento padrão e só então
+  // os sincronizadores são ligados.
+  for (const s of grupos[0]!) {
+    try {
+      s.viewport?.resetCamera();
+      s.viewport?.render();
+    } catch {
+      /* viewport ainda sem imagem */
+    }
+  }
+
+  const zoom = synchronizers.createZoomPanSynchronizer(ID_SYNC_ESTUDO_ZOOM);
+  const voi = synchronizers.createVOISynchronizer(ID_SYNC_ESTUDO_VOI, { syncInvertState: true, syncColormap: true });
+  // Com um só estudo aberto (caso comum) há um grupo; com vários, só o primeiro é ligado.
+  const grupo = grupos[0]!;
+  for (const s of grupo) {
+    zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+  }
+  // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
+  const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
+  const mesmas = grupo.filter((s) => s.pilha?.instances[0]?.modality === modalidade);
+  if (mesmas.length >= 2) {
+    for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+  }
+}
+
+/** Rolagem por posição (mm) entre as séries do mesmo grupo. */
+function aoRolarSlotEstudo(origem: number): void {
+  if (!sincroniaEstudoLigada || sincronizandoEstudo || compararAtivo || mprAtivo) return;
+  const so = slots[origem];
+  if (!so?.pilha || !so.viewport || !('setImageIdIndex' in so.viewport)) return;
+  const atual = so.viewport.getCurrentImageIdIndex();
+  // Este evento foi causado pela própria sincronia: não propaga de volta.
+  if (indicesImpostosPorEstudo.get(origem) === atual) {
+    indicesImpostosPorEstudo.delete(origem);
+    return;
+  }
+  const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
+  if (!grupo) return;
+  const posicao = so.pilha.geometry.positions[atual];
+  const normalO = so.pilha.geometry.normal;
+  if (posicao === undefined || !normalO) return;
+
+  sincronizandoEstudo = true;
+  try {
+    for (const d of grupo) {
+      if (d === so || !d.pilha || !d.viewport || !('setImageIdIndex' in d.viewport)) continue;
+      const posicoes = d.pilha.geometry.positions;
+      const normalD = d.pilha.geometry.normal;
+      if (posicoes.length === 0 || !normalD) continue;
+      const cos = normalO[0] * normalD[0] + normalO[1] * normalD[1] + normalO[2] * normalD[2];
+      if (Math.abs(cos) < 0.9) continue;
+      const alvo = posicao * (cos >= 0 ? 1 : -1);
+      const idx = nearestIndex(posicoes, alvo);
+      const passo = d.pilha.instances[0]?.sliceThickness ?? 5;
+      if (Math.abs(posicoes[idx]! - alvo) > Math.max(passo, 1)) continue; // fora da cobertura
+      if (d.viewport.getCurrentImageIdIndex() === idx) continue;
+      indicesImpostosPorEstudo.set(d.indice, idx);
+      void d.viewport.setImageIdIndex(idx);
+    }
+  } finally {
+    sincronizandoEstudo = false;
+  }
+}
+
+/** Liga ou desliga a sincronia automática entre séries do mesmo estudo. */
+export function alternarSincroniaEstudo(): void {
+  sincroniaEstudoLigada = !sincroniaEstudoLigada;
+  assinaturaSincroniaEstudo = '#forcar'; // força refazer
+  atualizarSincroniaEstudo();
+  sincronizar();
+}
+
 /** Atualiza o estado global, a borda do slot ativo, os rótulos ATUAL/ANTERIOR e avisa a interface. */
 function sincronizar(): void {
   const s = slots[ativo];
@@ -377,6 +497,7 @@ function sincronizar(): void {
   const varios = mprAtivo || geometriaLayout(layoutAtual).colunas * geometriaLayout(layoutAtual).linhas > 1;
   for (const x of slots) x.celula.classList.toggle('ativa', varios && maximizado === null && x.indice === ativo);
   atualizarEtiquetasComparacao();
+  atualizarSincroniaEstudo();
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
 
@@ -1992,6 +2113,7 @@ function criarSlot(indice: number): Slot {
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => sincronizarVoiMpr(indice));
   elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
+    aoRolarSlotEstudo(indice);
     atualizarMiraSlot(slot);
   });
   elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, () => {

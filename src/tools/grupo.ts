@@ -20,7 +20,7 @@ import {
   WindowLevelTool,
   ZoomTool,
 } from '@cornerstonejs/tools';
-import { preferencias, type Janela } from '../state/preferencias';
+import { preferencias, salvarPreferencias, type Janela } from '../state/preferencias';
 import { estado } from '../state/store';
 import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
 import { textoAngulo, textoDistancia, textoRoi } from './estiloMedidas';
@@ -89,7 +89,7 @@ const TODAS_AS_FERRAMENTAS = [
   ]),
 ];
 
-export type Botao = 'esquerdo' | 'direito' | 'meio' | 'roda';
+export type Botao = 'esquerdo' | 'direito' | 'meio' | 'roda' | 'voltar' | 'avancar';
 
 export interface OpcaoBotao {
   nome: string;
@@ -116,15 +116,39 @@ const BOTAO_DO_MOUSE: Record<Botao, EnumsTools.MouseBindings> = {
   direito: EnumsTools.MouseBindings.Secondary,
   meio: EnumsTools.MouseBindings.Auxiliary,
   roda: EnumsTools.MouseBindings.Wheel,
+  voltar: EnumsTools.MouseBindings.Fourth_Button,
+  avancar: EnumsTools.MouseBindings.Fifth_Button,
 };
 
-/** Padrão: esquerdo = janela/nível, direito = zoom, meio = pan, roda = passar cortes. */
+/**
+ * Botões laterais (voltar e avançar): ferramentas nativas do Cornerstone, que funcionam com
+ * qualquer botão. As de vários cliques desta aplicação respondem só ao botão esquerdo.
+ */
+export const OPCOES_LATERAIS: OpcaoBotao[] = [
+  ...OPCOES_SECUNDARIAS,
+  { nome: LengthTool.toolName, rotulo: 'Distância (medida simples)' },
+  { nome: AngleTool.toolName, rotulo: 'Ângulo (3 pontos)' },
+  { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica' },
+  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre' },
+];
+
+/**
+ * Padrão: esquerdo = passar cortes, direito = zoom, meio = pan, roda = passar cortes,
+ * avançar (botão lateral) = distância. As escolhas do usuário (menu 🖱) vêm das preferências.
+ */
 const atribuicao: Record<Botao, string | null> = {
-  esquerdo: WindowLevelTool.toolName,
+  esquerdo: StackScrollTool.toolName,
   direito: ZoomTool.toolName,
   meio: PanTool.toolName,
   roda: StackScrollTool.toolName,
+  voltar: null,
+  avancar: LengthTool.toolName,
 };
+
+for (const botao of ['direito', 'meio', 'roda', 'voltar', 'avancar'] as const) {
+  const salvo = preferencias().mouse[botao];
+  if (salvo !== undefined) atribuicao[botao] = salvo || null;
+}
 
 export type Predefinicao = Janela;
 
@@ -226,7 +250,7 @@ export function definirModoMprFerramentas(ativo: boolean): void {
     inst?.computeToolCenter?.();
   } else {
     if (atribuicao.esquerdo === CrosshairsTool.toolName) {
-      atribuicao.esquerdo = WindowLevelTool.toolName;
+      atribuicao.esquerdo = StackScrollTool.toolName;
     }
     aplicarAtribuicoes();
   }
@@ -244,6 +268,10 @@ export const EVENTO_BOTOES_MUDARAM = 'botoesMudaram';
 export function definirBotao(botao: Botao, nome: string): void {
   if (nome === CrosshairsTool.toolName && !modoMprAtivo) return;
   atribuicao[botao] = nome || null;
+  if (botao !== 'esquerdo') {
+    preferencias().mouse[botao] = nome;
+    salvarPreferencias();
+  }
   aplicarAtribuicoes();
   document.dispatchEvent(new CustomEvent(EVENTO_BOTOES_MUDARAM));
 }
@@ -384,7 +412,7 @@ export async function cancelar(): Promise<void> {
     if (v.element instanceof HTMLDivElement) cancelActiveManipulations(v.element);
   }
   annotation.selection.deselectAnnotation();
-  escolherFerramentaPrimaria(modoMprAtivo ? CrosshairsTool.toolName : WindowLevelTool.toolName);
+  escolherFerramentaPrimaria(modoMprAtivo ? CrosshairsTool.toolName : StackScrollTool.toolName);
   await redesenhar();
 }
 

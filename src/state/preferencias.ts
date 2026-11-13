@@ -52,6 +52,8 @@ export interface PrefsGerais {
   atalhos: Record<string, string>;
   /** Janelas predefinidas, nas teclas 1 a 9 pela ordem. */
   janelas: Janela[];
+  /** Ferramenta de cada botão do mouse escolhida pelo usuário ('' = nenhuma). Só o que difere do padrão. */
+  mouse: Record<string, string>;
 }
 
 export const MEDIDAS_PADRAO: PrefsMedidas = {
@@ -87,6 +89,7 @@ function copiaPadrao(): PrefsGerais {
     medidas: { ...MEDIDAS_PADRAO, roi: { ...MEDIDAS_PADRAO.roi } },
     atalhos: {},
     janelas: JANELAS_PADRAO.map((j) => ({ ...j })),
+    mouse: {},
   };
 }
 
@@ -124,6 +127,12 @@ export function sanear(bruto: unknown): PrefsGerais {
   if (b.atalhos && typeof b.atalhos === 'object') {
     for (const [nome, tecla] of Object.entries(b.atalhos as Record<string, unknown>)) {
       if (typeof tecla === 'string' && tecla.length >= 1 && tecla.length <= 12) p.atalhos[nome] = tecla.toLowerCase();
+    }
+  }
+
+  if (b.mouse && typeof b.mouse === 'object') {
+    for (const [botao, nome] of Object.entries(b.mouse as Record<string, unknown>)) {
+      if (typeof nome === 'string' && nome.length <= 40) p.mouse[botao] = nome;
     }
   }
 
