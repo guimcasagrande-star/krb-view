@@ -512,3 +512,6 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .quadrados-grade button { width: 28px; height: 28px; padding: 0; background: #6b6b6b; border: 1px solid #3a3a3a; border-radius: 0; }
 .quadrados-grade button.marcado { background: var(--destaque); }
 .rotulo-grade { margin-top: 6px; font-size: 12px; color: var(--texto-fraco); text-align: center; }
+
+/* Fundo claro (imagem invertida) */
+.overlay.invertido .canto { color: #111; text-shadow: 0 0 2px #fff, 0 0 4px #fff; }

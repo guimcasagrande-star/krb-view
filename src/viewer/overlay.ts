@@ -6,6 +6,7 @@
 import { Enums, type Types } from '@cornerstonejs/core';
 import type { StackNode } from '../io/organize';
 import type { InstanceMeta } from '../io/types';
+import { definirEstiloPorFundo } from '../tools/estiloMedidas';
 import { montarOverlay, type CantosOverlay } from './overlayTexto';
 
 type Canto = keyof CantosOverlay;
@@ -76,6 +77,13 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
       for (const d of Object.values(cantos)) d.replaceChildren();
       return;
     }
+
+    // Fundo claro (imagem invertida, ex.: PET): texto escuro nos cantos e nas medidas.
+    // Só no 2D de pilha: nos viewports de volume (MIP, MPR) o fundo fora do volume continua preto.
+    const invertido = !!viewport.getProperties()?.invert;
+    raiz.classList.toggle('invertido', invertido && 'setImageIdIndex' in viewport);
+    // Medidas: texto escuro em caixa clara em qualquer viewport invertido (legível sobre qualquer fundo).
+    definirEstiloPorFundo(viewport.id, invertido);
 
     const plano = fonte.planoMpr?.();
     const rotuloModo = fonte.modoSlab?.();

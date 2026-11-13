@@ -22,6 +22,7 @@ import {
 } from '@cornerstonejs/tools';
 import { preferencias, type Janela } from '../state/preferencias';
 import { estado } from '../state/store';
+import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
 import { textoAngulo, textoDistancia, textoRoi } from './estiloMedidas';
 import { DesvioLinhaMediaTool } from './desvioLinhaMedia';
 import { FERRAMENTA_LOCALIZADOR_3D } from './localizador3d';
@@ -33,6 +34,7 @@ import {
 } from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
 import { SetaTool } from './seta';
+import { VoiEsferaTool } from './voiEsfera';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
@@ -70,6 +72,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb (4 pontos)', tecla: 'k', categoria: 'medida' },
   { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo c/ eixo horiz./vert.', tecla: 'v', categoria: 'medida' },
   { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
+  { nome: VoiEsferaTool.toolName, rotulo: 'ROI volumétrica (esfera)', tecla: 'u', categoria: 'medida' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },
   { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm', categoria: 'medida' },
   { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p', categoria: 'medida' },
@@ -357,6 +360,14 @@ export function irParaCorte(posicao: 'primeiro' | 'ultimo'): Promise<void> {
 }
 
 export function aplicarPredefinicao(indice: number): Promise<void> {
+  // PET com SUV: teclas 1 a 3 = janelas 0–5, 0–7 e 0–10 (em SUV).
+  if (petEmSuv(estado.pilhaAtiva)) {
+    const teto = TETOS_SUV[indice];
+    if (teto === undefined) return Promise.resolve();
+    return comViewport((v) => {
+      v.setProperties({ voiRange: { lower: 0, upper: teto } });
+    }, true);
+  }
   const p = predefinicoes()[indice];
   if (!p) return Promise.resolve();
   return comViewport((v) => {

@@ -69,7 +69,7 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
   }
 
   /** Gancho para preencher dados extras da anotação recém-criada. */
-  protected aoCriarAnotacao(_ann: Types.Annotation): void {}
+  protected aoCriarAnotacao(_ann: Types.Annotation, _viewportId?: string): void {}
 
   override addNewAnnotation(evt: Types.EventTypes.InteractionEventType): Types.Annotation | null {
     if (this.rascunho) return null;
@@ -80,7 +80,7 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     const { element } = detalhe;
     const mundo = [...detalhe.currentPoints.world] as Ponto;
     const ann = this.createAnnotation(evt, [mundo, [...mundo]] as never) as Types.Annotation;
-    this.aoCriarAnotacao(ann);
+    this.aoCriarAnotacao(ann, detalhe.viewportId);
     anotacoes.state.addAnnotation(ann, element);
     this.rascunho = {
       annotation: ann,

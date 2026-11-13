@@ -436,6 +436,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     EllipticalROI: '⭕',
     PlanarFreehandROI: '✏',
     Polyline: '〰',
+    SphereVOI: '◍',
   };
 
   for (const f of ferramentasMedida) {

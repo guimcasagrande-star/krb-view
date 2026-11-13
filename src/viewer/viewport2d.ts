@@ -16,8 +16,11 @@ import {
 } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode, StudyNode } from '../io/organize';
+import { gridFromVolumeProps } from '../io/geometry';
+import { ajustarZoomAoConteudo, exibicaoPadraoPet } from './exibicaoInicial';
 import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
-import { esquecerSuvDaPilha, registrarSuvDaPilha } from '../pet/provedorSuv';
+import { esquecerSuvDaPilha, pilhaEmSuv, registrarSuvDaPilha } from '../pet/provedorSuv';
+import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from '../tools/voiEsfera';
 import {
   adicionarViewportAoGrupo,
   botaoAtribuido,
@@ -703,8 +706,10 @@ async function exibirSlot(
         }
       }
 
-      const voi = voiPreservado?.voiRange ?? voiPadraoDaPilha(stack);
-      if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert });
+      const pet = voiPreservado ? null : exibicaoPadraoPet(stack);
+      const voi = voiPreservado?.voiRange ?? pet?.voiRange ?? voiPadraoDaPilha(stack);
+      if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert ?? pet?.invert });
+      else if (pet) vp.setProperties({ invert: true });
 
       if (slot.planoSlot === 'mip-rotatorio') {
         aplicarCameraMipRotatorio(vp, 0);
@@ -759,6 +764,11 @@ async function exibirSlot(
     await viewport.setStack(ids, inicial);
     if (voiPreservado?.voiRange) {
       viewport.setProperties({ voiRange: voiPreservado.voiRange, invert: voiPreservado.invert });
+    } else {
+      // Série nova: PET entra invertido e com janela em SUV; o zoom se ajusta ao conteúdo.
+      const pet = exibicaoPadraoPet(stack);
+      if (pet) viewport.setProperties({ invert: true, ...(pet.voiRange ? { voiRange: pet.voiRange } : {}) });
+      ajustarZoomAoConteudo(viewport, ids[inicial]!, stack.instances[0]?.modality);
     }
     viewport.render();
     slot.overlay.atualizar();
@@ -1736,6 +1746,47 @@ export async function definirLayout(novo: Layout): Promise<void> {
   }
 }
 
+/** Espera o streaming do volume terminar (todos os cortes decodificados). */
+async function aguardarVolumeCompleto(vol: Types.IImageVolume): Promise<void> {
+  const completo = (): boolean => (vol.loadStatus as { loaded?: boolean } | undefined)?.loaded === true;
+  const limite = Date.now() + 180_000;
+  while (!completo()) {
+    if (Date.now() > limite) throw new Error('Tempo esgotado carregando o volume.');
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/**
+ * Volume (voxels e grade) da série mostrada num viewport, para medidas volumétricas.
+ * Monta o volume se ainda não existir e solta a referência ao terminar de copiar os dados.
+ */
+async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
+  const slot = slots.find((s) => s.idViewport === idVp);
+  const stack = slot?.pilha;
+  if (!slot || !stack) return { erro: 'Série não encontrada no viewport.' };
+  const res = adquirirVolume(stack, slot.ids);
+  if (!res.ok) return { erro: `Medida volumétrica indisponível: ${res.mensagens.join(' · ')}` };
+  try {
+    const vol = (await res.promessa) as Types.IImageVolume;
+    await aguardarVolumeCompleto(vol);
+    const dados = vol.voxelManager?.getCompleteScalarDataArray?.();
+    if (!dados) return { erro: 'Não foi possível ler os voxels do volume.' };
+    const grid = gridFromVolumeProps({
+      dimensions: vol.dimensions,
+      spacing: vol.spacing,
+      origin: vol.origin,
+      direction: vol.direction,
+    });
+    const ehPet = stack.instances.some((i) => i.modality === 'PT');
+    const unidade = ehPet ? (pilhaEmSuv(stack.id) ? 'SUV' : 'Bq/mL') : stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
+    return { volume: { data: dados, grid }, unidade, ehPet };
+  } catch (e) {
+    return { erro: textoDoErro(e) };
+  } finally {
+    liberarVolume(stack.id);
+  }
+}
+
 /** Estudo que contém a pilha ativa; se não houver, o mais recente com par PET + TC/RM. */
 function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
   const pacientes = estado.resultado?.index.patients ?? [];
@@ -2005,6 +2056,8 @@ function criarSlot(indice: number): Slot {
 
 /** Monta a grade (vazia) dentro da área de viewports. Chamar uma vez. */
 export function configurarViewport2d(elementos: ElementosViewport2d): void {
+  definirResolvedorVoi(volumeParaVoi);
+  iniciarVoiEsfera();
   grade = document.createElement('div');
   grade.id = 'grade';
   const observadorTamanho = new ResizeObserver(() => {

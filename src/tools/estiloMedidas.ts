@@ -169,3 +169,28 @@ export class DistanciaTool extends LengthTool {
 export function formatarRazao(r: number): string {
   return formatarNumero(r, medidas().casasValores + 1);
 }
+
+const fundoClaroPorViewport = new Map<string, boolean>();
+
+/**
+ * Viewport com fundo claro (imagem invertida): o texto das medidas fica escuro, sobre uma
+ * caixa clara translúcida; no fundo escuro volta ao estilo global.
+ */
+export function definirEstiloPorFundo(viewportId: string, claro: boolean): void {
+  if ((fundoClaroPorViewport.get(viewportId) ?? false) === claro) return;
+  fundoClaroPorViewport.set(viewportId, claro);
+  anotacoes.config.style.setViewportToolStyles(
+    viewportId,
+    claro
+      ? {
+          global: {
+            textBoxColor: '#111111',
+            textBoxColorHighlighted: '#111111',
+            textBoxColorSelected: '#111111',
+            textBoxBackground: 'rgba(255, 255, 255, 0.75)',
+          },
+        }
+      : {},
+  );
+  utilitarios.triggerAnnotationRenderForViewportIds([viewportId]);
+}
