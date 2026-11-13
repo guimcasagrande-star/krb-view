@@ -203,7 +203,7 @@ interface Slot {
   idsFusao: string[];
   /** Id da pilha de PET para a qual o slot tem uma referência de volume. */
   volumeFusaoId: string | null;
-  fusao: { opacidade: number; colormap: string; teto: number };
+  fusao: { opacidade: number; colormap: string; teto: number; minimo: number };
   /** Reaplica opacidade, colormap e teto ao PET da fusão (depois de o volume terminar de carregar). */
   reaplicarFusao?: () => void;
   /** Ids dos volumes da fusão (TC e PET) para reaplicar propriedades e o registro manual. */
@@ -810,7 +810,8 @@ const COLORMAPS_FUSAO: Array<[string, string]> = [
 function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
   const vp = slot.viewport as Types.IVolumeViewport | undefined;
   if (!vp) return;
-  const { opacidade, colormap, teto } = slot.fusao;
+  const { opacidade, colormap, teto, minimo } = slot.fusao;
+  const piso = Math.min(minimo, teto * 0.9);
   vp.setProperties(
     {
       voiRange: { lower: 0, upper: teto },
@@ -818,10 +819,11 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
         name: colormap,
         // Fundo (SUV baixo) transparente; a captação aparece com a opacidade escolhida.
         opacity: [
+          // Abaixo do SUV mínimo o PET é transparente; sobe até a opacidade cheia em ~25% da faixa.
           { value: 0, opacity: 0 },
-          { value: teto * 0.2, opacity: 0 },
-          { value: teto * 0.45, opacity: opacidade },
-          { value: teto, opacity: opacidade },
+          { value: piso, opacity: 0 },
+          { value: piso + (teto - piso) * 0.25, opacity: opacidade },
+          { value: Math.max(teto, piso + 0.01), opacity: opacidade },
         ],
       },
     },
@@ -891,6 +893,20 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
     }
   });
 
+  const minimo = document.createElement('input');
+  minimo.type = 'number';
+  minimo.min = '0';
+  minimo.step = '0.5';
+  minimo.value = String(slot.fusao.minimo);
+  minimo.title = 'SUV mínimo: abaixo disso o PET fica transparente';
+  minimo.addEventListener('change', () => {
+    const v = Number(minimo.value.replace(',', '.'));
+    if (v >= 0) {
+      slot.fusao.minimo = v;
+      reaplicar();
+    }
+  });
+
   const rot = (t: string, el: HTMLElement): HTMLElement => {
     const l = document.createElement('label');
     l.textContent = t;
@@ -939,7 +955,7 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
   });
   atualizarLeitura();
   slot.atualizarLeituraRegistro = atualizarLeitura;
-  c.append(rot('PET ', opac), rot('', cor), rot('SUV 0–', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
+  c.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
 }
 
 function salvarEstadoVisualSlot(slot: Slot): {
@@ -2479,7 +2495,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 0.6, colormap: 'Black-Body Radiation', teto: 5 },
+    fusao: { opacidade: 0.85, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
