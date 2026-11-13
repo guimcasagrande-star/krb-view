@@ -6,6 +6,7 @@ import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
 import { iniciarDadosPet } from './ui/dadosPet';
+import { iniciarPacs } from './ui/servidoresPacs';
 import { iniciarPainelSuv } from './ui/painelSuv';
 import {
   EVENTO_ABRIR_PILHA,
@@ -62,6 +63,7 @@ iniciarSelecaoFacil(obter('area-viewports'));
 iniciarMoverMedidas(obter('area-viewports'));
 iniciarPainelSuv(obter('painel-suv'));
 iniciarDadosPet();
+iniciarPacs();
 
 iniciarAbrirPasta(
   {

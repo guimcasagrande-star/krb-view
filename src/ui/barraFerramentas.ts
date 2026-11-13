@@ -34,7 +34,9 @@ import { EVENTO_PREFERENCIAS } from '../state/preferencias';
 import { abrirConfiguracoes } from './configuracoes';
 import { alternarAjuda } from '../tools/atalhos';
 import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
+import { pacsDisponivel } from '../pacs/transporteTauri.ts';
 import { exportarImagemAtiva } from './exportarImagem';
+import { abrirServidoresPacs } from './servidoresPacs';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
@@ -263,6 +265,12 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     const erro = await exportarImagemAtiva(formato);
     if (erro) window.alert(erro);
   };
+  if (pacsDisponivel()) {
+    menuAbrir.painel.append(
+      divisorMenu(),
+      itemMenu('Servidores PACS…', undefined, () => abrirServidoresPacs(), menuAbrir.fechar),
+    );
+  }
   menuAbrir.painel.append(
     divisorMenu(),
     itemMenu('Exportar imagem do viewport (PNG)', undefined, () => void exportar('png'), menuAbrir.fechar),

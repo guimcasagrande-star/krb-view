@@ -591,3 +591,12 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .btn-lateral { padding: 4px 8px; font-size: 15px; line-height: 1; }
 #app.lateral-recolhida { grid-template-columns: 0 1fr; }
 #app.lateral-recolhida #painel-lateral { display: none; }
+
+/* Servidores PACS */
+#servidores-pacs { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+#servidores-pacs::backdrop { background: rgba(0, 0, 0, 0.6); }
+#servidores-pacs h2 { margin: 0 0 10px; font-size: 16px; }
+.pacs-acoes { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.pacs-resultado.ok { color: #4ade80; }
+.pacs-resultado.erro { color: #f87171; max-width: 260px; font-size: 12px; }
+.pacs-botoes { display: flex; gap: 8px; margin-top: 10px; }

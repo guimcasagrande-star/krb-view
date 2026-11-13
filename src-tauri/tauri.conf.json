@@ -13,6 +13,7 @@
     "windows": [
       { "title": "Visualizador DICOM", "width": 1400, "height": 900, "dragDropEnabled": false }
     ],
+    "withGlobalTauri": true,
     "security": { "csp": null }
   },
   "bundle": {
