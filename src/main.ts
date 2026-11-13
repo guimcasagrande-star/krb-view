@@ -4,6 +4,7 @@ import { iniciarSelecaoFacil } from './tools/selecao';
 import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
+import { iniciarPainelSuv } from './ui/painelSuv';
 import {
   EVENTO_ABRIR_PILHA,
   marcarPilhaAtiva,
@@ -31,6 +32,7 @@ iniciarBarraFerramentas(obter('ferramentas'));
 iniciarAtalhos();
 iniciarEstiloMedidas();
 iniciarSelecaoFacil(obter('area-viewports'));
+iniciarPainelSuv(obter('painel-suv'));
 
 iniciarAbrirPasta(
   {

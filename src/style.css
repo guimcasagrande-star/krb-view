@@ -524,3 +524,13 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .overlay .orientacao-direita { right: 48px; top: 50%; transform: translateY(-50%); }
 .overlay.invertido .orientacao { color: #111; text-shadow: 0 0 2px #fff, 0 0 4px #fff; }
 .overlay .regua { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* Painel SUV (5.2) */
+#painel-suv { padding: 8px 12px; border-bottom: 1px solid var(--borda); font-size: 12px; }
+#painel-suv h3 { margin: 0 0 6px; font-size: 13px; color: var(--destaque); }
+.suv-tabela { border-collapse: collapse; width: 100%; }
+.suv-tabela td { padding: 1px 0; vertical-align: top; }
+.suv-tabela td:first-child { color: var(--texto-fraco); padding-right: 8px; white-space: nowrap; }
+.suv-aviso { margin-top: 6px; color: #fbbf24; }
+.suv-erro { margin-bottom: 4px; color: #f87171; font-weight: 600; }
+.suv-erro.suv-detalhe { font-weight: 400; }
