@@ -51,6 +51,7 @@ import {
   alternarMipRotatorio,
   alternarModoComparar,
   compararPetCt,
+  abrirLayoutComparacaoPetCt,
   alternarMpr,
   alternarSincronizacaoJanelaComparar,
   alternarSincronizacaoZoomPanComparar,
@@ -313,18 +314,17 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   }
   areaQuadrados.addEventListener('mouseleave', () => marcarGrade(0, 0));
   seletorGrade.append(areaQuadrados, rotuloGrade);
-  const itemLinhasRef = itemMenu(
-    '✛ Linhas de referência entre planos',
-    undefined,
+  const botaoLinhasRef = botao(
+    '✛ Linhas',
+    'Linhas de referência: mostra nos outros viewports onde o corte do viewport ativo cruza (quando há planos diferentes)',
     () => alternarLinhasReferencia(),
-    menuLayout.fechar,
   );
   menuLayout.painel.append(
     seletorGrade,
     divisorMenu(),
-    itemLinhasRef,
     itemMenu('PET/CT 4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuLayout.fechar),
     itemMenu('PET/CT 3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuLayout.fechar),
+    itemMenu('PET/CT comparação (6): atual em cima, anterior embaixo', undefined, () => void abrirLayoutComparacaoPetCt(), menuLayout.fechar),
     divisorMenu(),
     itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
   );
@@ -405,6 +405,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoTela.append(
     menuAbrir.contentor,
     menuLayout.contentor,
+    botaoLinhasRef,
     menuComparar.contentor,
     grupoCompararInline,
     botaoOverlay,
@@ -769,7 +770,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
 
     itemSincEstudo.setAttribute('aria-pressed', String(e.sincroniaEstudo));
-    itemLinhasRef.setAttribute('aria-pressed', String(e.linhasReferencia));
+    botaoLinhasRef.setAttribute('aria-pressed', String(e.linhasReferencia));
 
     // Estado do modo Comparar:
     const comp = e.comparacao;

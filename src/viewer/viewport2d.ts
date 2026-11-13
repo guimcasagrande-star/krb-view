@@ -62,7 +62,7 @@ import {
   mesmaModalidade,
   mesmoEstudo,
 } from '../compare/modoComparar';
-import { invertLink, type ScrollLink } from '../compare/sync';
+import { invertLink, mapPosition, type ScrollLink } from '../compare/sync';
 import { estado } from '../state/store';
 import { adquirirVolume, descartarVolume, liberarVolume } from '../volume/montarVolume';
 import { avaliarVolume } from '../volume/validarVolume';
@@ -470,27 +470,33 @@ function gruposSincroniaEstudo(): Slot[][] {
   return [...grupos.values()].filter((g) => g.length >= 2);
 }
 
-let zoomDoGrupoPendente = false;
+/** Grupos (por estudo) cujo zoom automático ainda espera uma imagem carregada. */
+const zoomsPendentes = new Set<string>();
+let idsSincronizadoresEstudo: string[] = [];
+
+const chaveDoGrupo = (g: Slot[]): string => g.map((s) => s.idViewport).join(',');
 
 /**
- * Aproxima o zoom ao corpo usando a TC (ou a 1ª série do grupo); o sincronizador leva às demais.
- * Precisa de uma imagem já carregada: fica pendente e é tentado de novo a cada atualização.
+ * Aproxima o zoom ao corpo usando a TC (ou a 1ª série) de cada grupo; o sincronizador leva às
+ * demais células do grupo. Precisa de uma imagem já carregada: fica pendente e é tentado de novo.
  */
 function tentarZoomDoGrupo(): void {
-  if (!zoomDoGrupoPendente) return;
-  const grupo = gruposSincroniaEstudo()[0];
-  if (!grupo) return;
-  const base =
-    grupo.find((s) => s.pilha?.instances[0]?.modality === 'CT' && s.viewport && 'setImageIdIndex' in s.viewport) ??
-    grupo.find((s) => s.viewport && 'setImageIdIndex' in s.viewport);
-  if (!base?.viewport || base.ids.length === 0) return;
-  const id = base.ids[Math.floor(base.ids.length / 2)]!;
-  if (!cache.getImage(id)) return;
-  zoomDoGrupoPendente = false;
-  ajustarZoomAoConteudo(base.viewport, id, base.pilha?.instances[0]?.modality);
+  if (zoomsPendentes.size === 0) return;
+  for (const grupo of gruposSincroniaEstudo()) {
+    const chave = chaveDoGrupo(grupo);
+    if (!zoomsPendentes.has(chave)) continue;
+    const base =
+      grupo.find((s) => s.pilha?.instances[0]?.modality === 'CT' && s.viewport && 'setImageIdIndex' in s.viewport) ??
+      grupo.find((s) => s.viewport && 'setImageIdIndex' in s.viewport);
+    if (!base?.viewport || base.ids.length === 0) continue;
+    const id = base.ids[Math.floor(base.ids.length / 2)]!;
+    if (!cache.getImage(id)) continue;
+    zoomsPendentes.delete(chave);
+    ajustarZoomAoConteudo(base.viewport, id, base.pilha?.instances[0]?.modality);
+  }
 }
 
-/** Refaz os sincronizadores de zoom/pan e janela só quando a composição dos grupos muda. */
+/** Refaz os sincronizadores de zoom/pan e janela (um par por estudo) só quando os grupos mudam. */
 function atualizarSincroniaEstudo(): void {
   const grupos = sincroniaEstudoLigada ? gruposSincroniaEstudo() : [];
   const assinatura = grupos
@@ -501,38 +507,41 @@ function atualizarSincroniaEstudo(): void {
     return;
   }
   assinaturaSincroniaEstudo = assinatura;
-  zoomDoGrupoPendente = grupos.length > 0;
+  zoomsPendentes.clear();
+  for (const g of grupos) zoomsPendentes.add(chaveDoGrupo(g));
 
-  SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_ZOOM);
-  SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_VOI);
+  for (const id of idsSincronizadoresEstudo) SynchronizerManager.destroySynchronizer(id);
+  idsSincronizadoresEstudo = [];
   if (grupos.length === 0) return;
 
-  // Os campos de visão (FOV) das séries diferem (PET x TC): o zoom/pan automático de cada uma
-  // não combina entre si. Ao formar o grupo todos voltam ao enquadramento padrão e só então
-  // os sincronizadores são ligados.
-  for (const s of grupos[0]!) {
-    try {
-      s.viewport?.resetCamera();
-      s.viewport?.render();
-    } catch {
-      /* viewport ainda sem imagem */
+  grupos.forEach((grupo, n) => {
+    // Os campos de visão (FOV) das séries diferem (PET x TC): o zoom/pan automático de cada uma
+    // não combina entre si. Ao formar o grupo todos voltam ao enquadramento padrão e só então
+    // os sincronizadores são ligados.
+    for (const s of grupo) {
+      try {
+        s.viewport?.resetCamera();
+        s.viewport?.render();
+      } catch {
+        /* viewport ainda sem imagem */
+      }
     }
-  }
-
-  const zoom = synchronizers.createZoomPanSynchronizer(ID_SYNC_ESTUDO_ZOOM);
-  const voi = synchronizers.createVOISynchronizer(ID_SYNC_ESTUDO_VOI, { syncInvertState: true, syncColormap: true });
-  // Com um só estudo aberto (caso comum) há um grupo; com vários, só o primeiro é ligado.
-  const grupo = grupos[0]!;
-  for (const s of grupo) {
-    // O sincronizador do Cornerstone só atualiza viewports de pilha; os de volume são copiados à mão.
-    if (s.viewport && 'setImageIdIndex' in s.viewport) zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
-  }
-  // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
-  const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
-  const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
-  if (mesmas.length >= 2) {
-    for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
-  }
+    const idZoom = `${ID_SYNC_ESTUDO_ZOOM}-${n}`;
+    const idVoi = `${ID_SYNC_ESTUDO_VOI}-${n}`;
+    idsSincronizadoresEstudo.push(idZoom, idVoi);
+    const zoom = synchronizers.createZoomPanSynchronizer(idZoom);
+    const voi = synchronizers.createVOISynchronizer(idVoi, { syncInvertState: true, syncColormap: true });
+    for (const s of grupo) {
+      // O sincronizador do Cornerstone só atualiza viewports de pilha; os de volume são copiados à mão.
+      if (s.viewport && 'setImageIdIndex' in s.viewport) zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+    }
+    // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
+    const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
+    const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
+    if (mesmas.length >= 2) {
+      for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+    }
+  });
   tentarZoomDoGrupo();
 }
 
@@ -623,9 +632,45 @@ function aoRolarSlotEstudo(origem: number): void {
       const usada = irParaPosicaoMm(d, alvo);
       if (usada !== undefined) indicesImpostosPorEstudo.set(d.indice, usada);
     }
+    // Layout de comparação PET/CT: leva também a outra linha (outro exame) à mesma posição anatômica.
+    if (comparacaoPetCtLayout) {
+      const posGeo = so.pilha && so.viewport ? obterPosicaoCorteAtual(so.pilha, so.viewport) : undefined;
+      if (posGeo !== undefined) {
+        for (const outro of gruposSincroniaEstudo()) {
+          if (outro === grupo) continue;
+          const link = vinculoEntreGrupos(grupo, outro);
+          if (!link) continue;
+          const alvoGeo = mapPosition(link, posGeo);
+          for (const d of outro) {
+            if (!d.pilha || !d.viewport) continue;
+            if ('setImageIdIndex' in d.viewport) {
+              const posicoes = d.pilha.geometry.positions;
+              const passo = d.pilha.instances[0]?.sliceThickness ?? 5;
+              if (posicoes.length === 0 || Math.abs(posicoes[nearestIndex(posicoes, alvoGeo)]! - alvoGeo) > Math.max(passo, 1)) continue;
+            }
+            const nGeo = d.pilha.geometry.normal;
+            const nCam = normalDoSlot(d);
+            const sinalCam = !('setImageIdIndex' in d.viewport) && nGeo && nCam && nGeo[0] * nCam[0] + nGeo[1] * nCam[1] + nGeo[2] * nCam[2] < 0 ? -1 : 1;
+            const usada = irParaPosicaoMm(d, alvoGeo * sinalCam);
+            if (usada !== undefined) indicesImpostosPorEstudo.set(d.indice, usada);
+          }
+        }
+      }
+    }
   } finally {
     sincronizandoEstudo = false;
   }
+}
+
+/** Vínculo (deslocamento em mm) entre as TCs de dois grupos de estudos diferentes; null se não der. */
+function vinculoEntreGrupos(a: Slot[], b: Slot[]): ScrollLink | null {
+  const anat = (g: Slot[]): StackNode | null => (g.find((s) => emFusao(s)) ?? g[0])?.pilha ?? null;
+  const pa = anat(a);
+  const pb = anat(b);
+  if (!pa || !pb) return null;
+  const chave = `${pa.id}|${pb.id}`;
+  if (!vinculosEntreGrupos.has(chave)) vinculosEntreGrupos.set(chave, criarVinculoComparacao(pa, pb).link);
+  return vinculosEntreGrupos.get(chave) ?? null;
 }
 
 let linhasReferenciaLigadas = true;
@@ -2595,6 +2640,7 @@ export function alternarMaximizado(indice: number = ativo): void {
 
 export async function definirLayout(novo: Layout): Promise<void> {
   desmaximizar();
+  comparacaoPetCtLayout = false;
   if (compararAtivo && novo !== '1x2') {
     desativarComparacaoInterno();
   }
@@ -2787,7 +2833,11 @@ function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
  * mesma escala de SUV e rolagem ligada por posição (como na fase 4). O par de cada estudo é o que
  * envolve a série aberta ou, na falta dele, o melhor candidato.
  */
-export async function compararPetCt(): Promise<void> {
+/**
+ * Escolhe os dois PET/CT (atual e anterior) para comparar: o estudo da série aberta e outro, de
+ * preferência do mesmo paciente; o mais recente é o atual. `null` (e aviso no viewport) se faltar.
+ */
+function escolherParesPetCt(): { atual: FusionCandidate; anterior: FusionCandidate } | null {
   const slotAtivo = slots[ativo] ?? slots[0];
   const pacientes = estado.resultado?.index.patients ?? [];
   const ativa = estado.pilhaAtiva?.id;
@@ -2799,26 +2849,61 @@ export async function compararPetCt(): Promise<void> {
     if (slotAtivo) {
       mostrarMensagem(slotAtivo, 'Comparar PET/CT precisa de dois estudos', 'Abra dois estudos que tenham, cada um, uma série de PET e uma de TC ou RM.');
     }
-    return;
+    return null;
   }
   const base = itens.find((x) => x.pares.some((c) => c.pet.id === ativa || c.anatomic.id === ativa)) ?? itens[0]!;
   const baseUid = base.pares[0]!.pet.instances[0]?.patientId;
   const outro =
     itens.find((x) => x !== base && x.pares[0]!.pet.instances[0]?.patientId === baseUid) ?? itens.find((x) => x !== base)!;
   const chave = (x: (typeof itens)[number]): string => `${x.estudo.date ?? ''}${(x.estudo.time ?? '').padEnd(6, '0')}`;
-  const [atual, anterior] = [base, outro].sort((a, b) => chave(b).localeCompare(chave(a)));
+  const [atual, anterior] = [base, outro].sort((p, q) => chave(q).localeCompare(chave(p)));
   const escolher = (x: (typeof itens)[number]): FusionCandidate =>
     (ativa && x.pares.find((c) => c.pet.id === ativa || c.anatomic.id === ativa)) || x.pares[0]!;
+  return { atual: escolher(atual!), anterior: escolher(anterior!) };
+}
 
+export async function compararPetCt(): Promise<void> {
+  const escolha = escolherParesPetCt();
+  if (!escolha) return;
+  const { atual: parA, anterior: parB } = escolha;
   if (!compararAtivo) await alternarModoComparar();
   if (!compararAtivo) return;
   // As duas fusões compartilham as mesmas configurações (escala, colormap, opacidade).
   slots[1]!.fusao = slots[0]!.fusao;
-  const parA = escolher(atual!);
-  const parB = escolher(anterior!);
   await configurarFusaoNoSlot(slots[0]!, parA.anatomic, parA.pet, parA.sameFrame);
   await configurarFusaoNoSlot(slots[1]!, parB.anatomic, parB.pet, parB.sameFrame);
   zoomPanCompararLigado = true;
+  sincronizar();
+}
+
+/** Layout de comparação PET/CT ativo: duas linhas (atual e anterior) com rolagem ligada entre elas. */
+let comparacaoPetCtLayout = false;
+const vinculosEntreGrupos = new Map<string, ScrollLink | null>();
+
+/**
+ * Grade de comparação PET/CT (2 linhas × 3 colunas): em cima o exame atual (PET, TC, Fusão) e
+ * embaixo o anterior (PET, TC, Fusão). Cada linha sincroniza por estudo; entre as linhas a rolagem
+ * é ligada por posição (como no modo Comparar), e a escala da fusão é a mesma nas duas.
+ */
+export async function abrirLayoutComparacaoPetCt(): Promise<void> {
+  const escolha = escolherParesPetCt();
+  if (!escolha) return;
+  await definirLayout('2x3');
+  vinculosEntreGrupos.clear();
+  slots[5]!.fusao = slots[2]!.fusao; // mesma escala, colormap e opacidade nas duas fusões
+  const linhas: Array<[number, FusionCandidate]> = [
+    [0, escolha.atual],
+    [3, escolha.anterior],
+  ];
+  for (const [base, par] of linhas) {
+    ativo = base;
+    await abrirPilha2d(par.pet);
+    ativo = base + 1;
+    await abrirPilha2d(par.anatomic);
+    await configurarFusaoNoSlot(slots[base + 2]!, par.anatomic, par.pet, par.sameFrame);
+  }
+  ativo = 1;
+  comparacaoPetCtLayout = true;
   sincronizar();
 }
 
