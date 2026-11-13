@@ -15,7 +15,7 @@ import {
   type Types,
 } from '@cornerstonejs/tools';
 import { medidas } from '../state/preferencias';
-import { circuloVoiCanvas, NOME_VOI_ESFERA } from './voiEsfera';
+import { circuloVoiCanvas, ehFerramentaVoi } from './voiEsfera';
 import { apagarSelecionadas, FERRAMENTAS_PRIMARIAS, ferramentaPrimariaAtual, ID_GRUPO } from './grupo';
 
 type Ponto2 = [number, number];
@@ -27,7 +27,7 @@ interface FerramentaSelecionavel {
 
 const MOVIMENTO_MAXIMO_PX = 4;
 
-function noTexto(
+export function noTexto(
   element: HTMLDivElement,
   ann: Types.Annotation,
   canvas: Ponto2,
@@ -83,7 +83,7 @@ function noInterior(element: HTMLDivElement, ann: Types.Annotation, canvas: Pont
       );
       return poli.length >= 3 && dentroDoPoligono(canvas, poli);
     }
-    if (nome === NOME_VOI_ESFERA) {
+    if (ehFerramentaVoi(nome)) {
       const c = circuloVoiCanvas(viewport, ann);
       return !!c && Math.hypot(canvas[0] - c.cc[0], canvas[1] - c.cc[1]) <= c.r;
     }
@@ -105,7 +105,7 @@ export function medidaNoPonto(element: HTMLDivElement, canvas: Ponto2): string |
     const todas = anotacoes.state.getAnnotations(f.nome, element);
     if (!todas?.length) continue;
     // A esfera aparece em vários cortes; ela mesma decide (isPointNearTool) se corta o corte atual.
-    const visiveis = f.nome === NOME_VOI_ESFERA ? todas : ferramenta.filterInteractableAnnotationsForElement(element, todas);
+    const visiveis = ehFerramentaVoi(f.nome) ? todas : ferramenta.filterInteractableAnnotationsForElement(element, todas);
     for (const ann of visiveis) {
       if (ann.isVisible === false || !ann.annotationUID) continue;
       candidatos.push({ ferramenta, ann });

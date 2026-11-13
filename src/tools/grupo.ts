@@ -34,7 +34,7 @@ import {
 } from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
 import { SetaTool } from './seta';
-import { VoiEsferaTool } from './voiEsfera';
+import { LesaoPetTool, VoiEsferaTool } from './voiEsfera';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
@@ -73,6 +73,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo c/ eixo horiz./vert.', tecla: 'v', categoria: 'medida' },
   { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
   { nome: VoiEsferaTool.toolName, rotulo: 'ROI volumétrica (esfera)', tecla: 'u', categoria: 'medida' },
+  { nome: LesaoPetTool.toolName, rotulo: 'Lesão PET (MTV/TLG)', tecla: 'j', categoria: 'medida' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },
   { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm', categoria: 'medida' },
   { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p', categoria: 'medida' },

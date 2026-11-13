@@ -11,8 +11,8 @@
 
 import { getEnabledElement } from '@cornerstonejs/core';
 import { annotation as anotacoes, utilities as utilitarios, type Types } from '@cornerstonejs/tools';
-import { ferramentaAtivaEhMedida, medidaNoPonto } from './selecao';
-import { NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
+import { ferramentaAtivaEhMedida, medidaNoPonto, noTexto } from './selecao';
+import { ehFerramentaVoi, NOME_LESAO_PET, NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
 
 type Ponto3 = [number, number, number];
 
@@ -22,7 +22,7 @@ const RAIO_ALCA_PX = 9;
 /** ROIs e esfera movem inteiras; nas demais, clicar numa ponta edita só aquele ponto. */
 /** Ferramentas do Cornerstone: ele mesmo edita as pontas quando a ferramenta está ativa. */
 const NATIVAS = new Set(['Length', 'Angle', 'EllipticalROI', 'PlanarFreehandROI']);
-const SEM_ALCA = new Set(['EllipticalROI', 'PlanarFreehandROI', 'SphereVOI']);
+const SEM_ALCA = new Set(['EllipticalROI', 'PlanarFreehandROI', NOME_VOI_ESFERA, NOME_LESAO_PET]);
 
 interface Arrasto {
   ann: Types.Annotation;
@@ -32,6 +32,8 @@ interface Arrasto {
   moveu: boolean;
   /** Índice da alça (ponta) sendo editada; ausente = mover a medida inteira. */
   alca?: number;
+  /** Verdadeiro quando o arrasto começou sobre a caixa de texto (move só o rótulo). */
+  soTexto?: boolean;
   /** Cópias das posições originais, para aplicar o deslocamento total a cada movimento. */
   pontos: Ponto3[];
   polilinha?: Ponto3[];
@@ -51,6 +53,15 @@ function aplicarDeslocamento(a: Arrasto, d: Ponto3): void {
     handles?: { points?: Ponto3[]; textBox?: { hasMoved?: boolean; worldPosition?: Ponto3 } };
     contour?: { polyline?: Ponto3[] };
   };
+  const caixa = dados.handles?.textBox;
+  if (a.soTexto) {
+    if (caixa && a.texto) {
+      caixa.hasMoved = true;
+      caixa.worldPosition = [a.texto[0] + d[0], a.texto[1] + d[1], a.texto[2] + d[2]];
+      a.ann.invalidated = true;
+    }
+    return;
+  }
   const pts = dados.handles?.points;
   if (pts && a.alca !== undefined) {
     const o = a.pontos[a.alca];
@@ -71,7 +82,6 @@ function aplicarDeslocamento(a: Arrasto, d: Ponto3): void {
       poli[i] = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
     }
   }
-  const caixa = dados.handles?.textBox;
   if (caixa?.hasMoved && a.texto) {
     caixa.worldPosition = [a.texto[0] + d[0], a.texto[1] + d[1], a.texto[2] + d[2]];
   }
@@ -101,7 +111,7 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     window.removeEventListener('mousemove', aoMover, true);
     window.removeEventListener('mouseup', aoSoltar, true);
     if (!a) return;
-    if (a.moveu && a.ann.metadata?.toolName === NOME_VOI_ESFERA) recalcularVoi(a.ann);
+    if (a.moveu && !a.soTexto && ehFerramentaVoi(a.ann.metadata?.toolName)) recalcularVoi(a.ann);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
   };
 
@@ -129,9 +139,11 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
       };
       anotacoes.selection.setAnnotationSelected(uid, true, ev.shiftKey);
       const mundo = viewport.canvasToWorld(canvas);
+      // Clicou na caixa de texto da medida? Move só a caixa de texto (sem deslocar a lesão/seta).
+      const soTexto = noTexto(alvo, ann, canvas, 4);
       // Clicou numa ponta de uma medida de linha/ângulo? Então só esse ponto é editado.
       let alca: number | undefined;
-      if (!SEM_ALCA.has(ann.metadata?.toolName ?? '')) {
+      if (!soTexto && !SEM_ALCA.has(ann.metadata?.toolName ?? '')) {
         let melhor = RAIO_ALCA_PX;
         (dados.handles.points ?? []).forEach((q, i) => {
           const c = viewport.worldToCanvas(q);
@@ -142,13 +154,14 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
           }
         });
       }
-      if (medindoSemCtrl && (alca === undefined || NATIVAS.has(ann.metadata?.toolName ?? ''))) return;
+      if (medindoSemCtrl && !soTexto && (alca === undefined || NATIVAS.has(ann.metadata?.toolName ?? ''))) return;
       arrasto = {
         ann,
         element: alvo,
         inicioCanvas: [ev.clientX, ev.clientY],
         inicioMundo: copia(mundo),
         moveu: false,
+        ...(soTexto ? { soTexto: true } : {}),
         ...(alca !== undefined ? { alca } : {}),
         pontos: (dados.handles.points ?? []).map(copia),
         ...(dados.contour?.polyline ? { polilinha: dados.contour.polyline.map(copia) } : {}),

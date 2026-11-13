@@ -131,6 +131,9 @@ const PLANOS_MPR: PlanoMprOverlay[] = [
 /** Disparado em `document` quando muda o viewport ativo, o layout, o MPR ou o cine. */
 export const EVENTO_ESTADO_VIEWPORTS = 'estadoViewports';
 
+/** Disparado em `document` quando a janela/nível (voiRange) de um viewport muda. */
+export const EVENTO_JANELA_MUDOU = 'janelaMudou';
+
 export interface EstadoViewports {
   layout: Layout;
   /** Id da pilha mostrada no viewport ativo (null se vazio). */
@@ -2164,7 +2167,10 @@ function criarSlot(indice: number): Slot {
     modoSlab: () => MODOS_SLAB[mprAtivo ? modoSlabMpr : slot.modoSlab]?.rotulo,
   });
   slot.overlay.ligar(elemento);
-  elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => sincronizarVoiMpr(indice));
+  elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => {
+    sincronizarVoiMpr(indice);
+    document.dispatchEvent(new CustomEvent(EVENTO_JANELA_MUDOU, { detail: { idViewport: slot.idViewport } }));
+  });
   elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
     aoRolarSlotEstudo(indice);

@@ -12,6 +12,7 @@ import { parseHeader } from '../src/io/readHeader';
 import type { InstanceMeta } from '../src/io/types';
 import { findFusionCandidates } from '../src/pet/fusionPairing';
 import { computeSuv } from '../src/pet/suv';
+import { calcularVoiEsfera } from '../src/volume/voi';
 import {
   isocontour,
   lesionMetrics,
@@ -190,5 +191,45 @@ describe('phantom: fusão e comparação', () => {
     expect(before.positions[synced.index]).toBe(167);
     expect(synced.distanceMm).toBeCloseTo(2, 9);
     expect(synced.outOfRange).toBe(false);
+  });
+});
+
+describe('phantom: medida de lesão sem aplicar SUV duas vezes (5.4)', () => {
+  it('voxels já entregues em SUV pelo carregador dão SUVmax, SUVpico, MTV e TLG corretos', () => {
+    const pet = stackOf(current, 'PT');
+    const suv = computeSuv(pet.instances);
+    if (!suv.ok) throw new Error('SUV');
+    const fator = suv.factors[0]!.bw;
+
+    // Simula o volume entregue pelo Cornerstone (voxels já multiplicados pelo fator de SUV).
+    const bruto = loadVolume(pet);
+    const dadosSuv = new Float32Array(bruto.data.length);
+    for (let i = 0; i < bruto.data.length; i++) dadosSuv[i] = bruto.data[i]! * fator;
+    const volumeSuv: ScalarVolume = { data: dadosSuv, grid: bruto.grid };
+
+    // Lesão A (10,00 SUV, raio 15 mm -> ~14,1 mL): critérios "41% do máx." e "SUV >= 2,5".
+    const a41 = calcularVoiEsfera(volumeSuv, PHANTOM.lesionA.center, PHANTOM.lesionA.radius + 12, true, '41%');
+    expect(a41.ok).toBe(true);
+    if (!a41.ok) return;
+    expect(a41.max).toBeCloseTo(10, 2);
+    expect(a41.pico).toBeCloseTo(10, 2);
+    expect(a41.media).toBeCloseTo(10, 2);
+    expect(a41.mtvMl).toBeGreaterThan(13.4);
+    expect(a41.mtvMl).toBeLessThan(14.9);
+    expect(a41.tlg).toBeCloseTo(10 * a41.mtvMl!, 1);
+    expect(a41.contornoPorCorte?.size).toBeGreaterThan(0);
+
+    const a25 = calcularVoiEsfera(volumeSuv, PHANTOM.lesionA.center, PHANTOM.lesionA.radius + 12, true, 'suv25');
+    expect(a25.ok).toBe(true);
+    if (!a25.ok) return;
+    expect(a25.max).toBeCloseTo(10, 2);
+    expect(a25.mtvMl).toBeCloseTo(a41.mtvMl!, 1);
+
+    // Lesão B (5,00 SUV): prova também que não houve multiplicação dupla pelo fator.
+    const b41 = calcularVoiEsfera(volumeSuv, PHANTOM.lesionB.center, PHANTOM.lesionB.radius + 12, true, '41%');
+    expect(b41.ok).toBe(true);
+    if (!b41.ok) return;
+    expect(b41.max).toBeCloseTo(5, 2);
+    expect(b41.pico).toBeCloseTo(5, 2);
   });
 });

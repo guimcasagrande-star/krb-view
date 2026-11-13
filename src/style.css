@@ -550,3 +550,11 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .suv-controles { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .suv-controles input[type='number'] { width: 70px; }
 .suv-controles button { margin-right: 4px; }
+.suv-lesao { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--borda); display: flex; flex-direction: column; gap: 4px; }
+.suv-lesao-titulo { font-weight: 600; }
+.suv-lesao-botoes { display: flex; flex-wrap: wrap; gap: 4px; }
+.suv-lesao-botoes button.ativo { background: var(--destaque); color: #09111a; border-color: var(--destaque); font-weight: 600; }
+.suv-lesao-resumo { color: var(--texto-fraco); font-size: 11px; }
+.suv-sanfona { margin-top: 4px; }
+.suv-sanfona summary { cursor: pointer; font-size: 11px; color: var(--texto-fraco); user-select: none; padding: 2px 0; }
+.suv-sanfona summary:hover { color: var(--texto); }

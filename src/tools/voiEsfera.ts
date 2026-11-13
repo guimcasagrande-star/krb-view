@@ -1,15 +1,16 @@
 /**
- * ROI volumétrica (VOI esférica):
+ * ROI volumétrica (VOI esférica) e ferramenta Lesão (PET):
  * - 1º clique: centro da esfera. Arrastar (ou 2º clique): define o raio.
  * - O círculo é desenhado em todos os cortes que a esfera atravessa, com o raio da seção.
  * - Ao terminar, mede os voxels do volume da série: máx., média, desvio, mín. e volume;
- *   no PET também o SUVpico (esfera de 1 mL). Os valores são os do volume (HU ou SUV).
+ *   no PET também o SUVpico (esfera de 1 mL) e, quando em modo "41% do máx." ou "SUV ≥ 2,5",
+ *   segmenta por isocontorno, mostra MTV e TLG e desenha o contorno sobre a imagem.
  *
  * O volume vem de um "resolvedor" registrado por `viewport2d` (que sabe qual série está em
  * cada viewport); aqui não há dependência da grade de viewports.
  */
 
-import { eventTarget, getEnabledElement, type Types as CoreTypes } from '@cornerstonejs/core';
+import { eventTarget, getEnabledElement, getEnabledElementByViewportId, type Types as CoreTypes } from '@cornerstonejs/core';
 import {
   annotation as anotacoes,
   drawing,
@@ -17,8 +18,9 @@ import {
   utilities as utilitarios,
   type Types,
 } from '@cornerstonejs/tools';
+import { worldToVoxel } from '../io/geometry';
 import { medidas } from '../state/preferencias';
-import { calcularVoiEsfera, type ResultadoVoi } from '../volume/voi';
+import { calcularVoiEsfera, type ModoLesao, type ResultadoVoi } from '../volume/voi';
 import type { ScalarVolume } from '../volume/voxelStats';
 import { distancia3, FerramentaMultiCliqueBase, type Ponto } from './desenhoMultiClique';
 import { formatarNumero } from './formatoMedidas';
@@ -26,10 +28,16 @@ import { formatarNumero } from './formatoMedidas';
 type Ponto2 = CoreTypes.Point2;
 
 export const NOME_VOI_ESFERA = 'SphereVOI';
+export const NOME_LESAO_PET = 'PetLesionVOI';
+export const EVENTO_LESAO_ATUALIZADA = 'lesaoAtualizada';
+
+export function ehFerramentaVoi(nome: string | undefined): boolean {
+  return nome === NOME_VOI_ESFERA || nome === NOME_LESAO_PET;
+}
 
 export interface VolumeParaVoi {
   volume: ScalarVolume;
-  /** 'SUV', 'Bq/mL', 'HU'... */
+  /** 'SUVbw', 'SUL', 'SUVbsa', 'Bq/mL', 'HU'... */
   unidade: string;
   ehPet: boolean;
 }
@@ -38,15 +46,21 @@ export type RespostaResolvedor = VolumeParaVoi | { erro: string };
 export type ResolvedorVolumeVoi = (viewportId: string) => Promise<RespostaResolvedor>;
 
 let resolvedor: ResolvedorVolumeVoi | null = null;
+let modoLesaoPadrao: ModoLesao = '41%';
 
 /** `viewport2d` registra aqui como obter o volume da série mostrada num viewport. */
 export function definirResolvedorVoi(fn: ResolvedorVolumeVoi): void {
   resolvedor = fn;
 }
 
-interface DadosVoi {
+export function modoLesaoAtual(): ModoLesao {
+  return modoLesaoPadrao;
+}
+
+export interface DadosVoi {
   viewportId?: string;
   estado: 'medindo' | 'calculando' | 'pronto' | 'erro';
+  modo?: ModoLesao;
   resultado?: ResultadoVoi;
   unidade?: string;
   ehPet?: boolean;
@@ -63,6 +77,10 @@ function produtoVetorial(a: number[], b: number[]): number[] {
   return [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
 }
 
+function notificarLesao(): void {
+  document.dispatchEvent(new CustomEvent(EVENTO_LESAO_ATUALIZADA));
+}
+
 /** Medida terminada: calcula as estatísticas com o volume da série. */
 async function calcular(ann: Types.Annotation): Promise<void> {
   const voi = dadosVoi(ann);
@@ -70,6 +88,7 @@ async function calcular(ann: Types.Annotation): Promise<void> {
   const viewportId = voi.viewportId;
   const redesenhar = (): void => {
     if (viewportId) utilitarios.triggerAnnotationRenderForViewportIds([viewportId]);
+    notificarLesao();
   };
   if (!resolvedor || !viewportId) {
     voi.estado = 'erro';
@@ -85,7 +104,10 @@ async function calcular(ann: Types.Annotation): Promise<void> {
       voi.estado = 'erro';
       voi.mensagem = r.erro;
     } else {
-      const resposta = calcularVoiEsfera(r.volume, pontos[0]!, distancia3(pontos[0]!, pontos[1]!), r.ehPet);
+      const modoPadrao = ann.metadata?.toolName === NOME_LESAO_PET ? modoLesaoPadrao : 'esfera';
+      const modo: ModoLesao = r.ehPet ? (voi.modo ?? modoPadrao) : 'esfera';
+      voi.modo = modo;
+      const resposta = calcularVoiEsfera(r.volume, pontos[0]!, distancia3(pontos[0]!, pontos[1]!), r.ehPet, modo);
       if (resposta.ok) {
         voi.estado = 'pronto';
         voi.resultado = resposta;
@@ -103,11 +125,60 @@ async function calcular(ann: Types.Annotation): Promise<void> {
   redesenhar();
 }
 
+/**
+ * Troca o critério de segmentação da lesão ("41% do máx.", "SUV ≥ 2,5" ou "esfera") e
+ * recalcula as VOIs do viewport ativo (ou a selecionada, se houver).
+ */
+export function definirModoLesaoAtual(modo: ModoLesao, idViewportAtivo?: string | null): void {
+  modoLesaoPadrao = modo;
+  if (!idViewportAtivo) {
+    notificarLesao();
+    return;
+  }
+  const el = getEnabledElementByViewportId(idViewportAtivo)?.viewport?.element;
+  if (!el) {
+    notificarLesao();
+    return;
+  }
+  const anns = [
+    ...(anotacoes.state.getAnnotations(NOME_LESAO_PET, el) ?? []),
+    ...(anotacoes.state.getAnnotations(NOME_VOI_ESFERA, el) ?? []),
+  ];
+  const selecionadas = new Set(anotacoes.selection.getAnnotationsSelected());
+  const alvos = anns.some((a) => a.annotationUID && selecionadas.has(a.annotationUID))
+    ? anns.filter((a) => a.annotationUID && selecionadas.has(a.annotationUID))
+    : anns;
+
+  for (const ann of alvos) {
+    const voi = dadosVoi(ann);
+    voi.modo = modo;
+    if (!voi.viewportId) voi.viewportId = idViewportAtivo;
+    void calcular(ann);
+  }
+  if (alvos.length === 0) notificarLesao();
+}
+
+/** Devolve o resumo da última VOI de PET medida no viewport informado, para exibição no painel. */
+export function ultimaLesaoNoViewport(idViewport: string | null | undefined): DadosVoi | null {
+  if (!idViewport) return null;
+  const el = getEnabledElementByViewportId(idViewport)?.viewport?.element;
+  if (!el) return null;
+  const anns = [
+    ...(anotacoes.state.getAnnotations(NOME_LESAO_PET, el) ?? []),
+    ...(anotacoes.state.getAnnotations(NOME_VOI_ESFERA, el) ?? []),
+  ];
+  for (let i = anns.length - 1; i >= 0; i--) {
+    const voi = dadosVoi(anns[i]!);
+    if (voi.ehPet || voi.estado === 'calculando') return voi;
+  }
+  return null;
+}
+
 /** Liga o cálculo ao fim do desenho. Chamar uma vez. */
 export function iniciarVoiEsfera(): void {
   eventTarget.addEventListener(EnumsTools.Events.ANNOTATION_COMPLETED, (evt: Event) => {
     const ann = (evt as CustomEvent<{ annotation?: Types.Annotation }>).detail?.annotation;
-    if (ann?.metadata?.toolName === NOME_VOI_ESFERA) void calcular(ann);
+    if (ehFerramentaVoi(ann?.metadata?.toolName)) void calcular(ann!);
   });
 }
 
@@ -124,11 +195,21 @@ function linhasDoTexto(voi: DadosVoi): string[] {
   const rot = un === 'SUVbw' ? 'SUV' : eSuv ? un : '';
   const linhas = [
     `${rot}máx.: ${n(r.max)}${sufixo}`,
-    `${rot}média: ${n(r.media)}${sufixo} (DP ${n(r.desvio)})`,
+    `${rot}médio: ${n(r.media)}${sufixo} (DP ${n(r.desvio)})`,
   ];
   if (r.pico !== undefined) linhas.push(`${rot}pico: ${n(r.pico)}${sufixo}`);
   else linhas.push(`mín.: ${n(r.min)}${sufixo}`);
-  linhas.push(`Volume: ${formatarNumero(r.volumeMl, 1)} mL · raio ${formatarNumero(r.raioMm, 1)} mm`);
+
+  if (r.modo && r.modo !== 'esfera' && r.mtvMl !== undefined && r.tlg !== undefined) {
+    const crit = r.modo === '41%' ? '41%' : '≥ 2,5';
+    if (r.voxels === 0) {
+      linhas.push(`MTV (${crit}): 0,0 mL (sem voxel no limiar)`);
+    } else {
+      linhas.push(`MTV (${crit}): ${formatarNumero(r.mtvMl, 1)} mL · TLG: ${formatarNumero(r.tlg, 1)}`);
+    }
+  } else {
+    linhas.push(`Volume: ${formatarNumero(r.volumeMl, 1)} mL · raio ${formatarNumero(r.raioMm, 1)} mm`);
+  }
   return linhas;
 }
 
@@ -172,8 +253,43 @@ export function recalcularVoi(ann: Types.Annotation): void {
   void calcular(ann);
 }
 
-export class VoiEsferaTool extends FerramentaMultiCliqueBase {
-  static override toolName = NOME_VOI_ESFERA;
+/** Desenha os segmentos de contorno da lesão no corte axial correspondente, se aplicável. */
+function desenharContornoNoCorte(
+  viewport: CoreTypes.IStackViewport | CoreTypes.IVolumeViewport,
+  svgDrawingHelper: Types.SVGDrawingHelper,
+  uid: string,
+  r: ResultadoVoi,
+): void {
+  if (!r.contornoPorCorte || !r.grid || r.contornoPorCorte.size === 0) return;
+  const cam = viewport.getCamera();
+  const normal = cam.viewPlaneNormal;
+  const foco = cam.focalPoint;
+  if (!normal || !foco) return;
+
+  // Confere se o plano do viewport é paralelo ao eixo de cortes (k) da grade do volume.
+  const sk = r.grid.stepK;
+  const lenK = Math.hypot(sk[0], sk[1], sk[2]) || 1;
+  const cos = Math.abs((normal[0] * sk[0] + normal[1] * sk[1] + normal[2] * sk[2]) / lenK);
+  if (cos < 0.9) return;
+
+  const ijk = worldToVoxel(r.grid, foco as [number, number, number]);
+  if (!ijk) return;
+  const k = Math.round(ijk[2]);
+  if (Math.abs(ijk[2] - k) > 0.6) return;
+
+  const segs = r.contornoPorCorte.get(k);
+  if (!segs || segs.length === 0) return;
+  const segsCanvas = segs.map(([a, b]) => [
+    viewport.worldToCanvas(a) as Ponto2,
+    viewport.worldToCanvas(b) as Ponto2,
+  ]);
+  drawing.drawPath(svgDrawingHelper, uid, 'contorno-lesao', segsCanvas, {
+    color: '#f43f5e',
+    lineWidth: 2,
+  });
+}
+
+abstract class VoiEsferaBaseTool extends FerramentaMultiCliqueBase {
   protected readonly inicioDeSegmento = [true, false] as const;
 
   protected override aoCriarAnotacao(ann: Types.Annotation, viewportId?: string): void {
@@ -190,7 +306,8 @@ export class VoiEsferaTool extends FerramentaMultiCliqueBase {
   ): boolean {
     const { viewport } = enabledElement;
     const { element } = viewport;
-    const anns = anotacoes.state.getAnnotations(NOME_VOI_ESFERA, element);
+    const nome = this.getToolName();
+    const anns = anotacoes.state.getAnnotations(nome, element);
     if (!anns?.length) return false;
     let desenhou = false;
     const frame = viewport.getFrameOfReferenceUID?.();
@@ -205,7 +322,7 @@ export class VoiEsferaTool extends FerramentaMultiCliqueBase {
 
       const spec = {
         toolGroupId: this.toolGroupId!,
-        toolName: NOME_VOI_ESFERA,
+        toolName: nome,
         viewportId: viewport.id,
         annotationUID: ann.annotationUID,
       };
@@ -213,12 +330,21 @@ export class VoiEsferaTool extends FerramentaMultiCliqueBase {
       const cor = (estilo.color as string) || medidas().cor;
       const largura = Number(estilo.lineWidth) || medidas().espessura;
       const uid = ann.annotationUID;
+      const voi = dadosVoi(ann);
+      const segmentado = !!voi.resultado?.modo && voi.resultado.modo !== 'esfera';
 
-      drawing.drawCircle(svgDrawingHelper, uid, 'esfera', circ.cc, circ.r, { color: cor, lineWidth: largura });
+      drawing.drawCircle(svgDrawingHelper, uid, 'esfera', circ.cc, circ.r, {
+        color: cor,
+        lineWidth: largura,
+        ...(segmentado ? { lineDash: '4,3' } : {}),
+      });
       drawing.drawCircle(svgDrawingHelper, uid, 'centro', circ.cc, 2, { color: cor, lineWidth: largura });
+      if (voi.estado === 'pronto' && voi.resultado) {
+        desenharContornoNoCorte(viewport, svgDrawingHelper, uid, voi.resultado);
+      }
       desenhou = true;
 
-      const linhas = linhasDoTexto(dadosVoi(ann));
+      const linhas = linhasDoTexto(voi);
       if (linhas.length > 0) {
         const topo: Ponto2 = [circ.cc[0], circ.cc[1] - circ.r];
         const base: Ponto2 = [circ.cc[0], circ.cc[1] + circ.r];
@@ -249,4 +375,12 @@ export class VoiEsferaTool extends FerramentaMultiCliqueBase {
     const d = Math.hypot(canvasCoords[0] - circ.cc[0], canvasCoords[1] - circ.cc[1]);
     return Math.abs(d - circ.r) <= proximity || d <= Math.min(proximity, circ.r);
   }
+}
+
+export class VoiEsferaTool extends VoiEsferaBaseTool {
+  static override toolName = NOME_VOI_ESFERA;
+}
+
+export class LesaoPetTool extends VoiEsferaBaseTool {
+  static override toolName = NOME_LESAO_PET;
 }
