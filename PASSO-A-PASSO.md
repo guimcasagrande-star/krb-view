@@ -20,7 +20,7 @@ Cada tarefa indica o modelo sugerido:
 Leia o CLAUDE.md. Regras desta sessão:
 - Faça só a tarefa abaixo. Não adiante outras.
 - Não altere nada em src/io, src/pet/suv.ts, src/pet/fusionPairing.ts,
-  src/volume/voxelStats.ts, src/compare/sync.ts nem em tests/. Use essas funções.
+  src/volume/voxelStats.ts, src/compare/sync.ts, src/pacs nem em tests/. Use essas funções.
 - Antes de usar uma função do Cornerstone3D, abra a declaração de tipos em
   node_modules/@cornerstonejs/ e confirme nome e parâmetros. Não use exemplos de memória.
 - Ao terminar, rode npm test, npm run typecheck e npm run build, e diga o que testar no navegador.
@@ -411,6 +411,112 @@ valer para esses segmentos. Não chame o TotalSegmentator de dentro do navegador
 ```
 
 Só depois, se quiser um botão que rode tudo sozinho, peça a integração pelo Tauri (fase 7).
+
+## Fase 11: buscar exames em PACS
+
+O protocolo (pesquisa por C-FIND e download por C-GET) já está pronto e testado em `src/pacs/`. Dá para usar hoje pela linha de comando, sem esperar a tela.
+
+### 11.0 Usar já, pelo terminal (sem IA)
+
+1. Copie `pacs.exemplo.json` para `pacs.json` e preencha com os seus servidores, com os mesmos dados da tela de PACS do RadiAnt: endereço, porta, AE title do servidor e, em `meuAeTitle`, o AE title desta estação. O `pacs.json` fica fora do git.
+2. Teste a comunicação, um servidor por vez:
+
+```
+npm run pacs -- servidores
+npm run pacs -- eco hospital-a
+```
+
+3. Pesquise e baixe:
+
+```
+npm run pacs -- buscar hospital-a --nome "silva joao" --de 20261101 --ate 20261113 --modalidade PT
+npm run pacs -- series hospital-a <UID do estudo>
+npm run pacs -- baixar hospital-a <UID do estudo>
+npm run pacs -- baixar hospital-a <UID do estudo> --serie <UID da série>
+```
+
+Os arquivos vão para `test-data/pacs/<estudo>/<série>/`. Abra essa pasta no visualizador. Ctrl+C cancela o download.
+
+O que esperar na primeira vez em cada servidor:
+
+| Mensagem | O que fazer |
+| --- | --- |
+| "não reconhece o AE title desta estação" | O `meuAeTitle` não está cadastrado naquele PACS, ou está amarrado a outro IP. Use o mesmo AE title e a mesma máquina em que o RadiAnt funciona, ou peça o cadastro. |
+| "não reconhece o AE title informado para ele" | O `aeTitle` do servidor está errado no `pacs.json`. |
+| "Não foi possível conectar" | Endereço ou porta errados, firewall, ou falta a VPN. |
+| "não aceita download por C-GET" | Aquele PACS só libera C-MOVE para esta estação. Ainda não é atendido. |
+| Pesquisa sem resultado com nome | Tente uma palavra só, ou o ID do paciente. A ordem das palavras importa. |
+
+Só use servidores em que você tem acesso autorizado. Sem VPN ou DICOM TLS, os dados trafegam sem criptografia, como no RadiAnt.
+
+Se algum PACS real der erro que não está na tabela, rode de novo, copie a mensagem e leve ao modelo forte junto com `src/pacs/client.ts`: cada fabricante tem particularidades, e este módulo só foi testado contra um servidor de teste.
+
+### 11.0b Testar sem PACS de hospital (opcional, precisa de Python)
+
+```
+pip install pynetdicom
+python scripts/pacs-servidor-teste.py test-data/phantom
+```
+
+Em outro terminal, com o servidor "local" do `pacs.exemplo.json`:
+
+```
+npm run pacs -- eco local
+npm run pacs -- buscar local --nome phantom
+npm run pacs -- baixar local 1.2.826.0.1.3680043.8.498.77.1
+```
+
+Conferir: 150 imagens gravadas em `test-data/pacs/`, e a pasta abre no visualizador igual ao phantom original.
+
+### 11.1 Ponte TCP no Tauri (forte, depois da fase 7)
+
+```
+Crie a ponte TCP para o cliente de PACS. No lado Rust do Tauri: comandos pacs_conectar(host, porta)
+que devolve um id, pacs_enviar(id, bytes), pacs_fechar(id), e eventos "pacs-dados" (id, bytes)
+e "pacs-fechou" (id, erro opcional). Tempo limite de 10 s para conectar. Só aceite host e porta
+que estejam na lista de servidores cadastrados. No lado TypeScript, em src/pacs/transporteTauri.ts,
+implemente a função Connect de src/pacs/client.ts em cima desses comandos (send, close, onData,
+onClose). Não mude nada em src/pacs além de criar esse arquivo. Nenhuma regra do protocolo DICOM
+vai para o Rust. Teste com echo() contra o servidor de teste local.
+```
+
+Conferir: no app empacotado, o teste de comunicação responde para o servidor de teste e mostra a mensagem certa para porta fechada.
+
+### 11.2 Tela de servidores (barato)
+
+```
+Crie a tela "Servidores PACS": lista com nome, endereço, porta e AE title; botões para adicionar,
+editar, remover e "Testar" (chama echo e mostra o tempo de resposta ou PacsError.message).
+Campo para o AE title desta estação. Valide com parseConfig de src/pacs/config.ts. Guarde na
+pasta de configuração do app (não no projeto). Mostre o aviso fixo:
+"Sem VPN ou DICOM TLS, os dados trafegam abertos."
+```
+
+### 11.3 Tela de pesquisa (barato)
+
+```
+Crie a tela "Buscar no PACS": escolha de um ou mais servidores, campos nome, ID do paciente,
+número de acesso, período (com atalhos hoje, 7 dias, 30 dias) e modalidade. O botão Buscar chama
+findStudies para cada servidor escolhido e junta os resultados numa tabela (data, paciente, ID,
+modalidades, descrição, número de imagens, servidor), do mais recente ao mais antigo. Se
+truncated for verdadeiro, avise "há mais resultados; refine a pesquisa". Erro de um servidor não
+impede os resultados dos outros. Não guarde os resultados em disco nem em log.
+```
+
+Conferir: uma pesquisa sem nenhum filtro mostra a mensagem pedindo pelo menos um, sem conectar.
+
+### 11.4 Download e abertura (barato)
+
+```
+Na tabela de resultados, ao selecionar um estudo mostre as séries (findSeries) com caixas de
+seleção, e o botão Baixar. Use retrieve com onInstance gravando cada arquivo em
+<pasta de exames>/ + instancePath(estudo, série, imagem); a série vem do cabeçalho do próprio
+arquivo recebido (parseHeader). Mostre barra de progresso com onProgress e um botão Cancelar
+ligado a um AbortController. Ao terminar, mostre o resumo (recebidas, falhas) e abra a pasta do
+estudo pelo mesmo fluxo de "Abrir pasta". A pasta de exames é configurável.
+```
+
+Conferir: baixar o phantom do servidor de teste e ver SUV 10,00 na lesão A; cancelar no meio para de receber e não deixa o app travado.
 
 ## Quando parar e chamar o modelo forte
 

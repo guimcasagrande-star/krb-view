@@ -1,0 +1,7 @@
+{
+  "meuAeTitle": "MINHAESTACAO",
+  "servidores": [
+    { "nome": "hospital-a", "host": "pacs.exemplo.org", "porta": 104, "aeTitle": "PACSA" },
+    { "nome": "local", "host": "127.0.0.1", "porta": 11112, "aeTitle": "TESTEPACS" }
+  ]
+}

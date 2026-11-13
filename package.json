@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "phantom": "node --experimental-strip-types scripts/gerar-phantom.ts"
+    "phantom": "node --experimental-strip-types scripts/gerar-phantom.ts",
+    "pacs": "node --experimental-strip-types scripts/pacs.ts"
   },
   "dependencies": {
     "@cornerstonejs/core": "5.17.1",

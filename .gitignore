@@ -3,3 +3,4 @@ dist/
 test-data/
 *.dcm
 .DS_Store
+pacs.json

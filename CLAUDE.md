@@ -2,14 +2,14 @@
 
 ## Objetivo
 
-Visualizador DICOM leve, para uso pessoal, nos moldes do RadiAnt: abre exames locais, responde rápido e tem MPR, MIP, comparação de exames e PET/CT com SUV e fusão. Depois: reconstrução 3D, segmentação com volumetria e órgãos e vasos em 3D.
+Visualizador DICOM leve, para uso pessoal, nos moldes do RadiAnt: abre exames locais, responde rápido e tem MPR, MIP, comparação de exames e PET/CT com SUV e fusão. Depois: reconstrução 3D, segmentação com volumetria, órgãos e vasos em 3D, e busca de exames em PACS.
 
 Usuário: radiologista (oncologia, PET-CT, TC e RM de abdome/pelve). A interface deve ser em português do Brasil.
 
 ## Princípios (valem para todas as fases)
 
 1. **Leve.** Abrir rápido, rolar sem travar. Cada dependência nova precisa se justificar. Sem framework de UI pesado, sem biblioteca de componentes.
-2. **100% local.** Nenhum exame, metadado ou telemetria sai da máquina. O app não faz requisições de rede em tempo de execução (fontes, CDNs e analytics incluídos).
+2. **Local, com uma exceção.** Nenhum exame, metadado ou telemetria sai da máquina. O app não faz requisições de rede em tempo de execução (fontes, CDNs e analytics incluídos). A única exceção é a busca em PACS (fase 11): ela conecta só aos servidores que o usuário cadastrou, só para consultar e baixar, e nunca envia exames.
 3. **Em fases.** Implementar uma fase por vez, na ordem abaixo. Não começar a próxima antes de a atual passar nos critérios de aceite e o usuário aprovar.
 4. **Sem dados de paciente no repositório.** Usar o phantom sintético (`npm run phantom`) e exames anonimizados em `test-data/` (pasta no `.gitignore`).
 5. **Não é dispositivo médico.** Mostrar aviso discreto e permanente: "Uso pessoal/estudo. Não validado para diagnóstico."
@@ -17,7 +17,7 @@ Usuário: radiologista (oncologia, PET-CT, TC e RM de abdome/pelve). A interface
 
 ## O que já está pronto (não reescrever)
 
-A lógica difícil já foi escrita e testada (168 testes, `npm test`). Ela é pura: não depende do navegador nem do Cornerstone. **O trabalho que falta é interface e integração: chamar estas funções, não refazê-las.**
+A lógica difícil já foi escrita e testada (218 testes, `npm test`). Ela é pura: não depende do navegador nem do Cornerstone. **O trabalho que falta é interface e integração: chamar estas funções, não refazê-las.**
 
 | Arquivo | O que faz |
 | --- | --- |
@@ -30,7 +30,11 @@ A lógica difícil já foi escrita e testada (168 testes, `npm test`). Ela é pu
 | `src/pet/fusionPairing.ts` | `findFusionCandidates(study)`: pares PET + TC/RM, do melhor ao pior. |
 | `src/volume/voxelStats.ts` | `sphereMask`, `maskStats`, `peakInMask` (SUVpico), `regionGrow`, `thresholdMask`, `isocontour` (41% do máximo ou limiar fixo), `lesionMetrics` (máx, média, pico, volume, TLG), `maskVolumeMl`. Base da volumetria. |
 | `src/compare/sync.ts` | `createLink`, `syncedSlice`, `relink`, `invertLink`: rolagem ligada por posição em mm, com ajuste manual. |
-| `tests/` | Um arquivo de teste por módulo, mais `phantom.test.ts` (ponta a ponta). |
+| `src/pacs/client.ts` | `echo`, `findStudies`, `findSeries`, `retrieve`: teste de comunicação, pesquisa (C-FIND) e download (C-GET) num PACS. Recebe a conexão por um `Transport` injetado, então roda igual no Node e no app. |
+| `src/pacs/` (demais) | `pdu.ts`, `dimse.ts`, `implicit.ts` (protocolo), `query.ts` (filtros e leitura das respostas), `part10.ts` (grava o que chega como arquivo DICOM), `config.ts` (`pacs.json`, caminho seguro dos arquivos), `uids.ts`, `errors.ts` (`PacsError`, mensagens em português). |
+| `scripts/pacs.ts` | Linha de comando: `npm run pacs --` seguido de `eco`, `buscar`, `series` ou `baixar`. Usa `scripts/pacs-transporte-node.ts` (TCP do Node). |
+| `scripts/pacs-servidor-teste.py` | Servidor PACS de teste (Python, pynetdicom) que serve uma pasta. Opcional. |
+| `tests/` | Um arquivo de teste por módulo, mais `phantom.test.ts` (ponta a ponta). `pacs.test.ts` repete trocas gravadas com um servidor real (`tests/fixtures/pacs-sessoes.json`). |
 | `scripts/gerar-phantom.ts` | Gera PET/CT e TC anterior sintéticos com valores conhecidos. |
 
 Regras para estes arquivos:
@@ -38,11 +42,12 @@ Regras para estes arquivos:
 - Não alterar sem pedir ao usuário. Se parecer haver um erro, mostrar o caso que falha e perguntar.
 - Se um deles precisar mudar, a mudança vem com teste novo, e todos os testes continuam passando.
 - Mensagens de `Issue.message` já estão em português e prontas para mostrar na tela. `Issue.code` é para a lógica.
+- `src/pacs/` importa com extensão `.ts` (`from './pdu.ts'`), porque também roda direto no Node. Manter assim. `scripts/pacs-transporte-node.ts` usa `node:net` e nunca pode ser importado pelo código do navegador.
 - **Não trocar `computeSuv` por `@cornerstonejs/calculate-suv`.** A biblioteca (v1.1.0) decai a dose mesmo quando `DecayCorrection` é `ADMIN`, falha quando a injeção foi antes da meia-noite e não recalcula o horário em séries Siemens reprocessadas. Ela fica só como conferência nos testes.
 
 ## Stack
 
-- **Vite + TypeScript** (strict). Importações sem extensão em `src/`.
+- **Vite + TypeScript** (strict). Importações sem extensão em `src/`, exceto em `src/pacs/` (ver acima).
 - **Cornerstone3D** (`@cornerstonejs/core`, `tools`, `dicom-image-loader`) para renderização, volumes, MPR, MIP, fusão e ferramentas.
 - **dicom-parser** para leitura de cabeçalhos (já em uso em `src/io/readHeader.ts`).
 - UI: **Preact** ou TypeScript puro com CSS simples. Não usar OHIF.
@@ -77,6 +82,7 @@ src/
   state/         estado global mínimo (store simples, sem Redux)
   render3d/      (fase 8) reconstrução 3D
   segmentation/  (fases 9 e 10) segmentos, volumetria, superfícies
+  pacs/          (pronto) protocolo, pesquisa e download; falta a tela (fase 11)
 ```
 
 Regras:
@@ -203,6 +209,35 @@ Aceite: no phantom, volume da lesão A (raio 15 mm) dentro de 5% de 14,1 mL; o v
 
 Aceite: fígado, baço, rins e aorta de uma TC de abdome aparecem em 3D com volumes em mL; o usuário corrige um segmento com o pincel e o volume se atualiza.
 
+### Fase 11: buscar exames em PACS
+
+O protocolo está pronto em `src/pacs/` e já funciona pela linha de comando (`npm run pacs`). Falta a tela dentro do app. Depende da fase 7: um navegador não abre conexão TCP, então a tela só existe no app empacotado com Tauri.
+
+- **Ponte TCP no Tauri:** comandos em Rust para abrir conexão, enviar bytes e fechar, mais um evento com os bytes recebidos. No lado TypeScript, isso implementa a interface `Transport` de `src/pacs/client.ts`. Nenhuma regra do protocolo vai para o Rust.
+- **Servidores:** tela para cadastrar, editar, remover e testar (`echo`) servidores, como na tela de PACS do RadiAnt: nome, endereço, porta, AE title do servidor e o AE title desta estação. Guardar na pasta de configuração do app, nunca no repositório.
+- **Pesquisa:** nome, ID do paciente, número de acesso, período e modalidade, com `findStudies`. Atalhos de período (hoje, 7 dias, 30 dias). Lista de resultados do mais recente ao mais antigo. Pesquisar em vários servidores ao mesmo tempo, mostrando de qual cada resultado veio. Avisar quando `truncated` for verdadeiro.
+- **Download:** estudo inteiro ou séries escolhidas (`findSeries`, `retrieve`), com progresso e botão de cancelar (`AbortSignal`). Gravar em `<pasta de exames>/<estudo>/<série>/<imagem>.dcm` usando `instancePath`. Ao terminar, abrir a pasta pelo fluxo da fase 1.
+- **Pasta de exames baixados:** configurável, com tela para ver o espaço ocupado e apagar exames antigos.
+- Mostrar sempre `PacsError.message`; usar `PacsError.code` para decidir o que fazer.
+
+Regras:
+
+- Só conectar a servidores cadastrados pelo usuário, e só quando ele pedir. Nada de busca automática em segundo plano.
+- Só consulta e download. O app nunca envia, altera ou apaga nada no PACS.
+- Não gravar nome de paciente nem resultado de pesquisa em log ou arquivo.
+- DICOM comum não é criptografado: mostrar na tela de servidores o aviso "Sem VPN ou DICOM TLS, os dados trafegam abertos".
+- Uma conexão por operação, encerrada ao fim. Sem conexões paralelas no mesmo servidor além de uma pesquisa e um download.
+
+Limites conhecidos do que está pronto:
+
+- Testado só contra um servidor pynetdicom. Cada PACS de fabricante tem particularidades; validar com `eco`, depois pesquisa, depois download, em cada servidor real.
+- Só C-GET. Servidor que exige C-MOVE não é atendido (precisaria de uma porta de entrada aberta nesta máquina).
+- Sem DICOM TLS.
+- A busca por nome depende do PACS: "joão silva" vira `*JOÃO*SILVA*`, então a ordem das palavras importa.
+- Cada imagem recebida fica inteira na memória até ser gravada; um arquivo multiframe de vários GB pode não caber.
+
+Aceite: contra o servidor de teste, baixar o phantom e obter os 202 arquivos idênticos aos originais. Contra um PACS real autorizado: `eco` responde, a pesquisa acha um exame conhecido, e o exame baixado abre no visualizador com as mesmas séries e o mesmo número de imagens que no RadiAnt.
+
 ## Desempenho
 
 - Indexação só de cabeçalhos; pixels carregados sob demanda.
@@ -224,7 +259,7 @@ Listar os atalhos finais numa tela de ajuda (tecla `?`).
 
 ## Fora do escopo
 
-- Rede: PACS, DICOMweb, C-FIND/C-MOVE, nuvem.
+- Rede além da fase 11: DICOMweb, C-MOVE, DICOM TLS, envio de exames ao PACS, nuvem.
 - Emissão de laudo, impressão em filme, gravação de CD.
 - Treinar modelos de IA ou rodar IA dentro do navegador.
 - Imagens multiframe (Enhanced CT/MR/PET): `analyzeStack` avisa com `MULTIFRAME`; abrir só em 2D até haver suporte.
