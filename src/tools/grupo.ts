@@ -34,6 +34,7 @@ import {
 } from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
 import { SetaTool } from './seta';
+import { SondaTool } from './sonda';
 import { LesaoPetTool, VoiEsferaTool } from './voiEsfera';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
@@ -72,6 +73,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb (4 pontos)', tecla: 'k', categoria: 'medida' },
   { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo c/ eixo horiz./vert.', tecla: 'v', categoria: 'medida' },
   { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
+  { nome: SondaTool.toolName, rotulo: 'Sonda (HU e SUV)', tecla: 'g', categoria: 'medida' },
   { nome: VoiEsferaTool.toolName, rotulo: 'ROI volumétrica (esfera)', tecla: 'u', categoria: 'medida' },
   { nome: LesaoPetTool.toolName, rotulo: 'Lesão PET (MTV/TLG)', tecla: 'j', categoria: 'medida' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },

@@ -17,6 +17,7 @@ import { MIPJumpToClickTool } from '../tools/mipRotatorio';
 import { DistanciaTool } from '../tools/estiloMedidas';
 import { PolilinhaTool } from '../tools/polilinha';
 import { SetaTool } from '../tools/seta';
+import { SondaTool } from '../tools/sonda';
 import { LesaoPetTool, VoiEsferaTool } from '../tools/voiEsfera';
 import {
   addTool,
@@ -65,6 +66,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       AnguloCobbTool,
       AnguloReferenciaTool,
       SetaTool,
+      SondaTool,
       VoiEsferaTool,
       LesaoPetTool,
       EllipticalROITool,

@@ -12,6 +12,7 @@
 import { getEnabledElement } from '@cornerstonejs/core';
 import { annotation as anotacoes, utilities as utilitarios, type Types } from '@cornerstonejs/tools';
 import { ferramentaAtivaEhMedida, medidaNoPonto, noTexto } from './selecao';
+import { NOME_SONDA, recalcularSonda } from './sonda';
 import { ehFerramentaVoi, NOME_LESAO_PET, NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
 
 type Ponto3 = [number, number, number];
@@ -112,6 +113,7 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     window.removeEventListener('mouseup', aoSoltar, true);
     if (!a) return;
     if (a.moveu && !a.soTexto && ehFerramentaVoi(a.ann.metadata?.toolName)) recalcularVoi(a.ann);
+    if (a.moveu && !a.soTexto && a.ann.metadata?.toolName === NOME_SONDA) void recalcularSonda(a.ann);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
   };
 

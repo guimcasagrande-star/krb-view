@@ -564,3 +564,6 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .controles-fusao input[type='range'] { width: 70px; }
 .controles-fusao input[type='number'] { width: 50px; }
 .controles-fusao select { max-width: 110px; font-size: 11px; }
+
+.celula.modo-registro { cursor: move; outline: 2px dashed #fbbf24; outline-offset: -3px; }
+.controles-fusao button[aria-pressed='true'] { background: var(--destaque); color: #000; }

@@ -40,6 +40,8 @@ export interface VolumeParaVoi {
   /** 'SUVbw', 'SUL', 'SUVbsa', 'Bq/mL', 'HU'... */
   unidade: string;
   ehPet: boolean;
+  /** Deslocamento manual do PET sobre a TC (mm): o ponto do PET é `mundo - deslocamento`. */
+  deslocamentoMm?: [number, number, number];
 }
 
 export type RespostaResolvedor = VolumeParaVoi | { erro: string };
@@ -107,7 +109,10 @@ async function calcular(ann: Types.Annotation): Promise<void> {
       const modoPadrao = ann.metadata?.toolName === NOME_LESAO_PET ? modoLesaoPadrao : 'esfera';
       const modo: ModoLesao = r.ehPet ? (voi.modo ?? modoPadrao) : 'esfera';
       voi.modo = modo;
-      const resposta = calcularVoiEsfera(r.volume, pontos[0]!, distancia3(pontos[0]!, pontos[1]!), r.ehPet, modo);
+      const d = r.deslocamentoMm;
+      const c0 = pontos[0]!;
+      const centroNoVolume: Ponto = d ? [c0[0] - d[0], c0[1] - d[1], c0[2] - d[2]] : c0;
+      const resposta = calcularVoiEsfera(r.volume, centroNoVolume, distancia3(pontos[0]!, pontos[1]!), r.ehPet, modo);
       if (resposta.ok) {
         voi.estado = 'pronto';
         voi.resultado = resposta;

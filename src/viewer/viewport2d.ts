@@ -28,7 +28,9 @@ import {
   registrarSuvDaPilha,
   unidadeDaPilha,
 } from '../pet/provedorSuv';
+import { definirResolvedorSonda } from '../tools/sonda';
 import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from '../tools/voiEsfera';
+import { worldToVoxel } from '../io/geometry';
 import {
   adicionarViewportAoGrupo,
   botaoAtribuido,
@@ -204,6 +206,11 @@ interface Slot {
   fusao: { opacidade: number; colormap: string; teto: number };
   /** Reaplica opacidade, colormap e teto ao PET da fusão (depois de o volume terminar de carregar). */
   reaplicarFusao?: () => void;
+  /** Ids dos volumes da fusão (TC e PET) para reaplicar propriedades e o registro manual. */
+  volumesFusao?: { ct: string; pet: string };
+  atualizarLeituraRegistro?: () => void;
+  /** Registro manual: translação (mm) do PET sobre a TC; `ativo` = arrastar no viewport move o PET. */
+  registro: { ativo: boolean; deslocamento: [number, number, number] };
 }
 
 const slots: Slot[] = [];
@@ -292,6 +299,7 @@ function liberarIds(stackId: string | undefined): void {
   r.refs--;
   if (r.refs > 0) return;
   registro.delete(stackId);
+  cacheVoxels.delete(stackId);
   esquecerSuvDaPilha(stackId);
   removerArquivos(r.ids);
 }
@@ -820,12 +828,24 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
     volumePetId,
   );
   void volumeCtId;
+  aplicarRegistroPet(slot, volumePetId);
   vp.render();
   // O colormap/opacidade do segundo volume só aparece depois de um render do motor inteiro.
   void iniciarCornerstone().then((m) => m.render());
 }
 
+/** Translada o PET sobre a TC (registro manual) deslocando o ator do volume. */
+function aplicarRegistroPet(slot: Slot, volumePetId: string): void {
+  const vp = slot.viewport as Types.IVolumeViewport | undefined;
+  const ator = vp?.getActors().find((a) => a.referencedId === volumePetId)?.actor as
+    | { setPosition?: (x: number, y: number, z: number) => void }
+    | undefined;
+  const d = slot.registro.deslocamento;
+  ator?.setPosition?.(d[0], d[1], d[2]);
+}
+
 function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
+  slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
   const c = slot.controlesFusao;
   c.replaceChildren();
   c.hidden = false;
@@ -877,7 +897,49 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
     l.append(el);
     return l;
   };
-  c.append(rot('PET ', opac), rot('', cor), rot('SUV 0–', teto));
+  // Registro manual: arrastar o PET sobre a TC (translação), com o deslocamento em mm.
+  const mover = document.createElement('button');
+  mover.type = 'button';
+  mover.textContent = 'Mover PET';
+  mover.title = 'Arraste no viewport para deslocar o PET sobre a TC (corrige movimento do paciente)';
+  const leitura = document.createElement('span');
+  const restaurar = document.createElement('button');
+  restaurar.type = 'button';
+  restaurar.textContent = 'Restaurar';
+  const atualizarLeitura = (): void => {
+    const d = slot.registro.deslocamento;
+    const nulo = d[0] === 0 && d[1] === 0 && d[2] === 0;
+    leitura.textContent = nulo ? 'Δ 0 mm' : `Δ ${d.map((v) => v.toFixed(1).replace('.', ',')).join(' · ')} mm`;
+    restaurar.disabled = nulo;
+    mover.setAttribute('aria-pressed', String(slot.registro.ativo));
+    slot.celula.classList.toggle('modo-registro', slot.registro.ativo);
+  };
+  const passoZ = (delta: number): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = delta > 0 ? 'z+' : 'z−';
+    b.title = `Desloca o PET ${Math.abs(delta)} mm na direção cabeça-pés`;
+    b.addEventListener('click', () => {
+      slot.registro.deslocamento[2] += delta;
+      aplicarRegistroPet(slot, volumePetId);
+      atualizarLeitura();
+      void iniciarCornerstone().then((m) => m.render());
+    });
+    return b;
+  };
+  mover.addEventListener('click', () => {
+    slot.registro.ativo = !slot.registro.ativo;
+    atualizarLeitura();
+  });
+  restaurar.addEventListener('click', () => {
+    slot.registro.deslocamento = [0, 0, 0];
+    aplicarRegistroPet(slot, volumePetId);
+    atualizarLeitura();
+    void iniciarCornerstone().then((m) => m.render());
+  });
+  atualizarLeitura();
+  slot.atualizarLeituraRegistro = atualizarLeitura;
+  c.append(rot('PET ', opac), rot('', cor), rot('SUV 0–', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
 }
 
 function salvarEstadoVisualSlot(slot: Slot): {
@@ -1232,6 +1294,8 @@ function soltarFusao(slot: Slot): void {
   slot.pilhaFusao = null;
   slot.idsFusao = [];
   slot.reaplicarFusao = undefined;
+  slot.volumesFusao = undefined;
+  slot.registro = { ativo: false, deslocamento: [0, 0, 0] };
   slot.controlesFusao.hidden = true;
   slot.controlesFusao.replaceChildren();
 }
@@ -2074,35 +2138,108 @@ async function aguardarVolumeCompleto(vol: Types.IImageVolume): Promise<void> {
   }
 }
 
+interface Voxels {
+  data: ArrayLike<number>;
+  grid: ReturnType<typeof gridFromVolumeProps>;
+}
+
+/** Voxels já copiados por pilha (evita remontar o volume a cada medida). Invalidado ao recalcular o SUV. */
+const cacheVoxels = new Map<string, Voxels>();
+
 /**
- * Volume (voxels e grade) da série mostrada num viewport, para medidas volumétricas.
- * Monta o volume se ainda não existir e solta a referência ao terminar de copiar os dados.
+ * Copia os voxels e a grade do volume da pilha (monta o volume se preciso e solta a referência
+ * ao terminar).
  */
-async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
-  const slot = slots.find((s) => s.idViewport === idVp);
-  const stack = slot?.pilha;
-  if (!slot || !stack) return { erro: 'Série não encontrada no viewport.' };
-  const res = adquirirVolume(stack, slot.ids);
+async function carregarVoxels(stack: StackNode, ids: string[]): Promise<Voxels | { erro: string }> {
+  const guardado = cacheVoxels.get(stack.id);
+  if (guardado) return guardado;
+  const res = adquirirVolume(stack, ids);
   if (!res.ok) return { erro: `Medida volumétrica indisponível: ${res.mensagens.join(' · ')}` };
   try {
     const vol = (await res.promessa) as Types.IImageVolume;
     await aguardarVolumeCompleto(vol);
     const dados = vol.voxelManager?.getCompleteScalarDataArray?.();
     if (!dados) return { erro: 'Não foi possível ler os voxels do volume.' };
-    const grid = gridFromVolumeProps({
-      dimensions: vol.dimensions,
-      spacing: vol.spacing,
-      origin: vol.origin,
-      direction: vol.direction,
-    });
-    const ehPet = stack.instances.some((i) => i.modality === 'PT');
-    const unidade = ehPet ? unidadeDaPilha(stack.id) : stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
-    return { volume: { data: dados, grid }, unidade, ehPet };
+    const v: Voxels = {
+      data: dados,
+      grid: gridFromVolumeProps({
+        dimensions: vol.dimensions,
+        spacing: vol.spacing,
+        origin: vol.origin,
+        direction: vol.direction,
+      }),
+    };
+    cacheVoxels.set(stack.id, v);
+    return v;
   } catch (e) {
     return { erro: textoDoErro(e) };
   } finally {
     liberarVolume(stack.id);
   }
+}
+
+function unidadeDaSerie(stack: StackNode): string {
+  if (stack.instances.some((i) => i.modality === 'PT')) return unidadeDaPilha(stack.id);
+  return stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
+}
+
+/**
+ * Volume para medidas volumétricas do viewport. Na fusão PET/TC a medida é do PET
+ * (considerando o deslocamento manual do registro).
+ */
+async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
+  const slot = slots.find((s) => s.idViewport === idVp);
+  if (!slot?.pilha) return { erro: 'Série não encontrada no viewport.' };
+  const naFusao = slot.planoSlot === 'fusao' && slot.pilhaFusao;
+  const stack = naFusao ? slot.pilhaFusao! : slot.pilha;
+  const v = await carregarVoxels(stack, naFusao ? slot.idsFusao : slot.ids);
+  if ('erro' in v) return v;
+  const ehPet = stack.instances.some((i) => i.modality === 'PT');
+  return {
+    volume: { data: v.data, grid: v.grid },
+    unidade: unidadeDaSerie(stack),
+    ehPet,
+    ...(naFusao ? { deslocamentoMm: [...slot.registro.deslocamento] as [number, number, number] } : {}),
+  };
+}
+
+function valorNoPonto(v: Voxels, mundo: [number, number, number]): number | undefined {
+  const ijk = worldToVoxel(v.grid, mundo);
+  if (!ijk) return undefined;
+  const [i, j, k] = [Math.round(ijk[0]), Math.round(ijk[1]), Math.round(ijk[2])];
+  const [nx, ny, nz] = v.grid.dims;
+  if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return undefined;
+  return v.data[i + j * nx + k * nx * ny];
+}
+
+function formatarValor(n: number, casas: number): string {
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+}
+
+/** Sonda: HU e SUV do ponto (na fusão, os dois; nas demais séries, o valor da série). */
+async function valoresNoPonto(idVp: string, mundo: [number, number, number]) {
+  const slot = slots.find((s) => s.idViewport === idVp);
+  if (!slot?.pilha) return { erro: 'Série não encontrada no viewport.' };
+  const linhas: string[] = [];
+  const medir = async (stack: StackNode, ids: string[], desl?: [number, number, number]): Promise<string | { erro: string }> => {
+    const v = await carregarVoxels(stack, ids);
+    if ('erro' in v) return v;
+    const p: [number, number, number] = desl ? [mundo[0] - desl[0], mundo[1] - desl[1], mundo[2] - desl[2]] : mundo;
+    const valor = valorNoPonto(v, p);
+    const un = unidadeDaSerie(stack);
+    if (valor === undefined) return `${un || 'Valor'}: fora do volume`;
+    const eSuv = un.startsWith('SU');
+    return `${un || 'Valor'}: ${formatarValor(valor, eSuv ? 2 : un === 'HU' ? 0 : 1)}${eSuv || un === '' ? '' : ' ' + (un === 'HU' ? '' : un)}`.trim();
+  };
+  const principal = await medir(slot.pilha, slot.ids);
+  if (typeof principal !== 'string') return principal;
+  linhas.push(principal);
+  if (slot.planoSlot === 'fusao' && slot.pilhaFusao) {
+    const pet = await medir(slot.pilhaFusao, slot.idsFusao, slot.registro.deslocamento);
+    if (typeof pet !== 'string') return pet;
+    linhas.push(pet);
+  }
+  return { linhas };
 }
 
 /**
@@ -2114,6 +2251,7 @@ export async function aplicarCorrecoesPet(stack: StackNode, correcoes: Correcoes
   const ids = registro.get(stack.id)?.ids;
   if (!ids) return;
   definirCorrecoesDaPilha(stack.id, correcoes);
+  cacheVoxels.delete(stack.id);
   registrarSuvDaPilha(stack, ids);
 
   const afetados = slots.filter((s) => s.pilha?.id === stack.id);
@@ -2342,6 +2480,7 @@ function criarSlot(indice: number): Slot {
     idsFusao: [],
     volumeFusaoId: null,
     fusao: { opacidade: 0.6, colormap: 'Black-Body Radiation', teto: 5 },
+    registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
   slot.overlay = criarOverlay(celula, {
@@ -2369,6 +2508,41 @@ function criarSlot(indice: number): Slot {
     atualizarMiraSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+  // Registro manual: com "Mover PET" ligado, arrastar na fusão desloca o PET (no plano da imagem).
+  celula.addEventListener(
+    'mousedown',
+    (ev) => {
+      const v = slot.viewport;
+      if (ev.button !== 0 || !slot.registro.ativo || slot.planoSlot !== 'fusao' || !v || !slot.volumesFusao) return;
+      if (ev.target instanceof Element && ev.target.closest('.controles-fusao')) return;
+      const rect = elemento.getBoundingClientRect();
+      const mundoInicial = v.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
+      const base = [...slot.registro.deslocamento] as [number, number, number];
+      const aoMover = (m: MouseEvent): void => {
+        const atual = v.canvasToWorld([m.clientX - rect.left, m.clientY - rect.top]);
+        // Só no plano da imagem: tira do deslocamento a componente ao longo da normal do corte
+        // (o ajuste na direção cabeça-pés é feito pelos botões z− e z+).
+        const dx = atual[0] - mundoInicial[0];
+        const dy = atual[1] - mundoInicial[1];
+        const dz = atual[2] - mundoInicial[2];
+        const n = v.getCamera().viewPlaneNormal ?? [0, 0, 1];
+        const ao = dx * n[0] + dy * n[1] + dz * n[2];
+        slot.registro.deslocamento = [base[0] + dx - ao * n[0], base[1] + dy - ao * n[1], base[2] + dz - ao * n[2]];
+        aplicarRegistroPet(slot, slot.volumesFusao!.pet);
+        slot.atualizarLeituraRegistro?.();
+        void iniciarCornerstone().then((mot) => mot.render());
+      };
+      const aoSoltar = (): void => {
+        window.removeEventListener('mousemove', aoMover, true);
+        window.removeEventListener('mouseup', aoSoltar, true);
+      };
+      window.addEventListener('mousemove', aoMover, true);
+      window.addEventListener('mouseup', aoSoltar, true);
+      ev.stopPropagation();
+      ev.preventDefault();
+    },
+    true,
+  );
   botaoDadosPet.addEventListener('click', () => {
     if (slot.pilha) document.dispatchEvent(new CustomEvent(EVENTO_DADOS_PET, { detail: slot.pilha }));
   });
@@ -2444,6 +2618,7 @@ function criarSlot(indice: number): Slot {
 /** Monta a grade (vazia) dentro da área de viewports. Chamar uma vez. */
 export function configurarViewport2d(elementos: ElementosViewport2d): void {
   definirResolvedorVoi(volumeParaVoi);
+  definirResolvedorSonda(valoresNoPonto);
   iniciarVoiEsfera();
   grade = document.createElement('div');
   grade.id = 'grade';
