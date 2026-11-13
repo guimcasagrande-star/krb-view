@@ -558,3 +558,9 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .suv-sanfona { margin-top: 4px; }
 .suv-sanfona summary { cursor: pointer; font-size: 11px; color: var(--texto-fraco); user-select: none; padding: 2px 0; }
 .suv-sanfona summary:hover { color: var(--texto); }
+
+/* Controles da fusão PET/TC */
+.controles-fusao { position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px; white-space: nowrap; z-index: 6; display: flex; gap: 6px; align-items: center; background: rgba(0, 0, 0, 0.55); padding: 3px 6px; border-radius: 4px; font-size: 11px; max-width: calc(100% - 16px); flex-wrap: wrap; }
+.controles-fusao input[type='range'] { width: 70px; }
+.controles-fusao input[type='number'] { width: 50px; }
+.controles-fusao select { max-width: 110px; font-size: 11px; }

@@ -73,7 +73,7 @@ const CARGAS_SIMULTANEAS = 4;
  * '1x2' = 1 linha e 2 colunas (lado a lado).
  */
 export type Layout = string;
-export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio';
+export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio' | 'fusao';
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
 export const GRADE_MAXIMA = 5;
@@ -113,6 +113,7 @@ export const PLANOS_SLOTS: Record<PlanoSlot, PlanoMprOverlay> = {
   coronal: { rotulo: 'Coronal', eixo: Enums.OrientationAxis.CORONAL },
   sagital: { rotulo: 'Sagital', eixo: Enums.OrientationAxis.SAGITTAL },
   'mip-rotatorio': { rotulo: 'MIP rotatório', eixo: Enums.OrientationAxis.CORONAL },
+  fusao: { rotulo: 'Fusão PET/TC', eixo: Enums.OrientationAxis.AXIAL },
 };
 
 export const MODOS_SLAB: Record<ModoSlab, { rotulo: string; blendMode: Enums.BlendModes }> = {
@@ -170,6 +171,7 @@ interface Slot {
   mensagem: HTMLDivElement;
   avisoVolume: HTMLDivElement;
   controlesMip: HTMLDivElement;
+  controlesFusao: HTMLDivElement;
   etiquetaComparacao: HTMLDivElement;
   avisoCobertura: HTMLDivElement;
   botaoDadosPet: HTMLButtonElement;
@@ -194,6 +196,14 @@ interface Slot {
   corteSalvo?: number;
   /** Cada abertura nova invalida cargas e esperas da anterior. */
   geracao: number;
+  /** Fusão: PET sobreposto à TC deste slot (plano 'fusao'). */
+  pilhaFusao: StackNode | null;
+  idsFusao: string[];
+  /** Id da pilha de PET para a qual o slot tem uma referência de volume. */
+  volumeFusaoId: string | null;
+  fusao: { opacidade: number; colormap: string; teto: number };
+  /** Reaplica opacidade, colormap e teto ao PET da fusão (depois de o volume terminar de carregar). */
+  reaplicarFusao?: () => void;
 }
 
 const slots: Slot[] = [];
@@ -405,8 +415,9 @@ function gruposSincroniaEstudo(): Slot[][] {
   if (compararAtivo || mprAtivo || maximizado !== null) return [];
   const grupos = new Map<string, Slot[]>();
   for (const s of slots) {
-    if (s.celula.hidden || !s.pilha || !s.habilitado || !s.viewport || s.planoSlot !== 'original') continue;
-    if (!('setImageIdIndex' in s.viewport)) continue;
+    if (s.celula.hidden || !s.pilha || !s.habilitado || !s.viewport) continue;
+    // Entram os cortes originais (pilha) e a fusão PET/TC (volume axial).
+    if (s.planoSlot === 'original' ? !('setImageIdIndex' in s.viewport) : s.planoSlot !== 'fusao') continue;
     const inst = s.pilha.instances[0];
     if (!inst?.studyInstanceUid || !inst.frameOfReferenceUid) continue;
     const chave = `${inst.studyInstanceUid}|${inst.frameOfReferenceUid}`;
@@ -451,45 +462,71 @@ function atualizarSincroniaEstudo(): void {
   }
   // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
   const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
-  const mesmas = grupo.filter((s) => s.pilha?.instances[0]?.modality === modalidade);
+  const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
   if (mesmas.length >= 2) {
     for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
   }
 }
 
-/** Rolagem por posição (mm) entre as séries do mesmo grupo. */
+/** Posição (mm) do corte atual do slot, para viewports de pilha ou de volume. */
+function posicaoDoSlot(s: Slot): number | undefined {
+  return s.pilha && s.viewport ? obterPosicaoCorteAtual(s.pilha, s.viewport) : undefined;
+}
+
+/** Leva o slot ao corte mais próximo de `mm`; devolve a posição realmente usada. */
+function irParaPosicaoMm(d: Slot, mm: number): number | undefined {
+  if (!d.pilha || !d.viewport) return undefined;
+  const posicoes = d.pilha.geometry.positions;
+  const normal = d.pilha.geometry.normal;
+  if (posicoes.length === 0 || !normal) return undefined;
+  const idx = nearestIndex(posicoes, mm);
+  const alvo = posicoes[idx]!;
+  if ('setImageIdIndex' in d.viewport) {
+    if (d.viewport.getCurrentImageIdIndex() === idx) return undefined;
+    void d.viewport.setImageIdIndex(idx);
+  } else {
+    const fp = d.viewport.getCamera().focalPoint;
+    if (!fp) return undefined;
+    const atual = fp[0] * normal[0] + fp[1] * normal[1] + fp[2] * normal[2];
+    if (Math.abs(atual - alvo) < 0.01) return undefined;
+    const delta = alvo - atual;
+    d.viewport.jumpToWorld([fp[0] + normal[0] * delta, fp[1] + normal[1] * delta, fp[2] + normal[2] * delta]);
+  }
+  return alvo;
+}
+
+/** Rolagem por posição (mm) entre as séries do mesmo grupo (cortes originais e fusão). */
 function aoRolarSlotEstudo(origem: number): void {
   if (!sincroniaEstudoLigada || sincronizandoEstudo || compararAtivo || mprAtivo) return;
   const so = slots[origem];
-  if (!so?.pilha || !so.viewport || !('setImageIdIndex' in so.viewport)) return;
-  const atual = so.viewport.getCurrentImageIdIndex();
+  if (!so?.pilha || !so.viewport) return;
+  const posicao = posicaoDoSlot(so);
+  if (posicao === undefined) return;
   // Este evento foi causado pela própria sincronia: não propaga de volta.
-  if (indicesImpostosPorEstudo.get(origem) === atual) {
+  const imposta = indicesImpostosPorEstudo.get(origem);
+  if (imposta !== undefined && Math.abs(imposta - posicao) < 0.5) {
     indicesImpostosPorEstudo.delete(origem);
     return;
   }
   const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
   if (!grupo) return;
-  const posicao = so.pilha.geometry.positions[atual];
   const normalO = so.pilha.geometry.normal;
-  if (posicao === undefined || !normalO) return;
+  if (!normalO) return;
 
   sincronizandoEstudo = true;
   try {
     for (const d of grupo) {
-      if (d === so || !d.pilha || !d.viewport || !('setImageIdIndex' in d.viewport)) continue;
-      const posicoes = d.pilha.geometry.positions;
+      if (d === so || !d.pilha) continue;
       const normalD = d.pilha.geometry.normal;
-      if (posicoes.length === 0 || !normalD) continue;
+      if (!normalD) continue;
       const cos = normalO[0] * normalD[0] + normalO[1] * normalD[1] + normalO[2] * normalD[2];
       if (Math.abs(cos) < 0.9) continue;
       const alvo = posicao * (cos >= 0 ? 1 : -1);
-      const idx = nearestIndex(posicoes, alvo);
       const passo = d.pilha.instances[0]?.sliceThickness ?? 5;
-      if (Math.abs(posicoes[idx]! - alvo) > Math.max(passo, 1)) continue; // fora da cobertura
-      if (d.viewport.getCurrentImageIdIndex() === idx) continue;
-      indicesImpostosPorEstudo.set(d.indice, idx);
-      void d.viewport.setImageIdIndex(idx);
+      const posicoes = d.pilha.geometry.positions;
+      if (posicoes.length === 0 || Math.abs(posicoes[nearestIndex(posicoes, alvo)]! - alvo) > Math.max(passo, 1)) continue;
+      const usada = irParaPosicaoMm(d, alvo);
+      if (usada !== undefined) indicesImpostosPorEstudo.set(d.indice, usada);
     }
   } finally {
     sincronizandoEstudo = false;
@@ -753,6 +790,96 @@ function saltarParaPontoMundo(origemIndice: number, ponto: Types.Point3): void {
   aplicarLocalizador3d(origemIndice, ponto);
 }
 
+/** Nomes dos colormaps do vtk.js usados pelo Cornerstone. */
+const COLORMAPS_FUSAO: Array<[string, string]> = [
+  ['Black-Body Radiation', 'Hot iron (ferro quente)'],
+  ['jet', 'Arco-íris (jet)'],
+  ['Inverted-Grayscale', 'Cinza invertido'],
+  ['Grayscale', 'Cinza'],
+];
+
+/** Aplica opacidade, colormap e teto de SUV ao PET da fusão (independentes da janela da TC). */
+function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
+  const vp = slot.viewport as Types.IVolumeViewport | undefined;
+  if (!vp) return;
+  const { opacidade, colormap, teto } = slot.fusao;
+  vp.setProperties(
+    {
+      voiRange: { lower: 0, upper: teto },
+      colormap: {
+        name: colormap,
+        // Fundo (SUV baixo) transparente; a captação aparece com a opacidade escolhida.
+        opacity: [
+          { value: 0, opacity: 0 },
+          { value: teto * 0.2, opacity: 0 },
+          { value: teto * 0.45, opacity: opacidade },
+          { value: teto, opacity: opacidade },
+        ],
+      },
+    },
+    volumePetId,
+  );
+  void volumeCtId;
+  vp.render();
+  // O colormap/opacidade do segundo volume só aparece depois de um render do motor inteiro.
+  void iniciarCornerstone().then((m) => m.render());
+}
+
+function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
+  const c = slot.controlesFusao;
+  c.replaceChildren();
+  c.hidden = false;
+  const reaplicar = (): void => aplicarFusao(slot, volumeCtId, volumePetId);
+  slot.reaplicarFusao = reaplicar;
+
+  const opac = document.createElement('input');
+  opac.type = 'range';
+  opac.min = '0';
+  opac.max = '100';
+  opac.value = String(Math.round(slot.fusao.opacidade * 100));
+  opac.title = 'Opacidade do PET';
+  opac.addEventListener('input', () => {
+    slot.fusao.opacidade = Number(opac.value) / 100;
+    reaplicar();
+  });
+
+  const cor = document.createElement('select');
+  cor.title = 'Colormap do PET';
+  for (const [v, t] of COLORMAPS_FUSAO) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = t;
+    cor.append(o);
+  }
+  cor.value = slot.fusao.colormap;
+  cor.addEventListener('change', () => {
+    slot.fusao.colormap = cor.value;
+    reaplicar();
+  });
+
+  const teto = document.createElement('input');
+  teto.type = 'number';
+  teto.min = '0.5';
+  teto.step = '0.5';
+  teto.value = String(slot.fusao.teto);
+  teto.title = 'Teto de SUV do PET (a janela do PET vai de 0 até aqui)';
+  teto.addEventListener('change', () => {
+    const v = Number(teto.value.replace(',', '.'));
+    if (v > 0) {
+      slot.fusao.teto = v;
+      reaplicar();
+    }
+  });
+
+  const rot = (t: string, el: HTMLElement): HTMLElement => {
+    const l = document.createElement('label');
+    l.textContent = t;
+    l.append(el);
+    return l;
+  };
+  c.append(rot('PET ', opac), rot('', cor), rot('SUV 0–', teto));
+}
+
 function salvarEstadoVisualSlot(slot: Slot): {
   corte?: number;
   voiPreservado?: { voiRange?: { lower: number; upper: number }; invert?: boolean };
@@ -837,8 +964,26 @@ async function exibirSlot(
       await promessaVolume;
       if (minhaGeracao !== slot.geracao) return;
 
-      await setVolumesForViewports(motor, [{ volumeId }], [slot.idViewport], true);
+      const entradas: Array<{ volumeId: string }> = [{ volumeId }];
+      let volumePetId: string | undefined;
+      if (slot.planoSlot === 'fusao' && slot.pilhaFusao) {
+        // O PET entra como segundo volume do mesmo viewport; a GPU reamostra pela geometria de cada um.
+        const resPet = adquirirVolume(slot.pilhaFusao, slot.idsFusao);
+        if (!resPet.ok) throw new Error(`PET: ${resPet.mensagens.join(' · ')}`);
+        if (slot.volumeFusaoId === slot.pilhaFusao.id) liberarVolume(slot.pilhaFusao.id);
+        else slot.volumeFusaoId = slot.pilhaFusao.id;
+        await resPet.promessa;
+        if (minhaGeracao !== slot.geracao) return;
+        volumePetId = resPet.volumeId;
+        entradas.push({ volumeId: volumePetId });
+      }
+
+      await setVolumesForViewports(motor, entradas, [slot.idViewport], true);
       if (minhaGeracao !== slot.geracao) return;
+      if (volumePetId) {
+        montarControlesFusao(slot, volumeId, volumePetId);
+        aplicarFusao(slot, volumeId, volumePetId);
+      }
 
       if (slot.planoSlot === 'original' && corteInicial !== undefined) {
         const pos = stack.instances[corteInicial]?.imagePositionPatient;
@@ -847,7 +992,7 @@ async function exibirSlot(
         }
       }
 
-      const pet = voiPreservado ? null : exibicaoPadraoPet(stack);
+      const pet = voiPreservado || slot.planoSlot === 'fusao' ? null : exibicaoPadraoPet(stack);
       const voi = voiPreservado?.voiRange ?? pet?.voiRange ?? voiPadraoDaPilha(stack);
       if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert ?? pet?.invert });
       else if (pet) vp.setProperties({ invert: true });
@@ -931,6 +1076,7 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
   if (mprAtivo) return;
   const slot = slots[ativo];
   if (!slot?.pilha || slot.planoSlot === plano) return;
+  if (plano === 'fusao' && !slot.pilhaFusao) return;
 
   if (plano !== 'original') {
     const av = avaliarVolume(slot.pilha);
@@ -1076,7 +1222,22 @@ export async function definirModoSlabAtivo(modo: ModoSlab): Promise<void> {
   await exibirSlot(slot, corte, voiPreservado);
 }
 
+/** Solta o PET da fusão deste slot (volume e arquivos). */
+function soltarFusao(slot: Slot): void {
+  if (slot.volumeFusaoId) {
+    liberarVolume(slot.volumeFusaoId);
+    slot.volumeFusaoId = null;
+  }
+  if (slot.pilhaFusao) liberarIds(slot.pilhaFusao.id);
+  slot.pilhaFusao = null;
+  slot.idsFusao = [];
+  slot.reaplicarFusao = undefined;
+  slot.controlesFusao.hidden = true;
+  slot.controlesFusao.replaceChildren();
+}
+
 function liberarRecursosSlot(slot: Slot): void {
+  soltarFusao(slot);
   if (slot.volumePilhaId) {
     liberarVolume(slot.volumePilhaId);
     slot.volumePilhaId = null;
@@ -1755,6 +1916,7 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
 
   const anterior = slot.pilha?.id;
   const volumeAnterior = slot.volumePilhaId;
+  soltarFusao(slot);
   try {
     slot.ids = adquirirIds(stack, arquivos);
   } catch (e) {
@@ -2009,12 +2171,12 @@ export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
           { pilha: mip, plano: 'mip-rotatorio' },
           { pilha: par.pet, plano: 'original' },
           { pilha: par.anatomic, plano: 'original' },
-          { pilha: null, plano: 'original', aviso: 'Fusão PET/TC (Fase 6)' },
+          { pilha: par.anatomic, plano: 'fusao' },
         ]
       : [
           { pilha: par.pet, plano: 'original' },
           { pilha: par.anatomic, plano: 'original' },
-          { pilha: null, plano: 'original', aviso: 'Fusão PET/TC (Fase 6)' },
+          { pilha: par.anatomic, plano: 'fusao' },
         ];
   for (let i = 0; i < celulas.length; i++) {
     const c = celulas[i]!;
@@ -2023,7 +2185,21 @@ export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
     ativo = i;
     if (c.pilha) {
       await abrirPilha2d(c.pilha);
-      if (c.plano !== 'original') await definirPlanoSlotAtivo(c.plano);
+      if (c.plano === 'fusao') {
+        // TC como base e PET por cima; `sameFrame: false` = fusão manual, com aviso.
+        const arquivosFusao = estado.resultado?.arquivos;
+        if (arquivosFusao) {
+          slot.pilhaFusao = par.pet;
+          slot.idsFusao = adquirirIds(par.pet, arquivosFusao);
+          await definirPlanoSlotAtivo('fusao');
+          if (!par.sameFrame) {
+            slot.avisoVolume.textContent = '⚠ Fusão manual: séries de referenciais diferentes';
+            slot.avisoVolume.hidden = false;
+          }
+        }
+      } else if (c.plano !== 'original') {
+        await definirPlanoSlotAtivo(c.plano);
+      }
     } else if (c.aviso) {
       // Esvazia a célula (pode ter sobrado uma série de um layout anterior).
       slot.geracao++;
@@ -2118,6 +2294,9 @@ function criarSlot(indice: number): Slot {
   const controlesMip = document.createElement('div');
   controlesMip.className = 'controles-mip';
   controlesMip.hidden = true;
+  const controlesFusao = document.createElement('div');
+  controlesFusao.className = 'controles-fusao';
+  controlesFusao.hidden = true;
   const etiquetaComparacao = document.createElement('div');
   etiquetaComparacao.className = 'etiqueta-comparacao';
   etiquetaComparacao.hidden = true;
@@ -2133,7 +2312,7 @@ function criarSlot(indice: number): Slot {
   botaoDadosPet.textContent = 'Dados PET';
   botaoDadosPet.title = 'Ver e corrigir peso, altura, dose e horários usados no cálculo do SUV';
   botaoDadosPet.hidden = true;
-  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, etiquetaComparacao, avisoCobertura, botaoDadosPet);
+  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, controlesFusao, etiquetaComparacao, avisoCobertura, botaoDadosPet);
 
   const slot: Slot = {
     indice,
@@ -2143,6 +2322,7 @@ function criarSlot(indice: number): Slot {
     mensagem,
     avisoVolume,
     controlesMip,
+    controlesFusao,
     etiquetaComparacao,
     avisoCobertura,
     botaoDadosPet,
@@ -2158,6 +2338,10 @@ function criarSlot(indice: number): Slot {
     volumePilhaId: null,
     ids: [],
     geracao: 0,
+    pilhaFusao: null,
+    idsFusao: [],
+    volumeFusaoId: null,
+    fusao: { opacidade: 0.6, colormap: 'Black-Body Radiation', teto: 5 },
     overlay: undefined as unknown as Overlay,
   };
   slot.overlay = criarOverlay(celula, {
@@ -2178,6 +2362,7 @@ function criarSlot(indice: number): Slot {
   });
   elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
+    aoRolarSlotEstudo(indice);
     atualizarMiraSlot(slot);
   });
   elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
@@ -2275,6 +2460,7 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
   eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, () => {
     for (const slot of slots) {
       if (slot.habilitado && slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC) {
+        slot.reaplicarFusao?.();
         slot.viewport?.render();
         slot.overlay.atualizar();
       }
