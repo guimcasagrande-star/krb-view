@@ -16,6 +16,7 @@ import {
 } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode } from '../io/organize';
+import { esquecerSuvDaPilha, registrarSuvDaPilha } from '../pet/provedorSuv';
 import {
   adicionarViewportAoGrupo,
   botaoAtribuido,
@@ -195,6 +196,8 @@ function adquirirIds(stack: StackNode, arquivos: Map<string, File>): string[] {
     throw e;
   }
   registro.set(stack.id, { ids: adicionados, refs: 1 });
+  // PET: os fatores de SUV têm de existir antes de qualquer imagem ser carregada.
+  registrarSuvDaPilha(stack, adicionados);
   return adicionados;
 }
 
@@ -218,6 +221,7 @@ function liberarIds(stackId: string | undefined): void {
   r.refs--;
   if (r.refs > 0) return;
   registro.delete(stackId);
+  esquecerSuvDaPilha(stackId);
   removerArquivos(r.ids);
 }
 
