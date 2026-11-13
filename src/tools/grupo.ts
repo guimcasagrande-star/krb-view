@@ -14,6 +14,7 @@ import {
   LengthTool,
   PanTool,
   PlanarFreehandROITool,
+  ReferenceLinesTool,
   StackScrollTool,
   ToolGroupManager,
   utilities,
@@ -180,12 +181,9 @@ function criarGrupoFerramentas(): void {
         getReferenceLineControllable: () => true,
         getReferenceLineDraggableRotatable: () => true,
         getReferenceLineSlabThicknessControlsOn: () => true,
-        referenceLinesCenterGapRadius: 6,
-        centerPoint: {
-          enabled: true,
-          color: 'rgba(255, 255, 255, 0.9)',
-          size: 3.5,
-        },
+        // Centro vazado (sem a bolinha): as linhas se abrem em volta do ponto para ele ficar visível.
+        referenceLinesCenterGapRadius: 12,
+        centerPoint: { enabled: false },
         viewportIndicators: true,
       });
     } else if (nome === LengthTool.toolName) {
@@ -198,8 +196,25 @@ function criarGrupoFerramentas(): void {
       grupo.addTool(nome);
     }
   }
+  // Linhas de referência entre planos (mostram onde o corte do viewport ativo cruza os outros).
+  grupo.addTool(ReferenceLinesTool.toolName, { sourceViewportId: '', enforceSameFrameOfReference: true });
+  annotation.config.style.setToolGroupToolStyles(ID_GRUPO, {
+    [ReferenceLinesTool.toolName]: { color: '#fbbf24', lineWidth: '1', lineDash: '6,4' },
+  });
   grupoCriado = true;
   aplicarAtribuicoes();
+}
+
+/** Liga as linhas de referência com `origemId` como fonte, ou desliga (origemId = null). */
+export function definirLinhasReferencia(origemId: string | null): void {
+  const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+  if (!grupo) return;
+  if (!origemId) {
+    grupo.setToolDisabled(ReferenceLinesTool.toolName);
+    return;
+  }
+  grupo.setToolConfiguration(ReferenceLinesTool.toolName, { sourceViewportId: origemId });
+  grupo.setToolEnabled(ReferenceLinesTool.toolName);
 }
 
 /** Coloca um viewport já habilitado no grupo (cria o grupo na primeira vez). */

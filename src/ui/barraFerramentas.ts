@@ -65,6 +65,7 @@ import {
   idLayout,
   alternarMaximizado,
   alternarSincroniaEstudo,
+  alternarLinhasReferencia,
   abrirLayoutPet,
   limparMirasLocalizador,
   type ModoSlab,
@@ -311,9 +312,16 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   }
   areaQuadrados.addEventListener('mouseleave', () => marcarGrade(0, 0));
   seletorGrade.append(areaQuadrados, rotuloGrade);
+  const itemLinhasRef = itemMenu(
+    '✛ Linhas de referência entre planos',
+    undefined,
+    () => alternarLinhasReferencia(),
+    menuLayout.fechar,
+  );
   menuLayout.painel.append(
     seletorGrade,
     divisorMenu(),
+    itemLinhasRef,
     itemMenu('PET/CT 4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuLayout.fechar),
     itemMenu('PET/CT 3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuLayout.fechar),
     divisorMenu(),
@@ -759,6 +767,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
 
     itemSincEstudo.setAttribute('aria-pressed', String(e.sincroniaEstudo));
+    itemLinhasRef.setAttribute('aria-pressed', String(e.linhasReferencia));
 
     // Estado do modo Comparar:
     const comp = e.comparacao;

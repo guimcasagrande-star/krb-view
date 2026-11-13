@@ -1,6 +1,6 @@
 /**
  * Extensão do CrosshairsTool para navegação tradicional em MPR:
- * - Ponto central visível no cruzamento das linhas de referência.
+ * - Centro vazado: as linhas se abrem em volta do cruzamento (sem bolinha) para o ponto ficar visível.
  * - Clicar e arrastar pelo centro (em qualquer plano e mesmo quando outra ferramenta
  *   como Janela/nível está selecionada) move o centro livremente nos dois eixos do plano
  *   e atualiza os três planos simultaneamente para o ponto onde o usuário soltar.

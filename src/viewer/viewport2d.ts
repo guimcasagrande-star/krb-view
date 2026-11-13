@@ -34,6 +34,7 @@ import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from 
 import { worldToVoxel } from '../io/geometry';
 import {
   adicionarViewportAoGrupo,
+  definirLinhasReferencia,
   botaoAtribuido,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
@@ -158,6 +159,8 @@ export interface EstadoViewports {
   maximizado: boolean;
   /** Sincronia automática (rolagem, zoom, pan e janela) entre séries do mesmo estudo. */
   sincroniaEstudo: boolean;
+  /** Linhas de referência entre cortes de planos diferentes. */
+  linhasReferencia: boolean;
 }
 
 export interface ElementosViewport2d {
@@ -414,6 +417,7 @@ function estadoAtual(): EstadoViewports {
     mipRotatorioVisivel,
     maximizado: maximizado !== null,
     sincroniaEstudo: sincroniaEstudoLigada,
+    linhasReferencia: linhasReferenciaLigadas,
     comparacao: {
       ativo: compararAtivo,
       rolagemLigada: rolagemCompararLigada && linkRolagemComparar !== null,
@@ -623,6 +627,46 @@ function aoRolarSlotEstudo(origem: number): void {
   }
 }
 
+let linhasReferenciaLigadas = true;
+let linhasReferenciaAtivas: string | null = null;
+
+/**
+ * Linhas de referência: com cortes em planos diferentes no layout (ex.: axial e coronal, PET, TC e
+ * fusão), o viewport ativo mostra nos outros onde o seu corte cruza. Só com 2+ planos distintos.
+ */
+function atualizarLinhasReferencia(): void {
+  let origem: string | null = null;
+  if (linhasReferenciaLigadas && !mprAtivo) {
+    const vis = slots.filter((s) => !s.celula.hidden && s.habilitado && s.viewport && s.planoSlot !== 'mip-rotatorio');
+    const normais = vis.map((s) => normalDoSlot(s));
+    let planosDiferentes = false;
+    for (let i = 0; i < vis.length && !planosDiferentes; i++) {
+      for (let j = i + 1; j < vis.length; j++) {
+        const a = normais[i];
+        const b = normais[j];
+        if (a && b && Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) < 0.9) {
+          planosDiferentes = true;
+          break;
+        }
+      }
+    }
+    if (planosDiferentes) {
+      const fonte = vis.find((s) => s.indice === ativo) ?? vis[0];
+      origem = fonte?.idViewport ?? null;
+    }
+  }
+  if (origem === linhasReferenciaAtivas) return;
+  linhasReferenciaAtivas = origem;
+  definirLinhasReferencia(origem);
+}
+
+export function alternarLinhasReferencia(): void {
+  linhasReferenciaLigadas = !linhasReferenciaLigadas;
+  linhasReferenciaAtivas = '#forcar';
+  atualizarLinhasReferencia();
+  sincronizar();
+}
+
 let sincronizandoCameraEstudo = false;
 
 /**
@@ -674,6 +718,7 @@ function sincronizar(): void {
   for (const x of slots) x.celula.classList.toggle('ativa', varios && maximizado === null && x.indice === ativo);
   atualizarEtiquetasComparacao();
   atualizarSincroniaEstudo();
+  atualizarLinhasReferencia();
   for (const x of slots) {
     x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
   }
