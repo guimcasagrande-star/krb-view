@@ -515,3 +515,12 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 
 /* Fundo claro (imagem invertida) */
 .overlay.invertido .canto { color: #111; text-shadow: 0 0 2px #fff, 0 0 4px #fff; }
+
+/* Letras de orientação e régua */
+.overlay .orientacao { position: absolute; font-weight: 600; font-size: 14px; }
+.overlay .orientacao-topo { top: 22px; left: 50%; transform: translateX(-50%); }
+.overlay .orientacao-base { bottom: 40px; left: 50%; transform: translateX(-50%); }
+.overlay .orientacao-esquerda { left: 8px; top: 50%; transform: translateY(-50%); }
+.overlay .orientacao-direita { right: 48px; top: 50%; transform: translateY(-50%); }
+.overlay.invertido .orientacao { color: #111; text-shadow: 0 0 2px #fff, 0 0 4px #fff; }
+.overlay .regua { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }

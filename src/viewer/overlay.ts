@@ -7,6 +7,8 @@ import { Enums, type Types } from '@cornerstonejs/core';
 import type { StackNode } from '../io/organize';
 import type { InstanceMeta } from '../io/types';
 import { definirEstiloPorFundo } from '../tools/estiloMedidas';
+import { petEmSuv } from './exibicaoInicial';
+import { desenharRegua, rotulosOrientacao, vetoresDaTela } from './orientacaoRegua';
 import { montarOverlay, type CantosOverlay } from './overlayTexto';
 
 type Canto = keyof CantosOverlay;
@@ -66,7 +68,44 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     cantos[canto] = d;
     raiz.append(d);
   }
+  const letras = {} as Record<'topo' | 'base' | 'esquerda' | 'direita', HTMLDivElement>;
+  for (const lado of ['topo', 'base', 'esquerda', 'direita'] as const) {
+    const d = document.createElement('div');
+    d.className = `orientacao orientacao-${lado}`;
+    letras[lado] = d;
+    raiz.append(d);
+  }
+  const canvasRegua = document.createElement('canvas');
+  canvasRegua.className = 'regua';
+  raiz.append(canvasRegua);
   celula.append(raiz);
+
+  function atualizarOrientacaoERegua(
+    viewport: Types.IStackViewport | Types.IVolumeViewport,
+    fundoClaro: boolean,
+  ): void {
+    try {
+      const camera = viewport.getCamera();
+      const rot = rotulosOrientacao(camera);
+      for (const lado of ['topo', 'base', 'esquerda', 'direita'] as const) {
+        letras[lado].textContent = rot ? rot[lado] : '';
+      }
+      const el = viewport.element;
+      const larg = el.clientWidth;
+      const alt = el.clientHeight;
+      const v = vetoresDaTela(camera);
+      let pxPorMm = 0;
+      if (v && larg > 0 && alt > 0) {
+        const c = viewport.canvasToWorld([larg / 2, alt / 2]);
+        const d = viewport.worldToCanvas([c[0] + v.direita[0] * 10, c[1] + v.direita[1] * 10, c[2] + v.direita[2] * 10]);
+        pxPorMm = Math.hypot(d[0] - larg / 2, d[1] - alt / 2) / 10;
+      }
+      desenharRegua(canvasRegua, larg, alt, pxPorMm, fundoClaro);
+    } catch {
+      for (const lado of ['topo', 'base', 'esquerda', 'direita'] as const) letras[lado].textContent = '';
+      desenharRegua(canvasRegua, 0, 0, 0, false);
+    }
+  }
 
   function atualizar(): void {
     if (!visivel) return;
@@ -75,6 +114,8 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     const primeira = stack?.instances[0];
     if (!viewport || !stack || !primeira) {
       for (const d of Object.values(cantos)) d.replaceChildren();
+      for (const d of Object.values(letras)) d.textContent = '';
+      desenharRegua(canvasRegua, 0, 0, 0, false);
       return;
     }
 
@@ -84,6 +125,8 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     raiz.classList.toggle('invertido', invertido && 'setImageIdIndex' in viewport);
     // Medidas: texto escuro em caixa clara em qualquer viewport invertido (legível sobre qualquer fundo).
     definirEstiloPorFundo(viewport.id, invertido);
+
+    atualizarOrientacaoERegua(viewport, invertido && 'setImageIdIndex' in viewport);
 
     const plano = fonte.planoMpr?.();
     const rotuloModo = fonte.modoSlab?.();
@@ -121,6 +164,15 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
       voiRange: viewport.getProperties()?.voiRange,
       zoom: viewport.getZoom(),
     });
+    // PET com SUV: a janela é mostrada como faixa de SUV (ex.: SUV 0 – 10).
+    const voi = viewport.getProperties()?.voiRange;
+    if (voi && petEmSuv(stack)) {
+      const f = (n: number): string => n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+      const faixa = `SUV ${f(voi.lower)} – ${f(voi.upper)}`;
+      const i = texto.inferiorDireito.findIndex((l) => l.startsWith('Janela '));
+      if (i >= 0) texto.inferiorDireito[i] = faixa;
+      else texto.inferiorDireito.unshift(faixa);
+    }
     if (plano) {
       const partes: string[] = [];
       if (plano.rotulo !== 'Original') partes.push(plano.rotulo);
