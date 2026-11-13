@@ -1,18 +1,26 @@
 /**
- * Overlay de texto nos quatro cantos de cada viewport 2D. Os textos vêm de montarOverlay
+ * Overlay de texto nos quatro cantos de cada viewport (2D ou MPR). Os textos vêm de montarOverlay
  * (função pura). Atualiza ao rolar, mudar janela ou zoom. A tecla O liga e desliga todos.
  */
 
 import { Enums, type Types } from '@cornerstonejs/core';
 import type { StackNode } from '../io/organize';
+import type { InstanceMeta } from '../io/types';
 import { montarOverlay, type CantosOverlay } from './overlayTexto';
 
 type Canto = keyof CantosOverlay;
 
+export interface PlanoMprOverlay {
+  rotulo: string;
+  eixo: Enums.OrientationAxis;
+}
+
 /** O que o overlay precisa saber do viewport a que pertence. */
 export interface FonteOverlay {
-  viewport(): Types.IStackViewport | undefined;
+  viewport(): Types.IStackViewport | Types.IVolumeViewport | undefined;
   pilha(): StackNode | null;
+  planoMpr?(): PlanoMprOverlay | undefined;
+  modoSlab?(): string | undefined;
 }
 
 export interface Overlay {
@@ -31,6 +39,18 @@ const CLASSE_CANTO: Record<Canto, string> = {
 /** Cada overlay criado: sua raiz no DOM e a função que atualiza o texto. */
 const overlays = new Map<HTMLElement, () => void>();
 let visivel = true;
+
+function posicaoPlanoMm(
+  viewport: Types.IVolumeViewport,
+  eixo: Enums.OrientationAxis,
+): number | undefined {
+  const fp = viewport.getCamera()?.focalPoint;
+  if (!fp) return undefined;
+  if (eixo === Enums.OrientationAxis.AXIAL) return fp[2];
+  if (eixo === Enums.OrientationAxis.CORONAL) return fp[1];
+  if (eixo === Enums.OrientationAxis.SAGITTAL) return fp[0];
+  return fp[2];
+}
 
 /** Cria os quatro cantos dentro de `celula` e devolve o controle do overlay. */
 export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay {
@@ -51,21 +71,69 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     if (!visivel) return;
     const viewport = fonte.viewport();
     const stack = fonte.pilha();
-    const indice = viewport?.getCurrentImageIdIndex() ?? 0;
-    const atual = stack?.instances[indice];
     const primeira = stack?.instances[0];
-    if (!viewport || !stack || !atual || !primeira) {
+    if (!viewport || !stack || !primeira) {
       for (const d of Object.values(cantos)) d.replaceChildren();
       return;
     }
+
+    const plano = fonte.planoMpr?.();
+    const rotuloModo = fonte.modoSlab?.();
+    let indice = 0;
+    let total = stack.instances.length;
+    let atual: InstanceMeta | undefined;
+    let slabAtual = 1;
+
+    if (plano && 'getSlabThickness' in viewport) {
+      total = Math.max(1, viewport.getNumberOfSlices() || stack.instances.length);
+      indice = Math.min(Math.max(viewport.getSliceIndex() ?? 0, 0), total - 1);
+      const base = stack.instances[Math.min(indice, stack.instances.length - 1)] ?? primeira;
+      slabAtual = viewport.getSlabThickness();
+      const posMm = posicaoPlanoMm(viewport, plano.eixo);
+      atual = {
+        ...base,
+        sliceThickness: slabAtual > 1 ? slabAtual : base.sliceThickness,
+        sliceLocation: posMm ?? base.sliceLocation,
+      };
+    } else {
+      indice = viewport.getCurrentImageIdIndex() ?? 0;
+      atual = stack.instances[indice];
+    }
+
+    if (!atual) {
+      for (const d of Object.values(cantos)) d.replaceChildren();
+      return;
+    }
+
     const texto = montarOverlay({
       primeira,
       atual,
       indice,
-      total: stack.instances.length,
-      voiRange: viewport.getProperties().voiRange,
+      total,
+      voiRange: viewport.getProperties()?.voiRange,
       zoom: viewport.getZoom(),
     });
+    if (plano) {
+      const partes: string[] = [];
+      if (plano.rotulo !== 'Original') partes.push(plano.rotulo);
+      if (rotuloModo && rotuloModo !== 'Normal') {
+        const mmFmt = slabAtual.toLocaleString('pt-BR', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 1,
+        });
+        partes.push(`${rotuloModo} (${mmFmt} mm)`);
+      } else if (slabAtual > 1) {
+        const mmFmt = slabAtual.toLocaleString('pt-BR', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 1,
+        });
+        partes.push(`Slab ${mmFmt} mm`);
+      }
+      if (partes.length > 0) {
+        texto.superiorEsquerdo.unshift(partes.join(' · '));
+      }
+    }
+
     for (const canto of Object.keys(cantos) as Canto[]) {
       cantos[canto].replaceChildren(
         ...texto[canto].map((linha) => {
@@ -79,6 +147,7 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
 
   function ligar(elemento: HTMLElement): void {
     elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, atualizar);
+    elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, atualizar);
     elemento.addEventListener(Enums.Events.VOI_MODIFIED, atualizar);
     elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, atualizar);
   }

@@ -1,6 +1,6 @@
 /**
  * Barra de ferramentas no topo: escolha da ferramenta do botão esquerdo, ações sobre
- * a imagem e presets de janela. Os mesmos comandos têm atalho de teclado (ver tools/atalhos).
+ * a imagem, layout/plano/MPR/slab e presets de janela. Os mesmos comandos têm atalho de teclado (ver tools/atalhos).
  */
 
 import {
@@ -9,6 +9,7 @@ import {
   botaoAtribuido,
   type Botao,
   definirBotao,
+  emModoMprFerramentas,
   espelhar,
   escolherFerramentaPrimaria,
   EVENTO_BOTOES_MUDARAM,
@@ -27,12 +28,18 @@ import { alternarAjuda } from '../tools/atalhos';
 import { VELOCIDADES_CINE } from '../viewer/cine';
 import {
   alternarCine,
+  alternarMpr,
   definirLayout,
+  definirModoSlabAtivo,
+  definirPlanoSlotAtivo,
+  definirSlabMpr,
   definirVelocidadeCine,
   EVENTO_ESTADO_VIEWPORTS,
   type EstadoViewports,
   LAYOUTS,
+  type ModoSlab,
   ORDEM_LAYOUTS,
+  type PlanoSlot,
 } from '../viewer/viewport2d';
 
 function botao(texto: string, dica: string, acao: () => void): HTMLButtonElement {
@@ -51,6 +58,24 @@ function separador(): HTMLElement {
   return s;
 }
 
+function formatarMm(mm: number): string {
+  return `${mm.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`;
+}
+
+const OPCOES_PLANO: Array<{ valor: PlanoSlot; rotulo: string }> = [
+  { valor: 'original', rotulo: 'Original' },
+  { valor: 'axial', rotulo: 'Axial' },
+  { valor: 'coronal', rotulo: 'Coronal' },
+  { valor: 'sagital', rotulo: 'Sagital' },
+];
+
+const OPCOES_MODO_SLAB: Array<{ valor: ModoSlab; rotulo: string }> = [
+  { valor: 'normal', rotulo: 'Normal' },
+  { valor: 'mip', rotulo: 'MIP' },
+  { valor: 'minip', rotulo: 'MinIP' },
+  { valor: 'media', rotulo: 'Média' },
+];
+
 /** Monta a barra dentro de `contentor` (o #ferramentas do index.html). */
 export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   contentor.replaceChildren();
@@ -66,6 +91,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       () => escolherFerramentaPrimaria(f.nome),
     );
     b.dataset.ferramenta = f.nome;
+    if (f.apenasMpr) b.dataset.apenasMpr = 'true';
     return b;
   });
   grupoFerramentas.append(...botoesFerramenta);
@@ -104,20 +130,79 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botao('Inverter', 'Inverter preto e branco', () => void inverter()),
     botao('Girar 90°', 'Girar a imagem 90° no sentido horário', () => void girar90()),
     botao('Espelhar', 'Espelhar na horizontal', () => void espelhar()),
-    botao('Restaurar', 'Restaurar janela, zoom, rotação e espelhamento', () => void restaurar()),
+    botao('Restaurar', 'Restaurar janela, zoom, rotação, espelhamento e crosshairs', () => void restaurar()),
   );
 
-  // Layout da grade e cine.
+  // Layout da grade, seletor de plano, modo de projeção (Normal/MIP/MinIP/Média), slab e MPR.
   const grupoLayout = document.createElement('div');
   grupoLayout.className = 'grupo-botoes';
   grupoLayout.setAttribute('role', 'group');
-  grupoLayout.setAttribute('aria-label', 'Layout dos viewports');
+  grupoLayout.setAttribute('aria-label', 'Layout dos viewports, plano, projeção e MPR');
   const botoesLayout = ORDEM_LAYOUTS.map((id) => {
     const b = botao(LAYOUTS[id].rotulo, `Layout ${LAYOUTS[id].rotulo} (tecla L alterna)`, () => void definirLayout(id));
     b.dataset.layout = id;
     return b;
   });
-  grupoLayout.append(...botoesLayout);
+
+  const rotuloPlano = document.createElement('label');
+  rotuloPlano.className = 'seletor-botao';
+  rotuloPlano.title = 'Mudar apenas o plano da sequência no viewport ativo, sem sair da grade';
+  rotuloPlano.textContent = 'Plano ';
+  const seletorPlano = document.createElement('select');
+  seletorPlano.setAttribute('aria-label', 'Plano do viewport ativo');
+  for (const op of OPCOES_PLANO) {
+    const o = document.createElement('option');
+    o.value = op.valor;
+    o.textContent = op.rotulo;
+    seletorPlano.append(o);
+  }
+  seletorPlano.addEventListener('change', () => {
+    void definirPlanoSlotAtivo(seletorPlano.value as PlanoSlot);
+  });
+  rotuloPlano.append(seletorPlano);
+
+  const rotuloModo = document.createElement('label');
+  rotuloModo.className = 'seletor-botao';
+  rotuloModo.title = 'Modo de projeção de slab (Normal, MIP, MinIP ou Média) no viewport ativo ou no MPR';
+  rotuloModo.textContent = 'Modo ';
+  const seletorModo = document.createElement('select');
+  seletorModo.setAttribute('aria-label', 'Modo de projeção do slab');
+  for (const op of OPCOES_MODO_SLAB) {
+    const o = document.createElement('option');
+    o.value = op.valor;
+    o.textContent = op.rotulo;
+    seletorModo.append(o);
+  }
+  seletorModo.addEventListener('change', () => {
+    void definirModoSlabAtivo(seletorModo.value as ModoSlab);
+  });
+  rotuloModo.append(seletorModo);
+
+  const controleSlab = document.createElement('label');
+  controleSlab.className = 'seletor-botao controle-slab';
+  controleSlab.title = 'Espessura de slab em milímetros (ou Ctrl + roda do mouse sobre a imagem)';
+  const textoSlab = document.createElement('span');
+  textoSlab.textContent = 'Slab ';
+  const sliderSlab = document.createElement('input');
+  sliderSlab.type = 'range';
+  sliderSlab.min = '0.5';
+  sliderSlab.max = '50';
+  sliderSlab.step = '0.5';
+  sliderSlab.value = '1';
+  sliderSlab.setAttribute('aria-label', 'Espessura de slab em milímetros');
+  const valorSlab = document.createElement('span');
+  valorSlab.className = 'valor-slab';
+  valorSlab.textContent = formatarMm(1);
+  sliderSlab.addEventListener('input', () => {
+    const mm = Number(sliderSlab.value);
+    valorSlab.textContent = formatarMm(mm);
+    definirSlabMpr(mm);
+  });
+  controleSlab.append(textoSlab, sliderSlab, valorSlab);
+
+  const botaoMpr = botao('MPR', 'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)', () => void alternarMpr());
+
+  grupoLayout.append(...botoesLayout, rotuloPlano, rotuloModo, controleSlab, botaoMpr);
 
   const grupoCine = document.createElement('div');
   grupoCine.className = 'grupo-botoes';
@@ -173,7 +258,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   /** Reflete na barra a ferramenta de cada botão do mouse (também quando muda por atalho). */
   function atualizarEstado(): void {
     const atual = ferramentaPrimariaAtual();
+    const mpr = emModoMprFerramentas();
     for (const b of botoesFerramenta) {
+      if (b.dataset.apenasMpr === 'true') {
+        b.hidden = !mpr;
+      }
       b.setAttribute('aria-pressed', String(b.dataset.ferramenta === atual));
     }
     for (const [botaoMouse, seletor] of campos) seletor.value = botaoAtribuido(botaoMouse);
@@ -182,11 +271,40 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
 
   function atualizarViewports(e: EstadoViewports): void {
-    for (const b of botoesLayout) b.setAttribute('aria-pressed', String(b.dataset.layout === e.layout));
+    for (const b of botoesLayout) {
+      b.setAttribute('aria-pressed', String(!e.mprAtivo && b.dataset.layout === e.layout));
+    }
+    seletorPlano.value = e.planoAtivo;
+    seletorPlano.disabled = e.mprAtivo || !e.mprDisponivel;
+
+    const podeVolume = e.mprAtivo || e.mprDisponivel;
+    seletorModo.value = e.modoSlabAtivo;
+    seletorModo.disabled = !podeVolume;
+    sliderSlab.disabled = !podeVolume;
+    sliderSlab.value = String(e.slabMm);
+    valorSlab.textContent = formatarMm(e.slabMm);
+
+    botaoMpr.setAttribute('aria-pressed', String(e.mprAtivo));
+    botaoMpr.disabled = !e.mprAtivo && !e.mprDisponivel;
+
+    botaoCine.disabled = e.mprAtivo || e.pilhaId === null;
     botaoCine.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
     botaoCine.setAttribute('aria-pressed', String(e.cineTocando));
     seletorFps.value = String(e.fps);
+    atualizarEstado();
   }
-  document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) => atualizarViewports((ev as CustomEvent<EstadoViewports>).detail));
-  atualizarViewports({ layout: '1x1', pilhaId: null, cineTocando: false, fps: 10 });
+  document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) =>
+    atualizarViewports((ev as CustomEvent<EstadoViewports>).detail),
+  );
+  atualizarViewports({
+    layout: '1x1',
+    pilhaId: null,
+    cineTocando: false,
+    fps: 10,
+    mprAtivo: false,
+    mprDisponivel: false,
+    planoAtivo: 'original',
+    modoSlabAtivo: 'normal',
+    slabMm: 1,
+  });
 }

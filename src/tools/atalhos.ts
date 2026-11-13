@@ -1,5 +1,5 @@
 /**
- * Atalhos de teclado do viewport 2D e a tela de ajuda (tecla ?).
+ * Atalhos de teclado do viewport (2D e MPR) e a tela de ajuda (tecla ?).
  */
 
 import {
@@ -11,19 +11,21 @@ import {
   rolarCortes,
 } from './grupo';
 import { alternarOverlay } from '../viewer/overlay';
-import { alternarCine, proximoLayout } from '../viewer/viewport2d';
+import { alternarCine, alternarMpr, proximoLayout } from '../viewer/viewport2d';
 
 const LINHAS_AJUDA: Array<[string, string]> = [
-  ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível por padrão)'],
+  ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível no 2D, crosshairs no MPR)'],
   ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
-  ['W S D A E M P', 'Botão esquerdo: janela/nível, passar cortes, distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
+  ['W S C D A E M P', 'Botão esquerdo: janela/nível, passar cortes, crosshairs (MPR), distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
+  ['R', 'Entra ou sai do modo MPR (axial, coronal e sagital)'],
+  ['Ctrl + roda', 'Ajusta a espessura do slab (mm) no viewport sob o cursor'],
   ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
   ['Home / End', 'Primeiro / último corte'],
-  ['Espaço', 'Toca ou pausa o cine'],
-  ['L', 'Alterna o layout: 1x1, 1x2, 2x2'],
+  ['Espaço', 'Toca ou pausa o cine (modo 2D)'],
+  ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2'],
   ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
   ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
-  ['Esc', 'Cancela a medida em andamento e volta a janela/nível'],
+  ['Esc', 'Cancela a medida em andamento e volta à ferramenta padrão'],
   ['Delete', 'Apaga a medida selecionada'],
   ['?', 'Mostra ou esconde esta ajuda'],
 ];
@@ -104,6 +106,10 @@ export function iniciarAtalhos(): void {
     }
     if (tecla === 'l') {
       void proximoLayout();
+      return;
+    }
+    if (tecla === 'r') {
+      void alternarMpr();
       return;
     }
     if (e.key === ' ') {

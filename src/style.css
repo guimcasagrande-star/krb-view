@@ -161,9 +161,17 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .msg-celula { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 12px; line-height: 1.8; color: var(--texto-fraco); pointer-events: none; }
 .msg-celula[hidden] { display: none; }
 .msg-celula .erro { color: var(--erro); font-weight: 600; }
+.aviso-volume { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: 80%; padding: 3px 10px; border-radius: 4px; background: rgba(20, 24, 28, 0.82); border: 1px solid var(--aviso); color: var(--aviso); font-size: 12px; text-align: center; pointer-events: none; }
+.aviso-volume[hidden] { display: none; }
 
 /* Miniaturas no painel */
 .serie .linha { align-items: center; }
 .serie .mini { flex: none; width: 40px; height: 40px; background: #000; border-radius: 3px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .serie .mini canvas { width: 100%; height: 100%; display: block; }
 .serie .mini-erro { color: var(--aviso); font-weight: 700; cursor: help; }
+
+/* Controle de espessura de slab no MPR */
+.controle-slab { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; }
+.controle-slab[hidden] { display: none; }
+.controle-slab input[type="range"] { width: 72px; accent-color: var(--destaque); cursor: pointer; }
+.controle-slab .valor-slab { min-width: 44px; font-variant-numeric: tabular-nums; color: var(--texto); }

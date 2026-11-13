@@ -1,5 +1,5 @@
 /**
- * Grupo de ferramentas do viewport 2D: mouse fixo (zoom, pan, rolagem), ferramenta
+ * Grupo de ferramentas do viewport (2D e MPR): mouse fixo (zoom, pan, rolagem), ferramenta
  * do botão esquerdo e ações sobre a imagem (inverter, girar, espelhar, presets, medidas).
  */
 
@@ -8,6 +8,7 @@ import {
   AngleTool,
   annotation,
   cancelActiveManipulations,
+  CrosshairsTool,
   EllipticalROITool,
   Enums as EnumsTools,
   LengthTool,
@@ -25,16 +26,26 @@ import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
 
+/** Cores das linhas de referência de cada plano no MPR (Axial, Coronal, Sagital). */
+export const CORES_MPR: Record<string, string> = {
+  'vp-0': '#38bdf8',
+  'vp-1': '#4ade80',
+  'vp-2': '#fbbf24',
+};
+
 export interface FerramentaPrimaria {
   nome: string;
   rotulo: string;
   /** Tecla de atalho (minúscula) que escolhe esta ferramenta para o botão esquerdo. */
   tecla: string;
+  /** Quando verdadeiro, só fica disponível no modo MPR. */
+  apenasMpr?: boolean;
 }
 
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w' },
   { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's' },
+  { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true },
   { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd' },
   { nome: AngleTool.toolName, rotulo: 'Ângulo', tecla: 'a' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e' },
@@ -107,13 +118,32 @@ export const PREDEFINICOES: Predefinicao[] = [
 ];
 
 let grupoCriado = false;
+let modoMprAtivo = false;
 
 /** Cria o grupo uma vez. Os viewports entram depois, cada um que for habilitado. */
 function criarGrupoFerramentas(): void {
   if (grupoCriado) return;
   const grupo = ToolGroupManager.createToolGroup(ID_GRUPO);
   if (!grupo) throw new Error('Não foi possível criar o grupo de ferramentas.');
-  for (const nome of TODAS_AS_FERRAMENTAS) grupo.addTool(nome);
+  for (const nome of TODAS_AS_FERRAMENTAS) {
+    if (nome === CrosshairsTool.toolName) {
+      grupo.addTool(nome, {
+        getReferenceLineColor: (viewportId: string) => CORES_MPR[viewportId] ?? '#38bdf8',
+        getReferenceLineControllable: () => true,
+        getReferenceLineDraggableRotatable: () => true,
+        getReferenceLineSlabThicknessControlsOn: () => true,
+        referenceLinesCenterGapRadius: 6,
+        centerPoint: {
+          enabled: true,
+          color: 'rgba(255, 255, 255, 0.9)',
+          size: 3.5,
+        },
+        viewportIndicators: true,
+      });
+    } else {
+      grupo.addTool(nome);
+    }
+  }
   grupoCriado = true;
   aplicarAtribuicoes();
 }
@@ -139,6 +169,10 @@ function aplicarAtribuicoes(): void {
   const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
   if (!grupo) return;
   for (const nome of TODAS_AS_FERRAMENTAS) {
+    if (nome === CrosshairsTool.toolName && !modoMprAtivo) {
+      grupo.setToolDisabled(nome);
+      continue;
+    }
     const bindings = (Object.keys(atribuicao) as Botao[])
       .filter((b) => atribuicao[b] === nome)
       .map((b) => ({ mouseButton: BOTAO_DO_MOUSE[b] }));
@@ -149,11 +183,39 @@ function aplicarAtribuicoes(): void {
   }
 }
 
+/**
+ * Liga ou desliga o CrosshairsTool ao entrar/sair do MPR.
+ * No MPR as linhas ficam sempre visíveis (Active quando selecionada ou Passive durante medidas).
+ */
+export function definirModoMprFerramentas(ativo: boolean): void {
+  modoMprAtivo = ativo;
+  if (ativo) {
+    atribuicao.esquerdo = CrosshairsTool.toolName;
+    aplicarAtribuicoes();
+    const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+    const inst = grupo?.getToolInstance(CrosshairsTool.toolName) as
+      | { computeToolCenter?: () => void }
+      | undefined;
+    inst?.computeToolCenter?.();
+  } else {
+    if (atribuicao.esquerdo === CrosshairsTool.toolName) {
+      atribuicao.esquerdo = WindowLevelTool.toolName;
+    }
+    aplicarAtribuicoes();
+  }
+  document.dispatchEvent(new CustomEvent(EVENTO_BOTOES_MUDARAM));
+}
+
+export function emModoMprFerramentas(): boolean {
+  return modoMprAtivo;
+}
+
 /** Disparado em `document` quando a ferramenta de algum botão do mouse muda (barra e atalhos). */
 export const EVENTO_BOTOES_MUDARAM = 'botoesMudaram';
 
 /** Escolhe a ferramenta de um botão. Vale mesmo antes do grupo existir. */
 export function definirBotao(botao: Botao, nome: string): void {
+  if (nome === CrosshairsTool.toolName && !modoMprAtivo) return;
   atribuicao[botao] = nome || null;
   aplicarAtribuicoes();
   document.dispatchEvent(new CustomEvent(EVENTO_BOTOES_MUDARAM));
@@ -172,21 +234,40 @@ export function ferramentaPrimariaAtual(): string {
   return botaoAtribuido('esquerdo');
 }
 
+export type Viewport2dOuVolume = Types.IStackViewport | Types.IVolumeViewport;
+
 /** Viewport ativo da grade, se ele mostra alguma série. */
-export async function viewportAtivo(): Promise<Types.IStackViewport | undefined> {
+export async function viewportAtivo(): Promise<Viewport2dOuVolume | undefined> {
   if (!estado.pilhaAtiva || !estado.idViewportAtivo) return undefined;
   const motor = await iniciarCornerstone();
-  return motor.getViewport<Types.IStackViewport>(estado.idViewportAtivo);
+  return motor.getViewport(estado.idViewportAtivo) as Viewport2dOuVolume | undefined;
+}
+
+/** Todos os viewports habilitados no motor. */
+async function obterViewportsHabilitados(): Promise<Viewport2dOuVolume[]> {
+  const motor = await iniciarCornerstone();
+  return motor.getViewports() as Viewport2dOuVolume[];
 }
 
 /** Ids de todos os viewports habilitados (os visíveis na grade). */
 async function viewportsHabilitados(): Promise<string[]> {
-  const motor = await iniciarCornerstone();
-  return motor.getViewports().map((v) => v.id);
+  const vps = await obterViewportsHabilitados();
+  return vps.map((v) => v.id);
 }
 
-/** Aplica uma ação ao viewport ativo, se houver série aberta. */
-async function comViewport(acao: (v: Types.IStackViewport) => void): Promise<void> {
+/** Aplica uma ação ao viewport ativo (ou aos 3 planos quando `todosNoMpr` é verdadeiro). */
+async function comViewport(
+  acao: (v: Viewport2dOuVolume) => void,
+  todosNoMpr = false,
+): Promise<void> {
+  if (modoMprAtivo && todosNoMpr) {
+    const vps = await obterViewportsHabilitados();
+    for (const v of vps) {
+      acao(v);
+      v.render();
+    }
+    return;
+  }
   const v = await viewportAtivo();
   if (!v) return;
   acao(v);
@@ -195,12 +276,12 @@ async function comViewport(acao: (v: Types.IStackViewport) => void): Promise<voi
 
 export function inverter(): Promise<void> {
   return comViewport((v) => {
-    v.setProperties({ invert: !v.getProperties().invert });
-  });
+    const atual = v.getProperties()?.invert ?? false;
+    v.setProperties({ invert: !atual });
+  }, true);
 }
 
-// Rotação e espelhamento do stack viewport passam por setViewPresentation.
-// setCamera ignora o campo rotation.
+// Rotação e espelhamento passam por setViewPresentation.
 export function girar90(): Promise<void> {
   return comViewport((v) => {
     const atual = v.getViewPresentation();
@@ -215,12 +296,19 @@ export function espelhar(): Promise<void> {
   });
 }
 
-/** Volta janela, zoom, pan, rotação e espelhamento ao estado inicial da série. */
-export function restaurar(): Promise<void> {
-  return comViewport((v) => {
+/** Volta janela, zoom, pan, rotação, espelhamento e crosshairs ao estado inicial. */
+export async function restaurar(): Promise<void> {
+  if (modoMprAtivo) {
+    const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+    const inst = grupo?.getToolInstance(CrosshairsTool.toolName) as
+      | { resetCrosshairs?: () => void }
+      | undefined;
+    inst?.resetCrosshairs?.();
+  }
+  await comViewport((v) => {
     v.resetProperties();
     v.resetCamera();
-  });
+  }, true);
 }
 
 /** Teclado: avança (delta > 0) ou volta (delta < 0) cortes no viewport ativo. */
@@ -233,7 +321,14 @@ export function rolarCortes(delta: number): Promise<void> {
 /** Teclado: vai ao primeiro ou ao último corte do viewport ativo. */
 export function irParaCorte(posicao: 'primeiro' | 'ultimo'): Promise<void> {
   return comViewport((v) => {
-    void v.setImageIdIndex(posicao === 'primeiro' ? 0 : v.getImageIds().length - 1);
+    if ('setImageIdIndex' in v) {
+      void v.setImageIdIndex(posicao === 'primeiro' ? 0 : v.getImageIds().length - 1);
+    } else {
+      const total = v.getNumberOfSlices();
+      const atual = v.getSliceIndex();
+      const alvo = posicao === 'primeiro' ? 0 : Math.max(0, total - 1);
+      if (alvo !== atual) v.scroll(alvo - atual);
+    }
   });
 }
 
@@ -244,30 +339,41 @@ export function aplicarPredefinicao(indice: number): Promise<void> {
     v.setProperties({
       voiRange: { lower: p.centro - p.largura / 2, upper: p.centro + p.largura / 2 },
     });
-  });
+  }, true);
 }
 
-/** Esc: cancela a medida em andamento, tira a seleção e volta à janela/nível. */
+/** Esc: cancela a medida em andamento, tira a seleção e volta à ferramenta padrão. */
 export async function cancelar(): Promise<void> {
   const motor = await iniciarCornerstone();
   for (const v of motor.getViewports()) {
     if (v.element instanceof HTMLDivElement) cancelActiveManipulations(v.element);
   }
   annotation.selection.deselectAnnotation();
-  escolherFerramentaPrimaria(WindowLevelTool.toolName);
+  escolherFerramentaPrimaria(modoMprAtivo ? CrosshairsTool.toolName : WindowLevelTool.toolName);
   await redesenhar();
 }
 
-/** Delete: apaga as medidas selecionadas. */
+/** Delete: apaga as medidas selecionadas (exceto o crosshair do MPR). */
 export async function apagarSelecionadas(): Promise<void> {
   const uids = annotation.selection.getAnnotationsSelected();
   if (uids.length === 0) return;
-  for (const uid of uids) annotation.state.removeAnnotation(uid);
+  for (const uid of uids) {
+    const anot = annotation.state.getAnnotation(uid);
+    if (anot?.metadata?.toolName === CrosshairsTool.toolName) continue;
+    annotation.state.removeAnnotation(uid);
+  }
   await redesenhar();
 }
 
 export async function limparMedidas(): Promise<void> {
-  annotation.state.removeAllAnnotations();
+  for (const f of FERRAMENTAS_PRIMARIAS) {
+    if (f.nome === CrosshairsTool.toolName) continue;
+    // Remove apenas anotações de ferramentas de medida, preservando os crosshairs do MPR.
+    const motor = await iniciarCornerstone();
+    for (const vp of motor.getViewports()) {
+      annotation.state.removeAnnotations(f.nome, vp.element);
+    }
+  }
   await redesenhar();
 }
 
@@ -280,6 +386,7 @@ async function redesenhar(): Promise<void> {
 export function escolherFerramentaPorTecla(tecla: string): boolean {
   const f = FERRAMENTAS_PRIMARIAS.find((p) => p.tecla === tecla);
   if (!f) return false;
+  if (f.apenasMpr && !modoMprAtivo) return false;
   escolherFerramentaPrimaria(f.nome);
   return true;
 }
