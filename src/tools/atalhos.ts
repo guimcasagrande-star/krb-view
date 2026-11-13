@@ -2,6 +2,7 @@
  * Atalhos de teclado do viewport (2D e MPR) e a tela de ajuda (tecla ?).
  */
 
+import { preferencias } from '../state/preferencias';
 import {
   aplicarPredefinicao,
   apagarSelecionadas,
@@ -10,23 +11,47 @@ import {
   irParaCorte,
   rolarCortes,
 } from './grupo';
+import { dispararAbrirArquivos, dispararAbrirPasta } from '../ui/abrirPasta';
 import { alternarOverlay } from '../viewer/overlay';
-import { alternarCine, alternarMpr, limparMirasLocalizador, proximoLayout } from '../viewer/viewport2d';
+import {
+  abrirCurvaPerfusaoAtiva,
+  alternarCine,
+  alternarMpr,
+  limparMirasLocalizador,
+  proximoLayout,
+} from '../viewer/viewport2d';
+
+/** Ações com tecla própria, configuráveis (as ferramentas ficam em FERRAMENTAS_PRIMARIAS). */
+export const ACOES_ATALHO: Array<{ id: string; rotulo: string; tecla: string }> = [
+  { id: 'overlay', rotulo: 'Mostrar/esconder texto nos cantos', tecla: 'o' },
+  { id: 'layout', rotulo: 'Alternar layout (1x1, 1x2, 2x2)', tecla: 'l' },
+  { id: 'mpr', rotulo: 'Entrar/sair do MPR', tecla: 'r' },
+];
+
+export function teclaDaAcao(id: string): string {
+  return preferencias().atalhos[`acao:${id}`] ?? ACOES_ATALHO.find((a) => a.id === id)?.tecla ?? '';
+}
 
 const LINHAS_AJUDA: Array<[string, string]> = [
+  ['Ctrl+Shift+O / Ctrl+O', 'Abrir pasta DICOM / Abrir arquivo(s) DICOM'],
   ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível no 2D, crosshairs no MPR)'],
-  ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
-  ['W S X C D A E M P', 'Botão esquerdo: janela/nível, passar cortes, ┼ localizar ponto (mesmo exame ou comparado), crosshairs (MPR), distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
+  ['Botões direito, meio e roda', 'Escolhidos no menu 🖱 Mouse da barra (padrão: zoom, pan e cortes)'],
+  ['S W H Z X C', 'Navegação: passar cortes, janela/nível, pan, zoom, ┼ localizar ponto, crosshairs (MPR)'],
+  ['D B Q N', 'Medidas lineares: distância, desvio linha média, proporção L1/L2 (razão), relação de estenose (%)'],
+  ['A K V T E M P', 'Ângulos e ROIs: ângulo (3 pts), ângulo de Cobb (4 pts), ângulo c/ eixo horiz./vert., seta, ROI elíptica, ROI mão livre, polilinha'],
+  ['Ctrl+Shift+E', 'Gerar curva tempo-intensidade / perfusão para as ROIs do corte'],
   ['R', 'Entra ou sai do modo MPR (axial, coronal e sagital)'],
   ['Ctrl + roda', 'Ajusta a espessura do slab (mm) no viewport sob o cursor'],
   ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
   ['Home / End', 'Primeiro / último corte'],
-  ['Espaço', 'Toca ou pausa o cine (modo 2D)'],
+  ['Espaço', 'Toca ou pausa o cine (ou rotação do MIP 3D)'],
   ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2'],
-  ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
+  ['1 a 9', 'Janelas predefinidas, na ordem da lista (editável em ⚙ Configurações)'],
+  ['⚙', 'Configurações: aparência das medidas, atalhos e janelas'],
   ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
   ['Esc', 'Cancela a medida em andamento, limpa a cruzinha (┼) e volta à ferramenta padrão'],
-  ['Delete', 'Apaga a medida selecionada'],
+  ['Clique na medida', 'Seleciona (Shift soma; com ferramenta de medida ativa, Ctrl+clique)'],
+  ['Delete / Backspace', 'Apaga a medida selecionada'],
   ['?', 'Mostra ou esconde esta ajuda'],
 ];
 
@@ -81,7 +106,30 @@ function digitandoEmCampo(alvo: EventTarget | null): boolean {
 /** Instala os atalhos uma vez. Ignora teclas quando o foco está em campo de texto. */
 export function iniciarAtalhos(): void {
   document.addEventListener('keydown', (e) => {
-    if (digitandoEmCampo(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (digitandoEmCampo(e.target)) return;
+
+    // Combinações com Ctrl / Cmd:
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'o' && e.shiftKey) {
+        e.preventDefault();
+        dispararAbrirPasta();
+        return;
+      }
+      if (k === 'o' && !e.shiftKey) {
+        e.preventDefault();
+        dispararAbrirArquivos();
+        return;
+      }
+      if (k === 'e' && e.shiftKey) {
+        e.preventDefault();
+        void abrirCurvaPerfusaoAtiva();
+        return;
+      }
+      return;
+    }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     if (e.key === 'Escape') {
       if (caixa?.open) {
@@ -92,7 +140,7 @@ export function iniciarAtalhos(): void {
       void cancelar();
       return;
     }
-    if (e.key === 'Delete') {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
       void apagarSelecionadas();
       return;
     }
@@ -101,15 +149,15 @@ export function iniciarAtalhos(): void {
       return;
     }
     const tecla = e.key.toLowerCase();
-    if (tecla === 'o') {
+    if (tecla === teclaDaAcao('overlay')) {
       alternarOverlay();
       return;
     }
-    if (tecla === 'l') {
+    if (tecla === teclaDaAcao('layout')) {
       void proximoLayout();
       return;
     }
-    if (tecla === 'r') {
+    if (tecla === teclaDaAcao('mpr')) {
       void alternarMpr();
       return;
     }
@@ -136,7 +184,7 @@ export function iniciarAtalhos(): void {
       return;
     }
     if (escolherFerramentaPorTecla(tecla)) return;
-    if (/^[1-6]$/.test(e.key)) {
+    if (/^[1-9]$/.test(e.key)) {
       void aplicarPredefinicao(Number(e.key) - 1);
     }
   });

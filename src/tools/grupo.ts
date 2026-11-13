@@ -20,9 +20,19 @@ import {
   WindowLevelTool,
   ZoomTool,
 } from '@cornerstonejs/tools';
+import { preferencias, type Janela } from '../state/preferencias';
 import { estado } from '../state/store';
+import { textoAngulo, textoDistancia, textoRoi } from './estiloMedidas';
+import { DesvioLinhaMediaTool } from './desvioLinhaMedia';
 import { FERRAMENTA_LOCALIZADOR_3D } from './localizador3d';
+import {
+  AnguloCobbTool,
+  AnguloReferenciaTool,
+  EstenoseTool,
+  ProporcaoLinearTool,
+} from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
+import { SetaTool } from './seta';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
@@ -41,18 +51,28 @@ export interface FerramentaPrimaria {
   tecla: string;
   /** Quando verdadeiro, só fica disponível no modo MPR. */
   apenasMpr?: boolean;
+  /** Categoria para agrupar na barra superior estilo RadiAnt. */
+  categoria: 'navegacao' | 'medida';
 }
 
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
-  { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w' },
-  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's' },
-  { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar', tecla: 'x' },
-  { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true },
-  { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd' },
-  { nome: AngleTool.toolName, rotulo: 'Ângulo', tecla: 'a' },
-  { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e' },
-  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm' },
-  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p' },
+  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's', categoria: 'navegacao' },
+  { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w', categoria: 'navegacao' },
+  { nome: PanTool.toolName, rotulo: 'Pan', tecla: 'h', categoria: 'navegacao' },
+  { nome: ZoomTool.toolName, rotulo: 'Zoom', tecla: 'z', categoria: 'navegacao' },
+  { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar', tecla: 'x', categoria: 'navegacao' },
+  { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true, categoria: 'navegacao' },
+  { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd', categoria: 'medida' },
+  { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'b', categoria: 'medida' },
+  { nome: ProporcaoLinearTool.toolName, rotulo: 'Proporção (razão L1/L2)', tecla: 'q', categoria: 'medida' },
+  { nome: EstenoseTool.toolName, rotulo: 'Relação de estenose (%)', tecla: 'n', categoria: 'medida' },
+  { nome: AngleTool.toolName, rotulo: 'Ângulo (3 pontos)', tecla: 'a', categoria: 'medida' },
+  { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb (4 pontos)', tecla: 'k', categoria: 'medida' },
+  { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo c/ eixo horiz./vert.', tecla: 'v', categoria: 'medida' },
+  { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
+  { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },
+  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm', categoria: 'medida' },
+  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p', categoria: 'medida' },
 ];
 
 /** Todas as ferramentas nativas do grupo Cornerstone, sem repetição. */
@@ -103,22 +123,17 @@ const atribuicao: Record<Botao, string | null> = {
   roda: StackScrollTool.toolName,
 };
 
-export interface Predefinicao {
-  rotulo: string;
-  /** Centro e largura, na convenção usual de TC. */
-  centro: number;
-  largura: number;
+export type Predefinicao = Janela;
+
+/** Janelas predefinidas (teclas 1 a 9 pela ordem); editáveis nas configurações. */
+export function predefinicoes(): Predefinicao[] {
+  return preferencias().janelas;
 }
 
-/** Ordem das teclas 1 a 6. */
-export const PREDEFINICOES: Predefinicao[] = [
-  { rotulo: 'Partes moles', centro: 40, largura: 400 },
-  { rotulo: 'Pulmão', centro: -600, largura: 1500 },
-  { rotulo: 'Osso', centro: 300, largura: 1500 },
-  { rotulo: 'Fígado', centro: 60, largura: 160 },
-  { rotulo: 'Cérebro', centro: 40, largura: 80 },
-  { rotulo: 'Mediastino', centro: 50, largura: 350 },
-];
+/** Tecla atual da ferramenta (a escolhida pelo usuário ou a padrão). */
+export function teclaDaFerramenta(f: FerramentaPrimaria): string {
+  return preferencias().atalhos[f.nome] ?? f.tecla;
+}
 
 let grupoCriado = false;
 let modoMprAtivo = false;
@@ -143,6 +158,12 @@ function criarGrupoFerramentas(): void {
         },
         viewportIndicators: true,
       });
+    } else if (nome === LengthTool.toolName) {
+      grupo.addTool(nome, { getTextLines: textoDistancia });
+    } else if (nome === AngleTool.toolName) {
+      grupo.addTool(nome, { getTextLines: textoAngulo });
+    } else if (nome === EllipticalROITool.toolName || nome === PlanarFreehandROITool.toolName) {
+      grupo.addTool(nome, { getTextLines: textoRoi });
     } else {
       grupo.addTool(nome);
     }
@@ -336,7 +357,7 @@ export function irParaCorte(posicao: 'primeiro' | 'ultimo'): Promise<void> {
 }
 
 export function aplicarPredefinicao(indice: number): Promise<void> {
-  const p = PREDEFINICOES[indice];
+  const p = predefinicoes()[indice];
   if (!p) return Promise.resolve();
   return comViewport((v) => {
     v.setProperties({
@@ -369,13 +390,13 @@ export async function apagarSelecionadas(): Promise<void> {
 }
 
 export async function limparMedidas(): Promise<void> {
-  for (const f of FERRAMENTAS_PRIMARIAS) {
-    if (f.nome === CrosshairsTool.toolName) continue;
-    // Remove apenas anotações de ferramentas de medida, preservando os crosshairs do MPR.
-    const motor = await iniciarCornerstone();
-    for (const vp of motor.getViewports()) {
-      annotation.state.removeAnnotations(f.nome, vp.element);
-    }
+  // Remove todas as anotações de ferramentas de medida, em qualquer corte, série ou viewport,
+  // preservando os crosshairs do MPR.
+  const nomes = new Set(FERRAMENTAS_PRIMARIAS.filter((f) => f.categoria === 'medida').map((f) => f.nome));
+  annotation.selection.deselectAnnotation();
+  for (const anot of annotation.state.getAllAnnotations()) {
+    const nome = anot.metadata?.toolName;
+    if (nome && nomes.has(nome) && anot.annotationUID) annotation.state.removeAnnotation(anot.annotationUID);
   }
   await redesenhar();
 }
@@ -387,7 +408,7 @@ async function redesenhar(): Promise<void> {
 
 /** Escolhe a ferramenta do botão esquerdo pela tecla de atalho. Devolve se achou. */
 export function escolherFerramentaPorTecla(tecla: string): boolean {
-  const f = FERRAMENTAS_PRIMARIAS.find((p) => p.tecla === tecla);
+  const f = FERRAMENTAS_PRIMARIAS.find((p) => teclaDaFerramenta(p) === tecla);
   if (!f) return false;
   if (f.apenasMpr && !modoMprAtivo) return false;
   escolherFerramentaPrimaria(f.nome);

@@ -6,14 +6,22 @@
 import { init as iniciarCore, RenderingEngine } from '@cornerstonejs/core';
 import { init as iniciarLoader } from '@cornerstonejs/dicom-image-loader';
 import { CrosshairsMprTool } from '../tools/crosshairsMpr';
+import { DesvioLinhaMediaTool } from '../tools/desvioLinhaMedia';
+import {
+  AnguloCobbTool,
+  AnguloReferenciaTool,
+  EstenoseTool,
+  ProporcaoLinearTool,
+} from '../tools/medidasAvancadas';
 import { MIPJumpToClickTool } from '../tools/mipRotatorio';
+import { DistanciaTool } from '../tools/estiloMedidas';
 import { PolilinhaTool } from '../tools/polilinha';
+import { SetaTool } from '../tools/seta';
 import {
   addTool,
   AngleTool,
   EllipticalROITool,
   init as iniciarTools,
-  LengthTool,
   PanTool,
   PlanarFreehandROITool,
   StackScrollTool,
@@ -48,8 +56,14 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       WindowLevelTool,
       ZoomTool,
       PanTool,
-      LengthTool,
+      DistanciaTool,
+      DesvioLinhaMediaTool,
+      ProporcaoLinearTool,
+      EstenoseTool,
       AngleTool,
+      AnguloCobbTool,
+      AnguloReferenciaTool,
+      SetaTool,
       EllipticalROITool,
       PlanarFreehandROITool,
       PolilinhaTool,

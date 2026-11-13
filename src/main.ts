@@ -1,4 +1,6 @@
 import { iniciarAtalhos } from './tools/atalhos';
+import { iniciarEstiloMedidas } from './tools/estiloMedidas';
+import { iniciarSelecaoFacil } from './tools/selecao';
 import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
@@ -27,6 +29,8 @@ const vazio = obter('vazio');
 configurarViewport2d({ contentor: obter('area-viewports') });
 iniciarBarraFerramentas(obter('ferramentas'));
 iniciarAtalhos();
+iniciarEstiloMedidas();
+iniciarSelecaoFacil(obter('area-viewports'));
 
 iniciarAbrirPasta(
   {

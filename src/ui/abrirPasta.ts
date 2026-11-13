@@ -7,6 +7,7 @@
 import { buildIndex, type DicomIndex } from '../io/organize';
 import { readHeaderFromBlob } from '../io/readHeader';
 import type { InstanceMeta } from '../io/types';
+import { extrairArquivosDoZip } from './leitorZip';
 
 export const LEITURAS_SIMULTANEAS = 8;
 
@@ -223,7 +224,45 @@ function mostrarResumo(resumo: HTMLElement, r: ResultadoAbertura): void {
   resumo.append(detalhes);
 }
 
-/** Liga os controles, acumula pastas abertas e chama `aoConcluir` com o índice unificado. */
+async function expandirCandidatosZip(candidatos: Candidato[]): Promise<Candidato[]> {
+  const saida: Candidato[] = [];
+  for (const c of candidatos) {
+    if (c.path.toLowerCase().endsWith('.zip')) {
+      const arqZip = await c.obter();
+      const prefixo = c.path.replace(/\.zip$/i, '');
+      const extraidos = await extrairArquivosDoZip(arqZip, prefixo);
+      for (const ex of extraidos) {
+        saida.push({ path: ex.caminho, obter: async () => ex.arquivo });
+      }
+    } else {
+      saida.push(c);
+    }
+  }
+  return saida;
+}
+
+let acaoAbrirPastaGlobal: (() => void) | null = null;
+let acaoAbrirArquivosGlobal: (() => void) | null = null;
+let acaoAbrirZipGlobal: (() => void) | null = null;
+let acaoLimparListaGlobal: (() => void) | null = null;
+
+export function dispararAbrirPasta(): void {
+  acaoAbrirPastaGlobal?.();
+}
+
+export function dispararAbrirArquivos(): void {
+  acaoAbrirArquivosGlobal?.();
+}
+
+export function dispararAbrirZip(): void {
+  acaoAbrirZipGlobal?.();
+}
+
+export function dispararLimparLista(): void {
+  acaoLimparListaGlobal?.();
+}
+
+/** Liga os controles, acumula pastas/arquivos/ZIPs abertos e chama `aoConcluir` com o índice unificado. */
 export function iniciarAbrirPasta(
   el: ElementosAbrirPasta,
   aoConcluir: (resultado: ResultadoAbertura) => void,
@@ -231,6 +270,19 @@ export function iniciarAbrirPasta(
 ): void {
   let ocupado = false;
   let acumulado: ResultadoAbertura | null = null;
+
+  const entradaArquivos = document.createElement('input');
+  entradaArquivos.type = 'file';
+  entradaArquivos.multiple = true;
+  entradaArquivos.hidden = true;
+  document.body.append(entradaArquivos);
+
+  const entradaZip = document.createElement('input');
+  entradaZip.type = 'file';
+  entradaZip.accept = '.zip,application/zip';
+  entradaZip.multiple = true;
+  entradaZip.hidden = true;
+  document.body.append(entradaZip);
 
   function atualizarBotaoLimpar(): void {
     if (el.botaoLimpar) {
@@ -249,7 +301,12 @@ export function iniciarAbrirPasta(
     el.progresso.max = 1;
     el.progresso.value = 0;
     try {
-      const candidatos = await coletar();
+      const brutos = await coletar();
+      const temZip = brutos.some((c) => c.path.toLowerCase().endsWith('.zip'));
+      if (temZip) {
+        el.resumo.textContent = 'Descompactando arquivo(s) ZIP…';
+      }
+      const candidatos = await expandirCandidatosZip(brutos);
       el.resumo.textContent = `Lendo ${candidatos.length} arquivos…`;
       const resultado = await indexarCandidatos(
         candidatos,
@@ -268,7 +325,7 @@ export function iniciarAbrirPasta(
       el.resumo.replaceChildren();
       const div = document.createElement('div');
       div.className = 'erro';
-      div.textContent = `Não foi possível abrir a pasta: ${mensagemDeErro(e)}`;
+      div.textContent = `Não foi possível abrir os arquivos: ${mensagemDeErro(e)}`;
       el.resumo.append(div);
     } finally {
       el.progresso.hidden = true;
@@ -279,23 +336,25 @@ export function iniciarAbrirPasta(
     }
   }
 
-  el.botaoLimpar?.addEventListener('click', () => {
+  function limparLista(): void {
     if (ocupado) return;
     acumulado = null;
     el.resumo.replaceChildren();
     atualizarBotaoLimpar();
     aoLimpar?.();
-  });
+  }
 
-  function abrirPorEntrada(): void {
+  el.botaoLimpar?.addEventListener('click', limparLista);
+
+  function abrirPorEntradaPasta(): void {
     el.entradaPasta.value = '';
     el.entradaPasta.click();
   }
 
-  el.botao.addEventListener('click', () => {
+  function abrirPastaNativaOuAlternativa(): void {
     const seletor = seletorNativo();
     if (!seletor) {
-      abrirPorEntrada();
+      abrirPorEntradaPasta();
       return;
     }
     void (async () => {
@@ -306,7 +365,7 @@ export function iniciarAbrirPasta(
         if (e instanceof DOMException && e.name === 'AbortError') return; // usuário cancelou
         // Seletor indisponível (ex.: navegador embutido): cai para o <input webkitdirectory>.
         el.resumo.textContent = `Seletor nativo indisponível (${mensagemDeErro(e)}). Usando o seletor alternativo.`;
-        abrirPorEntrada();
+        abrirPorEntradaPasta();
         return;
       }
       await processar(async () => {
@@ -315,9 +374,25 @@ export function iniciarAbrirPasta(
         return saida;
       });
     })();
-  });
+  }
 
-  el.botaoAlternativo.addEventListener('click', abrirPorEntrada);
+  function abrirArquivosDicom(): void {
+    entradaArquivos.value = '';
+    entradaArquivos.click();
+  }
+
+  function abrirArquivosZip(): void {
+    entradaZip.value = '';
+    entradaZip.click();
+  }
+
+  acaoAbrirPastaGlobal = abrirPastaNativaOuAlternativa;
+  acaoAbrirArquivosGlobal = abrirArquivosDicom;
+  acaoAbrirZipGlobal = abrirArquivosZip;
+  acaoLimparListaGlobal = limparLista;
+
+  el.botao.addEventListener('click', abrirPastaNativaOuAlternativa);
+  el.botaoAlternativo.addEventListener('click', abrirPorEntradaPasta);
 
   el.entradaPasta.addEventListener('change', () => {
     const arquivos = Array.from(el.entradaPasta.files ?? []);
@@ -327,8 +402,19 @@ export function iniciarAbrirPasta(
     );
   });
 
-  // Arrastar e soltar. Os dois eventos precisam de preventDefault para o navegador
-  // não abrir o arquivo solto.
+  entradaArquivos.addEventListener('change', () => {
+    const arquivos = Array.from(entradaArquivos.files ?? []);
+    if (arquivos.length === 0) return;
+    void processar(async () => arquivos.map((f) => ({ path: f.name, obter: async () => f })));
+  });
+
+  entradaZip.addEventListener('change', () => {
+    const arquivos = Array.from(entradaZip.files ?? []);
+    if (arquivos.length === 0) return;
+    void processar(async () => arquivos.map((f) => ({ path: f.name, obter: async () => f })));
+  });
+
+  // Arrastar e soltar (pastas, arquivos DICOM soltos ou arquivos .zip):
   el.zonaDrop.addEventListener('dragover', (ev) => {
     if (!ev.dataTransfer?.types.includes('Files')) return;
     ev.preventDefault();
@@ -340,8 +426,6 @@ export function iniciarAbrirPasta(
   el.zonaDrop.addEventListener('drop', (ev) => {
     ev.preventDefault();
     document.body.classList.remove('arrastando');
-    // webkitGetAsEntry precisa ser chamado agora, antes de qualquer await:
-    // depois disso o DataTransfer fica vazio.
     const entradas: FileSystemEntry[] = [];
     for (const item of Array.from(ev.dataTransfer?.items ?? [])) {
       if (item.kind !== 'file') continue;

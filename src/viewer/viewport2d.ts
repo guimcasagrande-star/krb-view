@@ -22,6 +22,7 @@ import {
   definirModoMprFerramentas,
   removerViewportDoGrupo,
 } from '../tools/grupo';
+import { abrirDialogoCurvaPerfusao } from '../tools/curvaPerfusao';
 import { desenharMiraNoCanvas, FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
 import {
   aplicarCameraMipRotatorio,
@@ -1474,6 +1475,63 @@ export function alternarSincronizacaoZoomPanComparar(): void {
   zoomPanCompararLigado = !zoomPanCompararLigado;
   atualizarSincronizadoresCornerstoneComparar();
   sincronizar();
+}
+
+/**
+ * Abre o gráfico de Curva Tempo-Intensidade / Perfusão (`Ctrl+Shift+E`) para as ROIs
+ * desenhadas no viewport ativo (ou ROI automática no ponto `┼` / centro).
+ */
+export async function abrirCurvaPerfusaoAtiva(): Promise<void> {
+  const slot = slots[ativo] ?? slots[0];
+  if (!slot?.pilha || !slot.viewport || !slot.habilitado) return;
+  let indiceCorte = 0;
+  if ('setImageIdIndex' in slot.viewport) {
+    try {
+      indiceCorte = slot.viewport.getCurrentImageIdIndex();
+    } catch {
+      indiceCorte = 0;
+    }
+  } else {
+    try {
+      const fp = slot.viewport.getCamera()?.focalPoint;
+      if (fp) indiceCorte = indiceCorteMaisProximoDoPonto(slot.pilha, fp);
+    } catch {
+      indiceCorte = 0;
+    }
+  }
+
+  await abrirDialogoCurvaPerfusao({
+    elementoViewport: slot.elemento,
+    pilhaAtiva: slot.pilha,
+    indiceCorteAtual: indiceCorte,
+    pontoMiraMundo: slot.pontoMiraMundo,
+    aoSelecionarQuadro: (pilhaAlvo, idxCorte) => {
+      const s = slots[ativo] ?? slots[0];
+      if (!s) return;
+      if (s.pilha?.id === pilhaAlvo.id && s.viewport) {
+        if ('setImageIdIndex' in s.viewport) {
+          void s.viewport.setImageIdIndex(idxCorte).then(() => {
+            s.viewport?.render();
+            s.overlay.atualizar();
+          });
+        } else if ('jumpToWorld' in s.viewport) {
+          const pos = pilhaAlvo.instances[idxCorte]?.imagePositionPatient;
+          if (pos) {
+            s.viewport.jumpToWorld([pos[0], pos[1], pos[2]]);
+            s.viewport.render();
+            s.overlay.atualizar();
+          }
+        }
+      } else {
+        void abrirPilha2d(pilhaAlvo).then(() => {
+          const vp = (slots[ativo] ?? slots[0])?.viewport;
+          if (vp && 'setImageIdIndex' in vp) {
+            void vp.setImageIdIndex(idxCorte);
+          }
+        });
+      }
+    },
+  });
 }
 
 /** Abre a pilha no viewport ativo (ou nos 3 planos se já estiver em MPR e a pilha suportar volume). */

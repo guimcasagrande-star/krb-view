@@ -5,7 +5,9 @@
  * (coordenadas do paciente, já em milímetros).
  */
 
-import { getEnabledElement, utilities as coreUtilities, type Types as CoreTypes } from '@cornerstonejs/core';
+import { getEnabledElement, type Types as CoreTypes } from '@cornerstonejs/core';
+import { medidas } from '../state/preferencias';
+import { formatarComprimentoMm } from './formatoMedidas';
 import { AnnotationTool, annotation as anotacoes, drawing, Enums, utilities, type Types } from '@cornerstonejs/tools';
 
 type Ponto = [number, number, number];
@@ -204,7 +206,7 @@ export class PolilinhaTool extends AnnotationTool {
         width: estilo.lineWidth as number,
         lineDash: estilo.lineDash as string,
       });
-      const texto = `Comprimento: ${coreUtilities.roundNumber(comprimentoPolilinha(pontos))} mm`;
+      const texto = `Comprimento: ${formatarComprimentoMm(comprimentoPolilinha(pontos), medidas())}`;
       this.renderLinkedTextBoxAnnotation({
         enabledElement,
         svgDrawingHelper,

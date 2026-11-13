@@ -1,6 +1,9 @@
 /**
- * Barra de ferramentas no topo: escolha da ferramenta do botão esquerdo, ações sobre
- * a imagem, layout/plano/MPR/slab e presets de janela. Os mesmos comandos têm atalho de teclado (ver tools/atalhos).
+ * Barra de ferramentas agrupada estilo RadiAnt:
+ * - Botões divididos (ação principal + seta `▾` com menu suspenso) para Abrir (Pasta, Arquivo, ZIP),
+ *   Dividir tela (1x1, 1x2, 2x2), Sincronização/Comparar, Anotações (A), Navegação,
+ *   Janela/Nível + Presets, Medidas (Distância, Desvio de linha média, Ângulo, Seta, ROIs,
+ *   Polilinha e Curva Tempo-Intensidade / Perfusão), Transformações, Cine, MPR e MIP 3D.
  */
 
 import {
@@ -15,18 +18,30 @@ import {
   EVENTO_BOTOES_MUDARAM,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
+  type FerramentaPrimaria,
   girar90,
   inverter,
   limparMedidas,
   OPCOES_RODA,
   OPCOES_SECUNDARIAS,
   type OpcaoBotao,
-  PREDEFINICOES,
+  predefinicoes,
   restaurar,
+  teclaDaFerramenta,
 } from '../tools/grupo';
+import { EVENTO_PREFERENCIAS } from '../state/preferencias';
+import { abrirConfiguracoes } from './configuracoes';
 import { alternarAjuda } from '../tools/atalhos';
-import { VELOCIDADES_CINE } from '../viewer/cine';
 import {
+  dispararAbrirArquivos,
+  dispararAbrirPasta,
+  dispararAbrirZip,
+  dispararLimparLista,
+} from './abrirPasta';
+import { VELOCIDADES_CINE } from '../viewer/cine';
+import { alternarOverlay } from '../viewer/overlay';
+import {
+  abrirCurvaPerfusaoAtiva,
   alternarCadeadoRolagemComparar,
   alternarCine,
   alternarMipRotatorio,
@@ -46,6 +61,7 @@ import {
   type ModoSlab,
   ORDEM_LAYOUTS,
   type PlanoSlot,
+  proximoLayout,
   zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
 
@@ -89,41 +105,402 @@ const OPCOES_MODO_SLAB: Array<{ valor: ModoSlab; rotulo: string }> = [
   { valor: 'media', rotulo: 'Média' },
 ];
 
+const todosMenusAbertos = new Set<HTMLElement>();
+
+function fecharTodosMenus(exceto?: HTMLElement): void {
+  for (const m of todosMenusAbertos) {
+    if (m !== exceto) m.hidden = true;
+  }
+}
+
+/**
+ * Cria um controle com menu suspenso (`▾`):
+ * - Se `acaoPrincipal` for passada, renderiza um botão dividido (`[Botão principal][▾]`).
+ * - Caso contrário, clicar no próprio botão abre/fecha o menu.
+ */
+function criarMenuSuspenso(opcoes: {
+  rotulo: string;
+  dica: string;
+  acaoPrincipal?: () => void;
+}): {
+  contentor: HTMLDivElement;
+  botaoPrincipal: HTMLButtonElement;
+  botaoSeta: HTMLButtonElement;
+  painel: HTMLDivElement;
+  fechar: () => void;
+} {
+  const contentor = document.createElement('div');
+  contentor.className = 'menu-suspenso';
+
+  const botaoPrincipal = document.createElement('button');
+  botaoPrincipal.type = 'button';
+  botaoPrincipal.className = 'btn-menu-principal';
+  botaoPrincipal.textContent = opcoes.rotulo;
+  botaoPrincipal.title = opcoes.dica;
+
+  const botaoSeta = document.createElement('button');
+  botaoSeta.type = 'button';
+  botaoSeta.className = 'btn-menu-seta';
+  botaoSeta.textContent = '▾';
+  botaoSeta.title = `Mais opções de ${opcoes.rotulo}`;
+
+  const painel = document.createElement('div');
+  painel.className = 'painel-menu-suspenso';
+  painel.hidden = true;
+  todosMenusAbertos.add(painel);
+
+  const alternarPainel = (e: MouseEvent) => {
+    e.stopPropagation();
+    const abrir = painel.hidden;
+    fecharTodosMenus(painel);
+    painel.hidden = !abrir;
+  };
+
+  if (opcoes.acaoPrincipal) {
+    botaoPrincipal.addEventListener('click', () => {
+      fecharTodosMenus();
+      opcoes.acaoPrincipal!();
+    });
+    botaoSeta.addEventListener('click', alternarPainel);
+    contentor.append(botaoPrincipal, botaoSeta, painel);
+  } else {
+    botaoPrincipal.textContent = `${opcoes.rotulo} ▾`;
+    botaoPrincipal.addEventListener('click', alternarPainel);
+    contentor.append(botaoPrincipal, painel);
+  }
+
+  painel.addEventListener('click', (e) => e.stopPropagation());
+
+  return {
+    contentor,
+    botaoPrincipal,
+    botaoSeta,
+    painel,
+    fechar: () => {
+      painel.hidden = true;
+    },
+  };
+}
+
+function itemMenu(
+  rotulo: string,
+  atalho: string | undefined,
+  acao: () => void,
+  fecharMenu: () => void,
+): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'item-menu-suspenso';
+  const spanTexto = document.createElement('span');
+  spanTexto.textContent = rotulo;
+  b.append(spanTexto);
+  if (atalho) {
+    const kbd = document.createElement('kbd');
+    kbd.textContent = atalho;
+    b.append(kbd);
+  }
+  b.addEventListener('click', () => {
+    fecharMenu();
+    acao();
+  });
+  return b;
+}
+
+function divisorMenu(): HTMLHRElement {
+  const hr = document.createElement('hr');
+  hr.className = 'divisor-menu';
+  return hr;
+}
+
 /** Monta a barra dentro de `contentor` (o #ferramentas do index.html). */
 export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   contentor.replaceChildren();
-  const grupoFerramentas = document.createElement('div');
-  grupoFerramentas.className = 'grupo-botoes';
-  grupoFerramentas.setAttribute('role', 'group');
-  grupoFerramentas.setAttribute('aria-label', 'Ferramenta do botão esquerdo');
 
-  const botoesFerramenta = FERRAMENTAS_PRIMARIAS.map((f) => {
-    const b = botao(
-      f.rotulo,
-      `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${f.tecla.toUpperCase()})`,
-      () => escolherFerramentaPrimaria(f.nome),
-    );
-    b.dataset.ferramenta = f.nome;
-    if (f.apenasMpr) b.dataset.apenasMpr = 'true';
-    return b;
+  document.addEventListener('click', () => fecharTodosMenus());
+
+  // 1. Menu Abrir (Pasta, Arquivos DICOM, Arquivo ZIP, Limpar lista)
+  const menuAbrir = criarMenuSuspenso({
+    rotulo: '📂 Abrir',
+    dica: 'Abrir pasta DICOM (Ctrl+Shift+O) ou escolher arquivo/ZIP na seta ao lado',
+    acaoPrincipal: () => dispararAbrirPasta(),
   });
-  grupoFerramentas.append(...botoesFerramenta);
+  menuAbrir.painel.append(
+    itemMenu('Abrir pasta DICOM…', 'Ctrl+Shift+O', () => dispararAbrirPasta(), menuAbrir.fechar),
+    itemMenu('Abrir arquivo(s) DICOM…', 'Ctrl+O', () => dispararAbrirArquivos(), menuAbrir.fechar),
+    itemMenu('Abrir arquivo ZIP…', undefined, () => dispararAbrirZip(), menuAbrir.fechar),
+    divisorMenu(),
+    itemMenu('Limpar lista de exames', undefined, () => dispararLimparLista(), menuAbrir.fechar),
+  );
 
-  // Botões direito, meio e roda: escolha de ferramenta por seletor.
-  const grupoMouse = document.createElement('div');
-  grupoMouse.className = 'grupo-botoes';
-  const campos: Array<[Botao, HTMLSelectElement]> = [];
+  // 2. Dividir tela (Split screen: 1x1, 1x2, 2x2) + Anotações (A) + Comparar (🔗)
+  const grupoTela = document.createElement('div');
+  grupoTela.className = 'grupo-botoes';
+
+  const menuLayout = criarMenuSuspenso({
+    rotulo: '⊞ 1x1',
+    dica: 'Alternar divisão de tela (tecla L)',
+    acaoPrincipal: () => void proximoLayout(),
+  });
+  const itensLayout = ORDEM_LAYOUTS.map((id) => {
+    const item = itemMenu(
+      `Grade ${LAYOUTS[id].rotulo}`,
+      'L',
+      () => void definirLayout(id),
+      menuLayout.fechar,
+    );
+    item.dataset.layout = id;
+    return item;
+  });
+  menuLayout.painel.append(...itensLayout);
+
+  const menuComparar = criarMenuSuspenso({
+    rotulo: '🔗 Comparar',
+    dica: 'Modo Comparar: dois exames lado a lado (ATUAL × ANTERIOR) com rolagem sincronizada',
+    acaoPrincipal: () => void alternarModoComparar(),
+  });
+  const itemCadeadoMenu = itemMenu(
+    '🔒 Rolagem sincronizada por posição',
+    undefined,
+    () => alternarCadeadoRolagemComparar(),
+    menuComparar.fechar,
+  );
+  const itemJanelaMenu = itemMenu(
+    '🔗 Sincronizar Janela / Nível',
+    undefined,
+    () => alternarSincronizacaoJanelaComparar(),
+    menuComparar.fechar,
+  );
+  const itemZoomMenu = itemMenu(
+    '🔗 Sincronizar Zoom / Pan',
+    undefined,
+    () => alternarSincronizacaoZoomPanComparar(),
+    menuComparar.fechar,
+  );
+  const itemZerarMenu = itemMenu(
+    'Zerar deslocamento entre exames',
+    undefined,
+    () => zerarVinculoRolagemComparar(),
+    menuComparar.fechar,
+  );
+  menuComparar.painel.append(
+    itemMenu('Ativar / sair do modo Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar),
+    divisorMenu(),
+    itemCadeadoMenu,
+    itemJanelaMenu,
+    itemZoomMenu,
+    divisorMenu(),
+    itemZerarMenu,
+  );
+
+  // Controles rápidos visíveis quando o modo Comparar está ativo:
+  const grupoCompararInline = document.createElement('div');
+  grupoCompararInline.className = 'grupo-botoes controles-comparar';
+  grupoCompararInline.hidden = true;
+  const botaoCadeadoRolagem = botao(
+    '🔒 Rolagem',
+    'Ligar ou desligar o vínculo de rolagem por posição (ao religar, recalcula o deslocamento pelos cortes atuais)',
+    () => alternarCadeadoRolagemComparar(),
+  );
+  const rotuloOffsetComparar = document.createElement('span');
+  rotuloOffsetComparar.className = 'offset-comparar';
+  rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
+  const botaoZerarOffset = botao(
+    'Zerar',
+    'Restaurar o alinhamento inicial automático entre os dois exames',
+    () => zerarVinculoRolagemComparar(),
+  );
+  grupoCompararInline.append(botaoCadeadoRolagem, rotuloOffsetComparar, botaoZerarOffset);
+
+  const botaoOverlay = botao(
+    'A',
+    'Mostrar ou esconder textos e informações nos cantos da imagem (tecla O)',
+    () => alternarOverlay(),
+  );
+
+  grupoTela.append(
+    menuAbrir.contentor,
+    menuLayout.contentor,
+    menuComparar.contentor,
+    grupoCompararInline,
+    botaoOverlay,
+  );
+
+  // 3. Ferramentas de Navegação (Cortes, Janela/Nível + Presets, Pan, Zoom, ┼ Localizar, Crosshairs)
+  const grupoNavegacao = document.createElement('div');
+  grupoNavegacao.className = 'grupo-botoes';
+  grupoNavegacao.setAttribute('role', 'group');
+  grupoNavegacao.setAttribute('aria-label', 'Navegação e janela');
+
+  const ferramentasNav = FERRAMENTAS_PRIMARIAS.filter((f) => f.categoria === 'navegacao');
+  const botoesFerramenta: HTMLButtonElement[] = [];
+
+  for (const f of ferramentasNav) {
+    if (f.nome === 'WindowLevel') {
+      // Janela/nível como botão dividido com todos os presets de janela no menu suspenso:
+      const menuJanela = criarMenuSuspenso({
+        rotulo: f.rotulo,
+        dica: `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${teclaDaFerramenta(f).toUpperCase()})`,
+        acaoPrincipal: () => escolherFerramentaPrimaria(f.nome),
+      });
+      menuJanela.botaoPrincipal.dataset.ferramenta = f.nome;
+      botoesFerramenta.push(menuJanela.botaoPrincipal);
+
+      const montarJanelas = (): void => {
+        menuJanela.painel.replaceChildren();
+        predefinicoes().forEach((p, i) => {
+          menuJanela.painel.append(
+            itemMenu(
+              `${p.rotulo} (WL ${p.centro} / WW ${p.largura})`,
+              String(i + 1),
+              () => void aplicarPredefinicao(i),
+              menuJanela.fechar,
+            ),
+          );
+        });
+        menuJanela.painel.append(
+          divisorMenu(),
+          itemMenu('Inverter preto e branco', undefined, () => void inverter(), menuJanela.fechar),
+          itemMenu('Editar janelas…', undefined, () => abrirConfiguracoes('janelas'), menuJanela.fechar),
+        );
+      };
+      montarJanelas();
+      document.addEventListener(EVENTO_PREFERENCIAS, montarJanelas);
+      grupoNavegacao.append(menuJanela.contentor);
+    } else {
+      const b = botao(
+        f.rotulo,
+        `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${teclaDaFerramenta(f).toUpperCase()})`,
+        () => escolherFerramentaPrimaria(f.nome),
+      );
+      b.dataset.ferramenta = f.nome;
+      if (f.apenasMpr) b.dataset.apenasMpr = 'true';
+      botoesFerramenta.push(b);
+      grupoNavegacao.append(b);
+    }
+  }
+
+  // 4. Menu agrupado de Medidas e Ferramentas Avançadas (estilo RadiAnt)
+  const ferramentasMedida = FERRAMENTAS_PRIMARIAS.filter((f) => f.categoria === 'medida');
+  let ultimaMedidaEscolhida: FerramentaPrimaria = ferramentasMedida[0]!;
+
+  const menuMedidas = criarMenuSuspenso({
+    rotulo: `📏 ${ultimaMedidaEscolhida.rotulo}`,
+    dica: 'Ativar ferramenta de medida atual ou abrir a lista de medidas e curva de perfusão na seta ao lado',
+    acaoPrincipal: () => escolherFerramentaPrimaria(ultimaMedidaEscolhida.nome),
+  });
+
+  const iconesMedida: Record<string, string> = {
+    Length: '📏',
+    MidlineShift: '⊢',
+    LinearRatio: '⚖',
+    StenosisRatio: '٪',
+    Angle: '📐',
+    CobbAngleCustom: '⦜',
+    ReferenceAngle: '∟',
+    ArrowCustom: '↗',
+    EllipticalROI: '⭕',
+    PlanarFreehandROI: '✏',
+    Polyline: '〰',
+  };
+
+  for (const f of ferramentasMedida) {
+    const icone = iconesMedida[f.nome] ?? '📏';
+    const item = itemMenu(
+      `${icone} ${f.rotulo}`,
+      teclaDaFerramenta(f).toUpperCase(),
+      () => {
+        ultimaMedidaEscolhida = f;
+        escolherFerramentaPrimaria(f.nome);
+      },
+      menuMedidas.fechar,
+    );
+    item.dataset.ferramenta = f.nome;
+    botoesFerramenta.push(item);
+    menuMedidas.painel.append(item);
+  }
+
+  menuMedidas.painel.append(
+    divisorMenu(),
+    itemMenu(
+      '📈 Gerar curva tempo-intensidade (Perfusão)',
+      'Ctrl+Shift+E',
+      () => void abrirCurvaPerfusaoAtiva(),
+      menuMedidas.fechar,
+    ),
+    divisorMenu(),
+    itemMenu('Apagar medida selecionada', 'Del', () => void apagarSelecionadas(), menuMedidas.fechar),
+    itemMenu('Aparência e texto das medidas…', undefined, () => abrirConfiguracoes('medidas'), menuMedidas.fechar),
+    itemMenu(
+      'Apagar todas as medidas',
+      undefined,
+      () => {
+        void limparMedidas();
+      },
+      menuMedidas.fechar,
+    ),
+  );
+
+  // Botão rápido direto para Curva de Perfusão também acessível ao lado do menu de medidas:
+  const botaoCurvaRapido = botao(
+    '📈 Curva ROI',
+    'Gerar curva tempo-intensidade / densidade por ROI ao longo dos cortes ou fases de perfusão (Ctrl+Shift+E)',
+    () => void abrirCurvaPerfusaoAtiva(),
+  );
+
+  grupoNavegacao.append(menuMedidas.contentor, botaoCurvaRapido);
+
+  // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
+  const grupoImagem = document.createElement('div');
+  grupoImagem.className = 'grupo-botoes';
+
+  const menuTransformar = criarMenuSuspenso({
+    rotulo: '🔄 Girar',
+    dica: 'Girar 90° no sentido horário ou abrir mais opções (espelhar, inverter, restaurar)',
+    acaoPrincipal: () => void girar90(),
+  });
+  menuTransformar.painel.append(
+    itemMenu('Girar 90° no sentido horário', undefined, () => void girar90(), menuTransformar.fechar),
+    itemMenu('Espelhar horizontalmente', undefined, () => void espelhar(), menuTransformar.fechar),
+    itemMenu('Inverter preto e branco', undefined, () => void inverter(), menuTransformar.fechar),
+    divisorMenu(),
+    itemMenu(
+      'Restaurar visualização inicial',
+      'Esc',
+      () => {
+        limparMirasLocalizador();
+        void restaurar();
+      },
+      menuTransformar.fechar,
+    ),
+  );
+
+  const botaoRestaurarRapido = botao(
+    'Restaurar',
+    'Restaurar janela, zoom, rotação, espelhamento e limpar cruzinha',
+    () => {
+      limparMirasLocalizador();
+      void restaurar();
+    },
+  );
+
+  // Menu suspenso para configurar os botões Direito, Meio e Roda do mouse:
+  const menuMouse = criarMenuSuspenso({
+    rotulo: '🖱',
+    dica: 'Escolher a função dos botões Direito, Meio e Roda do mouse',
+  });
+  const camposMouse: Array<[Botao, HTMLSelectElement]> = [];
   const seletores: Array<[Botao, string, OpcaoBotao[]]> = [
-    ['direito', 'Direito', OPCOES_SECUNDARIAS],
-    ['meio', 'Meio', OPCOES_SECUNDARIAS],
-    ['roda', 'Roda', OPCOES_RODA],
+    ['direito', 'Botão direito', OPCOES_SECUNDARIAS],
+    ['meio', 'Botão do meio', OPCOES_SECUNDARIAS],
+    ['roda', 'Roda do mouse', OPCOES_RODA],
   ];
   for (const [botaoMouse, rotulo, opcoes] of seletores) {
-    const rotuloCampo = document.createElement('label');
-    rotuloCampo.className = 'seletor-botao';
-    rotuloCampo.textContent = rotulo + ' ';
+    const linha = document.createElement('label');
+    linha.className = 'linha-config-mouse';
+    const span = document.createElement('span');
+    span.textContent = rotulo;
     const seletor = document.createElement('select');
-    seletor.setAttribute('aria-label', `Ferramenta do botão ${rotulo.toLowerCase()}`);
+    seletor.setAttribute('aria-label', `Ferramenta do ${rotulo.toLowerCase()}`);
     for (const opcao of opcoes) {
       const o = document.createElement('option');
       o.value = opcao.nome;
@@ -131,34 +508,36 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       seletor.append(o);
     }
     seletor.value = botaoAtribuido(botaoMouse);
-    campos.push([botaoMouse, seletor]);
+    camposMouse.push([botaoMouse, seletor]);
     seletor.addEventListener('change', () => definirBotao(botaoMouse, seletor.value));
-    rotuloCampo.append(seletor);
-    grupoMouse.append(rotuloCampo);
+    linha.append(span, seletor);
+    menuMouse.painel.append(linha);
   }
 
-  const grupoImagem = document.createElement('div');
-  grupoImagem.className = 'grupo-botoes';
-  grupoImagem.append(
-    botao('Inverter', 'Inverter preto e branco', () => void inverter()),
-    botao('Girar 90°', 'Girar a imagem 90° no sentido horário', () => void girar90()),
-    botao('Espelhar', 'Espelhar na horizontal', () => void espelhar()),
-    botao('Restaurar', 'Restaurar janela, zoom, rotação, espelhamento e crosshairs', () => {
-      limparMirasLocalizador();
-      void restaurar();
-    }),
-  );
+  grupoImagem.append(menuTransformar.contentor, botaoRestaurarRapido, menuMouse.contentor);
 
-  // Layout da grade, seletor de plano, modo de projeção (Normal/MIP/MinIP/Média), slab, MPR, MIP 3D e Comparar.
-  const grupoLayout = document.createElement('div');
-  grupoLayout.className = 'grupo-botoes';
-  grupoLayout.setAttribute('role', 'group');
-  grupoLayout.setAttribute('aria-label', 'Layout dos viewports, plano, projeção, MPR e comparação');
-  const botoesLayout = ORDEM_LAYOUTS.map((id) => {
-    const b = botao(LAYOUTS[id].rotulo, `Layout ${LAYOUTS[id].rotulo} (tecla L alterna)`, () => void definirLayout(id));
-    b.dataset.layout = id;
-    return b;
+  // 6. Cine (Tocar/Pausar + Velocidade em q/s)
+  const menuCine = criarMenuSuspenso({
+    rotulo: '▶ Cine',
+    dica: 'Tocar ou pausar o cine / rotação MIP 3D (barra de espaço)',
+    acaoPrincipal: () => alternarCine(),
   });
+  const botoesFps: HTMLButtonElement[] = [];
+  for (const fps of VELOCIDADES_CINE) {
+    const item = itemMenu(
+      `Velocidade: ${fps} quadros/s`,
+      undefined,
+      () => definirVelocidadeCine(fps),
+      menuCine.fechar,
+    );
+    item.dataset.fps = String(fps);
+    botoesFps.push(item);
+    menuCine.painel.append(item);
+  }
+
+  // 7. MPR, MIP 3D, Plano individual, Modo de projeção e Slab (mm)
+  const grupoMpr3d = document.createElement('div');
+  grupoMpr3d.className = 'grupo-botoes';
 
   const rotuloPlano = document.createElement('label');
   rotuloPlano.className = 'seletor-botao';
@@ -216,119 +595,39 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   });
   controleSlab.append(textoSlab, sliderSlab, valorSlab);
 
-  const botaoMpr = botao('MPR', 'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)', () => void alternarMpr());
+  const botaoMpr = botao(
+    'MPR',
+    'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)',
+    () => void alternarMpr(),
+  );
   const botaoMip3d = botao(
     'MIP 3D',
     'Abrir MIP rotatório 3D ao lado do corte 2D (clique num ponto intenso para ir ao corte correspondente)',
     () => void alternarMipRotatorio(),
   );
-  const botaoComparar = botao(
-    'Comparar',
-    'Modo Comparar: dois exames lado a lado (ATUAL × ANTERIOR) com rolagem ligada por posição',
-    () => void alternarModoComparar(),
-  );
 
-  // Controles exclusivos do modo Comparar (4.2 e 4.3):
-  const grupoComparar = document.createElement('div');
-  grupoComparar.className = 'grupo-botoes controles-comparar';
-  grupoComparar.hidden = true;
-  const botaoCadeadoRolagem = botao(
-    '🔒 Rolagem',
-    'Ligar ou desligar o vínculo de rolagem por posição (ao religar, recalcula o deslocamento a partir dos cortes atuais)',
-    () => alternarCadeadoRolagemComparar(),
-  );
-  const rotuloOffsetComparar = document.createElement('span');
-  rotuloOffsetComparar.className = 'offset-comparar';
-  rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
-  const botaoZerarOffset = botao(
-    'Zerar',
-    'Restaurar o alinhamento inicial automático entre os dois exames',
-    () => zerarVinculoRolagemComparar(),
-  );
-  const botaoSyncJanela = botao(
-    '🔗 Janela',
-    'Sincronizar janela/nível entre os dois exames',
-    () => alternarSincronizacaoJanelaComparar(),
-  );
-  const botaoSyncZoom = botao(
-    '🔗 Zoom/Pan',
-    'Sincronizar zoom e pan entre os dois exames',
-    () => alternarSincronizacaoZoomPanComparar(),
-  );
-  grupoComparar.append(
-    botaoCadeadoRolagem,
-    rotuloOffsetComparar,
-    botaoZerarOffset,
-    botaoSyncJanela,
-    botaoSyncZoom,
-  );
+  grupoMpr3d.append(rotuloPlano, rotuloModo, controleSlab, botaoMpr, botaoMip3d);
 
-  grupoLayout.append(
-    ...botoesLayout,
-    rotuloPlano,
-    rotuloModo,
-    controleSlab,
-    botaoMpr,
-    botaoMip3d,
-    botaoComparar,
-    grupoComparar,
-  );
-
-  const grupoCine = document.createElement('div');
-  grupoCine.className = 'grupo-botoes';
-  const botaoCine = botao('▶ Cine', 'Tocar ou pausar o cine (barra de espaço)', () => alternarCine());
-  const rotuloFps = document.createElement('label');
-  rotuloFps.className = 'seletor-botao';
-  const seletorFps = document.createElement('select');
-  seletorFps.setAttribute('aria-label', 'Velocidade do cine em quadros por segundo');
-  for (const fps of VELOCIDADES_CINE) {
-    const o = document.createElement('option');
-    o.value = String(fps);
-    o.textContent = `${fps} q/s`;
-    seletorFps.append(o);
-  }
-  seletorFps.addEventListener('change', () => definirVelocidadeCine(Number(seletorFps.value)));
-  rotuloFps.append(seletorFps);
-  grupoCine.append(botaoCine, rotuloFps);
-
-  const grupoPresets = document.createElement('div');
-  grupoPresets.className = 'grupo-botoes';
-  PREDEFINICOES.forEach((p, i) => {
-    grupoPresets.append(
-      botao(p.rotulo, `Janela ${p.rotulo.toLowerCase()} (tecla ${i + 1})`, () => void aplicarPredefinicao(i)),
-    );
-  });
-
-  const grupoMedidas = document.createElement('div');
-  grupoMedidas.className = 'grupo-botoes';
-  grupoMedidas.append(
-    botao('Apagar selecionada', 'Apagar a medida selecionada (Delete)', () => void apagarSelecionadas()),
-    botao('Limpar medidas', 'Apagar todas as medidas da série e limpar a cruzinha (┼)', () => {
-      limparMirasLocalizador();
-      void limparMedidas();
-    }),
-  );
-
-  const ajuda = botao('?', 'Atalhos de teclado', () => alternarAjuda());
+  const config = botao('⚙', 'Configurações: medidas, atalhos e janelas', () => abrirConfiguracoes());
+  config.setAttribute('aria-label', 'Configurações');
+  const ajuda = botao('?', 'Atalhos de teclado (tecla ?)', () => alternarAjuda());
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
 
   contentor.append(
-    grupoFerramentas,
+    grupoTela,
     separador(),
-    grupoMouse,
-    separador(),
-    grupoLayout,
-    grupoCine,
+    grupoNavegacao,
     separador(),
     grupoImagem,
     separador(),
-    grupoPresets,
+    menuCine.contentor,
     separador(),
-    grupoMedidas,
+    grupoMpr3d,
+    config,
     ajuda,
   );
 
-  /** Reflete na barra a ferramenta de cada botão do mouse (também quando muda por atalho). */
+  /** Reflete na barra a ferramenta ativa do botão esquerdo e as atribuições do mouse. */
   function atualizarEstado(): void {
     const atual = ferramentaPrimariaAtual();
     const mpr = emModoMprFerramentas();
@@ -338,27 +637,43 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       }
       b.setAttribute('aria-pressed', String(b.dataset.ferramenta === atual));
     }
-    for (const [botaoMouse, seletor] of campos) seletor.value = botaoAtribuido(botaoMouse);
+
+    const medidaAtiva = ferramentasMedida.find((f) => f.nome === atual);
+    if (medidaAtiva) {
+      ultimaMedidaEscolhida = medidaAtiva;
+    }
+    const icone = iconesMedida[ultimaMedidaEscolhida.nome] ?? '📏';
+    menuMedidas.botaoPrincipal.textContent = `${icone} ${ultimaMedidaEscolhida.rotulo}`;
+    menuMedidas.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(medidaAtiva)));
+
+    for (const [botaoMouse, seletor] of camposMouse) {
+      seletor.value = botaoAtribuido(botaoMouse);
+    }
   }
   atualizarEstado();
   document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
 
   function atualizarViewports(e: EstadoViewports): void {
-    for (const b of botoesLayout) {
-      b.setAttribute(
-        'aria-pressed',
-        String(!e.mprAtivo && !e.comparacao.ativo && b.dataset.layout === e.layout),
-      );
+    menuLayout.botaoPrincipal.textContent = `⊞ ${LAYOUTS[e.layout].rotulo}`;
+    menuLayout.botaoPrincipal.disabled = e.mprAtivo;
+    menuLayout.botaoSeta.disabled = e.mprAtivo;
+    for (const item of itensLayout) {
+      item.setAttribute('aria-pressed', String(!e.mprAtivo && item.dataset.layout === e.layout));
     }
-    seletorPlano.value = e.planoAtivo;
-    seletorPlano.disabled = e.mprAtivo || !e.mprDisponivel;
 
-    const podeVolume = (e.mprAtivo || e.mprDisponivel) && e.planoAtivo !== 'mip-rotatorio';
+    seletorPlano.value = e.planoAtivo;
+    seletorPlano.disabled = e.mprAtivo || (!e.mprDisponivel && e.planoAtivo === 'original');
+    rotuloPlano.hidden = e.mprAtivo;
+
+    const emMipRotatorio = !e.mprAtivo && e.planoAtivo === 'mip-rotatorio';
     seletorModo.value = e.modoSlabAtivo;
-    seletorModo.disabled = !podeVolume;
-    sliderSlab.disabled = !podeVolume;
+    seletorModo.disabled = emMipRotatorio || (!e.mprAtivo && !e.mprDisponivel && e.modoSlabAtivo === 'normal');
+    rotuloModo.hidden = emMipRotatorio;
+
     sliderSlab.value = String(e.slabMm);
     valorSlab.textContent = formatarMm(e.slabMm);
+    sliderSlab.disabled = emMipRotatorio || (!e.mprAtivo && !e.mprDisponivel);
+    controleSlab.hidden = emMipRotatorio;
 
     botaoMpr.setAttribute('aria-pressed', String(e.mprAtivo));
     botaoMpr.disabled = !e.mprAtivo && !e.mprDisponivel;
@@ -366,55 +681,35 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botaoMip3d.setAttribute('aria-pressed', String(e.mipRotatorioVisivel));
     botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
 
-    const cmp = e.comparacao;
-    botaoComparar.setAttribute('aria-pressed', String(cmp.ativo));
-    botaoComparar.disabled = !cmp.ativo && e.pilhaId === null;
-    grupoComparar.hidden = !cmp.ativo;
-    if (cmp.ativo) {
-      botaoCadeadoRolagem.textContent = cmp.rolagemLigada ? '🔒 Rolagem' : '🔓 Rolagem';
-      botaoCadeadoRolagem.setAttribute('aria-pressed', String(cmp.rolagemLigada));
-      botaoCadeadoRolagem.disabled = cmp.erroVinculo !== null;
-      if (cmp.erroVinculo) {
-        rotuloOffsetComparar.textContent = 'Independente';
-        rotuloOffsetComparar.title = cmp.erroVinculo;
-      } else if (cmp.deslocamentoMm !== null) {
-        rotuloOffsetComparar.textContent = formatarDeslocamentoMm(cmp.deslocamentoMm);
-        rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
+    // Estado do modo Comparar:
+    const comp = e.comparacao;
+    menuComparar.botaoPrincipal.setAttribute('aria-pressed', String(comp.ativo));
+    grupoCompararInline.hidden = !comp.ativo;
+    if (comp.ativo) {
+      botaoCadeadoRolagem.textContent = comp.rolagemLigada ? '🔒 Rolagem' : '🔓 Rolagem';
+      botaoCadeadoRolagem.setAttribute('aria-pressed', String(comp.rolagemLigada));
+      if (comp.erroVinculo) {
+        rotuloOffsetComparar.textContent = '⚠ Sem vínculo';
+        rotuloOffsetComparar.title = comp.erroVinculo;
       } else {
-        rotuloOffsetComparar.textContent = '—';
+        rotuloOffsetComparar.textContent = formatarDeslocamentoMm(comp.deslocamentoMm ?? 0);
+        rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
       }
-      botaoZerarOffset.disabled = cmp.erroVinculo !== null;
-      botaoSyncJanela.setAttribute('aria-pressed', String(cmp.janelaLigada));
-      botaoSyncZoom.setAttribute('aria-pressed', String(cmp.zoomPanLigado));
+      itemCadeadoMenu.setAttribute('aria-pressed', String(comp.rolagemLigada));
+      itemJanelaMenu.setAttribute('aria-pressed', String(comp.janelaLigada));
+      itemZoomMenu.setAttribute('aria-pressed', String(comp.zoomPanLigado));
     }
 
-    botaoCine.disabled = e.mprAtivo || e.pilhaId === null;
-    botaoCine.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
-    botaoCine.setAttribute('aria-pressed', String(e.cineTocando));
-    seletorFps.value = String(e.fps);
-    atualizarEstado();
+    const temPilha = e.pilhaId !== null;
+    menuCine.botaoPrincipal.disabled = !temPilha || e.mprAtivo;
+    menuCine.botaoSeta.disabled = !temPilha || e.mprAtivo || emMipRotatorio;
+    menuCine.botaoPrincipal.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
+    menuCine.botaoPrincipal.setAttribute('aria-pressed', String(e.cineTocando));
+    for (const item of botoesFps) {
+      item.setAttribute('aria-pressed', String(Number(item.dataset.fps) === e.fps));
+    }
   }
-  document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) =>
-    atualizarViewports((ev as CustomEvent<EstadoViewports>).detail),
-  );
-  atualizarViewports({
-    layout: '1x1',
-    pilhaId: null,
-    cineTocando: false,
-    fps: 10,
-    mprAtivo: false,
-    mprDisponivel: false,
-    planoAtivo: 'original',
-    modoSlabAtivo: 'normal',
-    slabMm: 1,
-    mipRotatorioVisivel: false,
-    comparacao: {
-      ativo: false,
-      rolagemLigada: false,
-      deslocamentoMm: null,
-      erroVinculo: null,
-      janelaLigada: false,
-      zoomPanLigado: false,
-    },
+  document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) => {
+    atualizarViewports((ev as CustomEvent<EstadoViewports>).detail);
   });
 }
