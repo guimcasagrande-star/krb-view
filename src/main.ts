@@ -1,5 +1,6 @@
 import { iniciarAtalhos } from './tools/atalhos';
 import { iniciarEstiloMedidas } from './tools/estiloMedidas';
+import { iniciarMoverMedidas } from './tools/moverMedidas';
 import { iniciarSelecaoFacil } from './tools/selecao';
 import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
@@ -33,6 +34,7 @@ iniciarBarraFerramentas(obter('ferramentas'));
 iniciarAtalhos();
 iniciarEstiloMedidas();
 iniciarSelecaoFacil(obter('area-viewports'));
+iniciarMoverMedidas(obter('area-viewports'));
 iniciarPainelSuv(obter('painel-suv'));
 iniciarDadosPet();
 

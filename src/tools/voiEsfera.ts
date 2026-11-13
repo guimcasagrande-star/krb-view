@@ -131,6 +131,46 @@ function linhasDoTexto(voi: DadosVoi): string[] {
   return linhas;
 }
 
+/** Geometria do corte atual: centro projetado no plano, raio da seção (mm) e eixo "direita". */
+function secaoVoi(viewport: CoreTypes.IStackViewport | CoreTypes.IVolumeViewport, ann: Types.Annotation) {
+  const pontos = ann.data.handles!.points as Ponto[];
+  const raio = distancia3(pontos[0]!, pontos[1]!);
+  const cam = viewport.getCamera();
+  const normal = cam.viewPlaneNormal;
+  const foco = cam.focalPoint;
+  const viewUp = cam.viewUp;
+  if (!normal || !foco || !viewUp || raio <= 0) return null;
+  const c = pontos[0]!;
+  const dz = (c[0] - foco[0]) * normal[0] + (c[1] - foco[1]) * normal[1] + (c[2] - foco[2]) * normal[2];
+  if (Math.abs(dz) > raio) return null;
+  const rSecao = Math.sqrt(Math.max(0, raio * raio - dz * dz));
+  const centro: Ponto = [c[0] - normal[0] * dz, c[1] - normal[1] * dz, c[2] - normal[2] * dz];
+  const dir = produtoVetorial(viewUp as number[], normal as number[]);
+  const n = Math.hypot(dir[0]!, dir[1]!, dir[2]!) || 1;
+  return { centro, rSecao, direita: [dir[0]! / n, dir[1]! / n, dir[2]! / n] as Ponto };
+}
+
+/** Círculo (centro e raio em px de tela) da seção da esfera no corte atual, ou null se não a corta. */
+export function circuloVoiCanvas(
+  viewport: CoreTypes.IStackViewport | CoreTypes.IVolumeViewport,
+  ann: Types.Annotation,
+) {
+  const s = secaoVoi(viewport, ann);
+  if (!s) return null;
+  const cc = viewport.worldToCanvas(s.centro) as Ponto2;
+  const borda = viewport.worldToCanvas([
+    s.centro[0] + s.direita[0] * s.rSecao,
+    s.centro[1] + s.direita[1] * s.rSecao,
+    s.centro[2] + s.direita[2] * s.rSecao,
+  ]) as Ponto2;
+  return { cc, r: Math.hypot(borda[0] - cc[0], borda[1] - cc[1]) };
+}
+
+/** Recalcula as estatísticas (depois de a esfera ser movida). */
+export function recalcularVoi(ann: Types.Annotation): void {
+  void calcular(ann);
+}
+
 export class VoiEsferaTool extends FerramentaMultiCliqueBase {
   static override toolName = NOME_VOI_ESFERA;
   protected readonly inicioDeSegmento = [true, false] as const;
@@ -139,35 +179,8 @@ export class VoiEsferaTool extends FerramentaMultiCliqueBase {
     dadosVoi(ann).viewportId = viewportId;
   }
 
-  /** Geometria do corte atual: centro projetado no plano, raio da seção (mm) e eixo "direita". */
-  private secao(viewport: CoreTypes.IStackViewport | CoreTypes.IVolumeViewport, ann: Types.Annotation) {
-    const pontos = ann.data.handles!.points as Ponto[];
-    const raio = distancia3(pontos[0]!, pontos[1]!);
-    const cam = viewport.getCamera();
-    const normal = cam.viewPlaneNormal;
-    const foco = cam.focalPoint;
-    const viewUp = cam.viewUp;
-    if (!normal || !foco || !viewUp || raio <= 0) return null;
-    const c = pontos[0]!;
-    const dz = (c[0] - foco[0]) * normal[0] + (c[1] - foco[1]) * normal[1] + (c[2] - foco[2]) * normal[2];
-    if (Math.abs(dz) > raio) return null;
-    const rSecao = Math.sqrt(Math.max(0, raio * raio - dz * dz));
-    const centro: Ponto = [c[0] - normal[0] * dz, c[1] - normal[1] * dz, c[2] - normal[2] * dz];
-    const dir = produtoVetorial(viewUp as number[], normal as number[]);
-    const n = Math.hypot(dir[0]!, dir[1]!, dir[2]!) || 1;
-    return { centro, rSecao, direita: [dir[0]! / n, dir[1]! / n, dir[2]! / n] as Ponto };
-  }
-
   private circuloCanvas(viewport: CoreTypes.IStackViewport | CoreTypes.IVolumeViewport, ann: Types.Annotation) {
-    const s = this.secao(viewport, ann);
-    if (!s) return null;
-    const cc = viewport.worldToCanvas(s.centro) as Ponto2;
-    const borda = viewport.worldToCanvas([
-      s.centro[0] + s.direita[0] * s.rSecao,
-      s.centro[1] + s.direita[1] * s.rSecao,
-      s.centro[2] + s.direita[2] * s.rSecao,
-    ]) as Ponto2;
-    return { cc, r: Math.hypot(borda[0] - cc[0], borda[1] - cc[1]) };
+    return circuloVoiCanvas(viewport, ann);
   }
 
   override renderAnnotation(
