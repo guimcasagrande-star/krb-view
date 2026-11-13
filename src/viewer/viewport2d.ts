@@ -920,12 +920,20 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
         name: colormap,
         // Fundo (SUV baixo) transparente; a captação aparece com a opacidade escolhida.
         opacity: [
-          // Abaixo do SUV mínimo o PET é transparente; a opacidade sobe até o valor escolhido em ~25%
-          // da faixa (assim vermelho e laranja aparecem vivos, sem lavar a cor nos tons médios).
-          { value: 0, opacity: 0 },
-          { value: piso, opacity: 0 },
-          { value: piso + (teto - piso) * 0.25, opacity: opacidade },
-          { value: Math.max(teto, piso + 0.01), opacity: opacidade },
+          // Sem SUV mínimo (0): opacidade constante em toda a faixa, como nos visualizadores de PET/CT
+          // (fundo escuro-avermelhado em todo o corpo). Com mínimo: transparente abaixo dele e a
+          // opacidade sobe até o valor escolhido em ~25% da faixa.
+          ...(piso <= 0
+            ? [
+                { value: 0, opacity: opacidade },
+                { value: Math.max(teto, 0.01), opacity: opacidade },
+              ]
+            : [
+                { value: 0, opacity: 0 },
+                { value: piso, opacity: 0 },
+                { value: piso + (teto - piso) * 0.25, opacity: opacidade },
+                { value: Math.max(teto, piso + 0.01), opacity: opacidade },
+              ]),
         ],
       },
     },
@@ -2709,7 +2717,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 0.85, colormap: NOME_HOT_IRON, teto: 12, minimo: 1 },
+    fusao: { opacidade: 0.5, colormap: NOME_HOT_IRON, teto: 10, minimo: 0 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
