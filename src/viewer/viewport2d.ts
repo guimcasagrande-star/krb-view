@@ -2632,7 +2632,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 0.7, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
+    fusao: { opacidade: 0.7, colormap: 'Black-Body Radiation', teto: 8, minimo: 1 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
