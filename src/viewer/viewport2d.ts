@@ -76,7 +76,7 @@ const CARGAS_SIMULTANEAS = 4;
  * '1x2' = 1 linha e 2 colunas (lado a lado).
  */
 export type Layout = string;
-export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio' | 'fusao';
+export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio';
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
 export const GRADE_MAXIMA = 5;
@@ -116,7 +116,6 @@ export const PLANOS_SLOTS: Record<PlanoSlot, PlanoMprOverlay> = {
   coronal: { rotulo: 'Coronal', eixo: Enums.OrientationAxis.CORONAL },
   sagital: { rotulo: 'Sagital', eixo: Enums.OrientationAxis.SAGITTAL },
   'mip-rotatorio': { rotulo: 'MIP rotatório', eixo: Enums.OrientationAxis.CORONAL },
-  fusao: { rotulo: 'Fusão PET/TC', eixo: Enums.OrientationAxis.AXIAL },
 };
 
 export const MODOS_SLAB: Record<ModoSlab, { rotulo: string; blendMode: Enums.BlendModes }> = {
@@ -199,7 +198,7 @@ interface Slot {
   corteSalvo?: number;
   /** Cada abertura nova invalida cargas e esperas da anterior. */
   geracao: number;
-  /** Fusão: PET sobreposto à TC deste slot (plano 'fusao'). */
+  /** Fusão: PET sobreposto à TC deste slot (vale nos planos axial, coronal e sagital). */
   pilhaFusao: StackNode | null;
   idsFusao: string[];
   /** Id da pilha de PET para a qual o slot tem uma referência de volume. */
@@ -431,6 +430,23 @@ function estadoAtual(): EstadoViewports {
 const ID_SYNC_ESTUDO_ZOOM = 'sync-estudo-zoom-pan';
 const ID_SYNC_ESTUDO_VOI = 'sync-estudo-voi';
 
+/** O slot mostra a fusão PET/TC: tem PET associado e está num plano de volume (axial, coronal, sagital). */
+function emFusao(s: Slot): boolean {
+  return !!s.pilhaFusao && (s.planoSlot === 'axial' || s.planoSlot === 'coronal' || s.planoSlot === 'sagital');
+}
+
+/** Esconde controles e legenda da fusão (o PET continua associado ao slot para voltar depois). */
+function ocultarFusaoVisual(s: Slot): void {
+  s.controlesFusao.hidden = true;
+  s.controlesFusao.replaceChildren();
+  s.legendaFusao?.remove();
+  s.legendaFusao = undefined;
+  s.atualizarLegendaFusao = undefined;
+  s.reaplicarFusao = undefined;
+  s.celula.classList.remove('modo-registro');
+  s.registro.ativo = false;
+}
+
 /** Viewports 2D (pilha) visíveis agrupados por estudo + referencial; só grupos com 2 ou mais. */
 function gruposSincroniaEstudo(): Slot[][] {
   if (compararAtivo || mprAtivo || maximizado !== null) return [];
@@ -438,7 +454,8 @@ function gruposSincroniaEstudo(): Slot[][] {
   for (const s of slots) {
     if (s.celula.hidden || !s.pilha || !s.habilitado || !s.viewport) continue;
     // Entram os cortes originais (pilha) e a fusão PET/TC (volume axial).
-    if (s.planoSlot === 'original' ? !('setImageIdIndex' in s.viewport) : s.planoSlot !== 'fusao') continue;
+    // Entram cortes originais (pilha) e planos de volume (axial, coronal, sagital; com ou sem fusão).
+    if (s.planoSlot === 'original' ? !('setImageIdIndex' in s.viewport) : s.planoSlot === 'mip-rotatorio') continue;
     const inst = s.pilha.instances[0];
     if (!inst?.studyInstanceUid || !inst.frameOfReferenceUid) continue;
     const chave = `${inst.studyInstanceUid}|${inst.frameOfReferenceUid}`;
@@ -503,7 +520,8 @@ function atualizarSincroniaEstudo(): void {
   // Com um só estudo aberto (caso comum) há um grupo; com vários, só o primeiro é ligado.
   const grupo = grupos[0]!;
   for (const s of grupo) {
-    zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+    // O sincronizador do Cornerstone só atualiza viewports de pilha; os de volume são copiados à mão.
+    if (s.viewport && 'setImageIdIndex' in s.viewport) zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
   }
   // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
   const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
@@ -514,34 +532,63 @@ function atualizarSincroniaEstudo(): void {
   tentarZoomDoGrupo();
 }
 
-/** Posição (mm) do corte atual do slot, para viewports de pilha ou de volume. */
-function posicaoDoSlot(s: Slot): number | undefined {
-  return s.pilha && s.viewport ? obterPosicaoCorteAtual(s.pilha, s.viewport) : undefined;
+/** Normal do plano do slot: a da aquisição (pilha) ou a da câmera (plano de volume). */
+function normalDoSlot(s: Slot): [number, number, number] | undefined {
+  if (!s.viewport) return undefined;
+  if ('setImageIdIndex' in s.viewport) return s.pilha?.geometry.normal as [number, number, number] | undefined;
+  const n = s.viewport.getCamera().viewPlaneNormal;
+  return n ? [n[0], n[1], n[2]] : undefined;
 }
 
-/** Leva o slot ao corte mais próximo de `mm`; devolve a posição realmente usada. */
+/** Posição (mm) do corte atual do slot ao longo da sua normal (pilha ou plano de volume). */
+function posicaoDoSlot(s: Slot): number | undefined {
+  if (!s.pilha || !s.viewport) return undefined;
+  if ('setImageIdIndex' in s.viewport) return obterPosicaoCorteAtual(s.pilha, s.viewport);
+  const n = normalDoSlot(s);
+  const fp = s.viewport.getCamera().focalPoint;
+  return n && fp ? fp[0] * n[0] + fp[1] * n[1] + fp[2] * n[2] : undefined;
+}
+
+/** Leva o slot ao corte mais próximo de `mm`; devolve a posição realmente usada (ou undefined se já estava). */
 function irParaPosicaoMm(d: Slot, mm: number): number | undefined {
   if (!d.pilha || !d.viewport) return undefined;
-  const posicoes = d.pilha.geometry.positions;
-  const normal = d.pilha.geometry.normal;
-  if (posicoes.length === 0 || !normal) return undefined;
-  const idx = nearestIndex(posicoes, mm);
-  const alvo = posicoes[idx]!;
   if ('setImageIdIndex' in d.viewport) {
+    const posicoes = d.pilha.geometry.positions;
+    if (posicoes.length === 0) return undefined;
+    const idx = nearestIndex(posicoes, mm);
     if (d.viewport.getCurrentImageIdIndex() === idx) return undefined;
     void d.viewport.setImageIdIndex(idx);
-  } else {
-    const fp = d.viewport.getCamera().focalPoint;
-    if (!fp) return undefined;
-    const atual = fp[0] * normal[0] + fp[1] * normal[1] + fp[2] * normal[2];
-    if (Math.abs(atual - alvo) < 0.01) return undefined;
-    const delta = alvo - atual;
-    d.viewport.jumpToWorld([fp[0] + normal[0] * delta, fp[1] + normal[1] * delta, fp[2] + normal[2] * delta]);
+    return posicoes[idx]!;
   }
-  return alvo;
+  const n = normalDoSlot(d);
+  const fp = d.viewport.getCamera().focalPoint;
+  if (!n || !fp) return undefined;
+  const atual = fp[0] * n[0] + fp[1] * n[1] + fp[2] * n[2];
+  if (Math.abs(atual - mm) < 0.01) return undefined;
+  const delta = mm - atual;
+  d.viewport.jumpToWorld([fp[0] + n[0] * delta, fp[1] + n[1] * delta, fp[2] + n[2] * delta]);
+  return mm;
 }
 
-/** Rolagem por posição (mm) entre as séries do mesmo grupo (cortes originais e fusão). */
+/** Slots do grupo no mesmo plano (normais paralelas) que `so`, com o sinal da relação entre elas. */
+function destinosNoMesmoPlano(grupo: Slot[], so: Slot): Array<{ d: Slot; sinal: 1 | -1 }> {
+  const nO = normalDoSlot(so);
+  if (!nO) return [];
+  const saida: Array<{ d: Slot; sinal: 1 | -1 }> = [];
+  for (const d of grupo) {
+    if (d === so) continue;
+    const nD = normalDoSlot(d);
+    if (!nD) continue;
+    const cos = nO[0] * nD[0] + nO[1] * nD[1] + nO[2] * nD[2];
+    if (Math.abs(cos) >= 0.9) saida.push({ d, sinal: cos >= 0 ? 1 : -1 });
+  }
+  return saida;
+}
+
+/**
+ * Rolagem por posição (mm) entre os cortes do grupo que estão no mesmo plano: cortes originais,
+ * planos de volume (axial, coronal, sagital) e fusão. Rolar um leva os outros ao mesmo ponto.
+ */
 function aoRolarSlotEstudo(origem: number): void {
   if (!sincroniaEstudoLigada || sincronizandoEstudo || compararAtivo || mprAtivo) return;
   const so = slots[origem];
@@ -556,21 +603,18 @@ function aoRolarSlotEstudo(origem: number): void {
   }
   const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
   if (!grupo) return;
-  const normalO = so.pilha.geometry.normal;
-  if (!normalO) return;
 
   sincronizandoEstudo = true;
   try {
-    for (const d of grupo) {
-      if (d === so || !d.pilha) continue;
-      const normalD = d.pilha.geometry.normal;
-      if (!normalD) continue;
-      const cos = normalO[0] * normalD[0] + normalO[1] * normalD[1] + normalO[2] * normalD[2];
-      if (Math.abs(cos) < 0.9) continue;
-      const alvo = posicao * (cos >= 0 ? 1 : -1);
-      const passo = d.pilha.instances[0]?.sliceThickness ?? 5;
-      const posicoes = d.pilha.geometry.positions;
-      if (posicoes.length === 0 || Math.abs(posicoes[nearestIndex(posicoes, alvo)]! - alvo) > Math.max(passo, 1)) continue;
+    for (const { d, sinal } of destinosNoMesmoPlano(grupo, so)) {
+      if (!d.pilha) continue;
+      const alvo = posicao * sinal;
+      if ('setImageIdIndex' in d.viewport!) {
+        // Série de pilha: só se o ponto está na cobertura dela.
+        const posicoes = d.pilha.geometry.positions;
+        const passo = d.pilha.instances[0]?.sliceThickness ?? 5;
+        if (posicoes.length === 0 || Math.abs(posicoes[nearestIndex(posicoes, alvo)]! - alvo) > Math.max(passo, 1)) continue;
+      }
       const usada = irParaPosicaoMm(d, alvo);
       if (usada !== undefined) indicesImpostosPorEstudo.set(d.indice, usada);
     }
@@ -582,8 +626,8 @@ function aoRolarSlotEstudo(origem: number): void {
 let sincronizandoCameraEstudo = false;
 
 /**
- * O sincronizador de zoom/pan do Cornerstone não atualiza viewports de volume (a fusão), então
- * o zoom e o pan entre a fusão e as séries de pilha do grupo são copiados aqui.
+ * O sincronizador de zoom/pan do Cornerstone não atualiza viewports de volume (fusão e planos
+ * reconstruídos), então o zoom e o pan entre os cortes do mesmo plano são copiados aqui.
  */
 function aoMudarCameraEstudo(origem: number): void {
   if (!sincroniaEstudoLigada || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
@@ -591,15 +635,16 @@ function aoMudarCameraEstudo(origem: number): void {
   if (!so?.viewport || !so.pilha) return;
   const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
   if (!grupo) return;
-  const origemFusao = so.planoSlot === 'fusao';
-  const destinos = grupo.filter((d) => d !== so && (origemFusao ? d.planoSlot !== 'fusao' : d.planoSlot === 'fusao'));
+  const origemVolume = !('setImageIdIndex' in so.viewport);
+  // Pilha↔pilha já é feito pelo Cornerstone; aqui só os pares em que algum lado é volume.
+  const destinos = destinosNoMesmoPlano(grupo, so).filter(({ d }) => origemVolume || !('setImageIdIndex' in d.viewport!));
   if (destinos.length === 0) return;
   const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
   const pan = v.getPan?.();
   const zoom = v.getZoom?.();
   sincronizandoCameraEstudo = true;
   try {
-    for (const d of destinos) {
+    for (const { d } of destinos) {
       const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport | undefined;
       if (!t) continue;
       if (zoom !== undefined && Math.abs((t.getZoom?.() ?? zoom) - zoom) > 1e-6) t.setZoom?.(zoom);
@@ -1011,7 +1056,7 @@ async function configurarFusaoNoSlot(
   slot.pilhaFusao = pet;
   slot.idsFusao = adquirirIds(pet, arquivos);
   slot.avisoVolume.hidden = true;
-  await definirPlanoSlotAtivo('fusao');
+  await definirPlanoSlotAtivo('axial');
   if (!sameFrame) {
     slot.avisoVolume.textContent = '⚠ Fusão manual: séries de referenciais diferentes';
     slot.avisoVolume.hidden = false;
@@ -1262,6 +1307,7 @@ async function exibirSlot(
 ): Promise<void> {
   const stack = slot.pilha;
   if (!stack) return;
+  if (!emFusao(slot)) ocultarFusaoVisual(slot);
   const minhaGeracao = ++slot.geracao;
   const nome = nomeDaSerie(stack);
   const ids = slot.ids;
@@ -1316,7 +1362,7 @@ async function exibirSlot(
 
       const entradas: Array<{ volumeId: string }> = [{ volumeId }];
       let volumePetId: string | undefined;
-      if (slot.planoSlot === 'fusao' && slot.pilhaFusao) {
+      if (emFusao(slot) && slot.pilhaFusao) {
         // O PET entra como segundo volume do mesmo viewport; a GPU reamostra pela geometria de cada um.
         const resPet = adquirirVolume(slot.pilhaFusao, slot.idsFusao);
         if (!resPet.ok) throw new Error(`PET: ${resPet.mensagens.join(' · ')}`);
@@ -1342,7 +1388,7 @@ async function exibirSlot(
         }
       }
 
-      const pet = voiPreservado || slot.planoSlot === 'fusao' ? null : exibicaoPadraoPet(stack);
+      const pet = voiPreservado || emFusao(slot) ? null : exibicaoPadraoPet(stack);
       const voi = voiPreservado?.voiRange ?? pet?.voiRange ?? voiPadraoDaPilha(stack);
       if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert ?? pet?.invert });
       else if (pet) vp.setProperties({ invert: true });
@@ -1426,7 +1472,6 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
   if (mprAtivo) return;
   const slot = slots[ativo];
   if (!slot?.pilha || slot.planoSlot === plano) return;
-  if (plano === 'fusao' && !slot.pilhaFusao) return;
 
   if (plano !== 'original') {
     const av = avaliarVolume(slot.pilha);
@@ -1903,7 +1948,7 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
         try {
           s.ids = adquirirIds(restaurada, arquivos);
           s.pilha = restaurada;
-          if (plano === 'fusao' && salvas[i]?.pilhaFusao) {
+          if (salvas[i]?.pilhaFusao) {
             s.pilhaFusao = salvas[i]!.pilhaFusao!;
             s.idsFusao = adquirirIds(s.pilhaFusao, arquivos);
             if (salvas[i]!.fusao) s.fusao = salvas[i]!.fusao!;
@@ -1936,9 +1981,9 @@ export async function alternarMpr(): Promise<void> {
   }
   // Se há uma fusão PET/TC no layout (de preferência a do viewport ativo), o MPR leva o PET junto.
   const fonte =
-    slots[ativo]?.planoSlot === 'fusao' && slots[ativo]?.pilhaFusao
+    slots[ativo] && emFusao(slots[ativo]!)
       ? slots[ativo]
-      : slots.find((s) => !s.celula.hidden && s.planoSlot === 'fusao' && s.pilhaFusao);
+      : slots.find((s) => !s.celula.hidden && emFusao(s));
   const stack = fonte?.pilha ?? slots[ativo]?.pilha ?? slots[0]?.pilha ?? null;
   if (!stack) return;
   await montarLayoutMpr(stack, fonte?.pilhaFusao ? { pet: fonte.pilhaFusao, config: { ...fonte.fusao } } : undefined);
@@ -2556,7 +2601,7 @@ function unidadeDaSerie(stack: StackNode): string {
 async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
   const slot = slots.find((s) => s.idViewport === idVp);
   if (!slot?.pilha) return { erro: 'Série não encontrada no viewport.' };
-  const naFusao = slot.planoSlot === 'fusao' && slot.pilhaFusao;
+  const naFusao = emFusao(slot) && slot.pilhaFusao;
   const stack = naFusao ? slot.pilhaFusao! : slot.pilha;
   const v = await carregarVoxels(stack, naFusao ? slot.idsFusao : slot.ids);
   if ('erro' in v) return v;
@@ -2600,7 +2645,7 @@ async function valoresNoPonto(idVp: string, mundo: [number, number, number]) {
   const principal = await medir(slot.pilha, slot.ids);
   if (typeof principal !== 'string') return principal;
   linhas.push(principal);
-  if (slot.planoSlot === 'fusao' && slot.pilhaFusao) {
+  if (emFusao(slot) && slot.pilhaFusao) {
     const pet = await medir(slot.pilhaFusao, slot.idsFusao, slot.registro.deslocamento);
     if (typeof pet !== 'string') return pet;
     linhas.push(pet);
@@ -2671,18 +2716,18 @@ export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
   const { par } = achado;
   await definirLayout(campos === 4 ? '2x2' : '1x3');
   const mip = par.pet;
-  const celulas: Array<{ pilha: StackNode | null; plano: PlanoSlot; aviso?: string }> =
+  const celulas: Array<{ pilha: StackNode | null; plano: PlanoSlot; aviso?: string; fusao?: boolean }> =
     campos === 4
       ? [
           { pilha: mip, plano: 'mip-rotatorio' },
           { pilha: par.pet, plano: 'original' },
           { pilha: par.anatomic, plano: 'original' },
-          { pilha: par.anatomic, plano: 'fusao' },
+          { pilha: par.anatomic, plano: 'axial', fusao: true },
         ]
       : [
           { pilha: par.pet, plano: 'original' },
           { pilha: par.anatomic, plano: 'original' },
-          { pilha: par.anatomic, plano: 'fusao' },
+          { pilha: par.anatomic, plano: 'axial', fusao: true },
         ];
   for (let i = 0; i < celulas.length; i++) {
     const c = celulas[i]!;
@@ -2691,7 +2736,7 @@ export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
     ativo = i;
     if (c.pilha) {
       await abrirPilha2d(c.pilha);
-      if (c.plano === 'fusao') {
+      if (c.fusao) {
         // TC como base e PET por cima; `sameFrame: false` = fusão manual, com aviso.
         await configurarFusaoNoSlot(slot, par.anatomic, par.pet, par.sameFrame);
       } else if (c.plano !== 'original') {
@@ -2873,7 +2918,7 @@ function criarSlot(indice: number): Slot {
     'mousedown',
     (ev) => {
       const v = slot.viewport;
-      if (ev.button !== 0 || !slot.registro.ativo || slot.planoSlot !== 'fusao' || !v || !slot.volumesFusao) return;
+      if (ev.button !== 0 || !slot.registro.ativo || !emFusao(slot) || !v || !slot.volumesFusao) return;
       if (ev.target instanceof Element && ev.target.closest('.controles-fusao')) return;
       const rect = elemento.getBoundingClientRect();
       const mundoInicial = v.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
@@ -2997,7 +3042,7 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
       if (slot.habilitado && slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC) {
         slot.reaplicarFusao?.();
         // Fusão: aproxima o zoom ao corpo (como nas outras células), uma vez, com a TC já carregada.
-        if (slot.planoSlot === 'fusao' && !slot.zoomFusaoAjustado && slot.viewport && slot.ids.length > 0) {
+        if (emFusao(slot) && !slot.zoomFusaoAjustado && slot.viewport && slot.ids.length > 0) {
           slot.zoomFusaoAjustado = true;
           ajustarZoomAoConteudo(slot.viewport, slot.ids[Math.floor(slot.ids.length / 2)]!, slot.pilha?.instances[0]?.modality);
         }
