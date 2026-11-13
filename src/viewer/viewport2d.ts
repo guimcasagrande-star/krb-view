@@ -13,6 +13,7 @@ import {
   imageLoader,
   setVolumesForViewports,
   type Types,
+  utilities as utilitariosCore,
 } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode, StudyNode } from '../io/organize';
@@ -211,6 +212,9 @@ interface Slot {
   /** Ids dos volumes da fusão (TC e PET) para reaplicar propriedades e o registro manual. */
   volumesFusao?: { ct: string; pet: string };
   atualizarLeituraRegistro?: () => void;
+  /** Legenda da escala de cores do PET na fusão. */
+  legendaFusao?: HTMLDivElement;
+  atualizarLegendaFusao?: () => void;
   /** Registro manual: translação (mm) do PET sobre a TC; `ativo` = arrastar no viewport move o PET. */
   registro: { ativo: boolean; deslocamento: [number, number, number] };
 }
@@ -858,13 +862,50 @@ function saltarParaPontoMundo(origemIndice: number, ponto: Types.Point3): void {
   aplicarLocalizador3d(origemIndice, ponto);
 }
 
-/** Nomes dos colormaps do vtk.js usados pelo Cornerstone. */
+/**
+ * Hot iron: preto, vermelho escuro, vermelho, laranja, amarelo e branco (como em outros
+ * visualizadores). Registrado no Cornerstone com este nome.
+ */
+const NOME_HOT_IRON = 'Hot iron';
+utilitariosCore.colormap.registerColormap({
+  ColorSpace: 'RGB',
+  Name: NOME_HOT_IRON,
+  RGBPoints: [
+    0, 0, 0, 0,
+    0.18, 0.4, 0, 0,
+    0.38, 0.9, 0.05, 0,
+    0.58, 1, 0.45, 0,
+    0.78, 1, 0.92, 0.1,
+    1, 1, 1, 0.95,
+  ],
+} as never);
+
+/** Nomes dos colormaps usados na fusão (Hot iron é o nosso; os demais, do vtk.js). */
 const COLORMAPS_FUSAO: Array<[string, string]> = [
-  ['Black-Body Radiation', 'Hot iron (ferro quente)'],
+  [NOME_HOT_IRON, 'Hot iron (ferro quente)'],
   ['jet', 'Arco-íris (jet)'],
   ['Inverted-Grayscale', 'Cinza invertido'],
   ['Grayscale', 'Cinza'],
 ];
+
+/** CSS de gradiente (de baixo para cima) do colormap, para a legenda. */
+function gradienteDoColormap(nome: string): string {
+  const cm = utilitariosCore.colormap.resolveColormap(nome) as { RGBPoints?: number[] } | undefined;
+  const pts = cm?.RGBPoints;
+  if (!pts || pts.length < 8) return 'linear-gradient(to top, #000, #fff)';
+  const paradas: string[] = [];
+  for (let i = 0; i + 3 < pts.length; i += 4) {
+    const c = [pts[i + 1]!, pts[i + 2]!, pts[i + 3]!].map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255));
+    paradas.push(`rgb(${c[0]}, ${c[1]}, ${c[2]}) ${(pts[i]! * 100).toFixed(1)}%`);
+  }
+  return `linear-gradient(to top, ${paradas.join(', ')})`;
+}
+
+function unidadeLegenda(stack: StackNode | null): string {
+  const un = stack ? unidadeDaPilha(stack.id) : 'SUVbw';
+  return un === 'SUVbw' || un === 'SUL' ? `${un} (g/ml)` : un === 'SUVbsa' ? `${un} (cm²/ml)` : un;
+}
+
 
 /** Aplica opacidade, colormap e teto de SUV ao PET da fusão (independentes da janela da TC). */
 function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
@@ -891,6 +932,7 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
     volumePetId,
   );
   void volumeCtId;
+  slot.atualizarLegendaFusao?.();
   aplicarRegistroPet(slot, volumePetId);
   vp.render();
   // O colormap/opacidade do segundo volume só aparece depois de um render do motor inteiro.
@@ -942,6 +984,38 @@ async function configurarFusaoNoSlot(
 
 function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
   slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
+  // Legenda da escala (como nos visualizadores de PET): opacidade, barra de cores, máx, 0 e unidade.
+  slot.legendaFusao?.remove();
+  const legenda = document.createElement('div');
+  legenda.className = 'legenda-fusao';
+  const legOp = document.createElement('div');
+  legOp.className = 'leg-op';
+  const legCorpo = document.createElement('div');
+  legCorpo.className = 'leg-corpo';
+  const legBarra = document.createElement('div');
+  legBarra.className = 'leg-barra';
+  const legRot = document.createElement('div');
+  legRot.className = 'leg-rotulos';
+  const legMax = document.createElement('span');
+  const legMin = document.createElement('span');
+  legRot.append(legMax, legMin);
+  legCorpo.append(legBarra, legRot);
+  const legUn = document.createElement('div');
+  legUn.className = 'leg-un';
+  legenda.append(legOp, legCorpo, legUn);
+  slot.celula.append(legenda);
+  slot.legendaFusao = legenda;
+  slot.atualizarLegendaFusao = () => {
+    const f = slot.fusao;
+    const num = (n: number): string => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    legOp.textContent = `${Math.round(f.opacidade * 100)}%`;
+    legBarra.style.background = gradienteDoColormap(f.colormap);
+    legMax.textContent = num(f.teto);
+    legMin.textContent = num(0);
+    legUn.textContent = unidadeLegenda(slot.pilhaFusao);
+  };
+  slot.atualizarLegendaFusao();
+
   const c = slot.controlesFusao;
   c.replaceChildren();
   c.hidden = false;
@@ -1453,6 +1527,9 @@ function soltarFusao(slot: Slot): void {
   slot.pilhaFusao = null;
   slot.idsFusao = [];
   slot.reaplicarFusao = undefined;
+  slot.legendaFusao?.remove();
+  slot.legendaFusao = undefined;
+  slot.atualizarLegendaFusao = undefined;
   slot.zoomFusaoAjustado = false;
   slot.volumesFusao = undefined;
   slot.registro = { ativo: false, deslocamento: [0, 0, 0] };
@@ -2632,7 +2709,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 0.85, colormap: 'Black-Body Radiation', teto: 12, minimo: 1 },
+    fusao: { opacidade: 0.85, colormap: NOME_HOT_IRON, teto: 12, minimo: 1 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };

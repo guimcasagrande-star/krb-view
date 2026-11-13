@@ -577,3 +577,11 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .series-fusao { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .series-fusao label { display: flex; justify-content: space-between; gap: 6px; }
 .series-fusao select { max-width: 190px; }
+
+/* Legenda da escala de cores da fusão */
+.legenda-fusao { position: absolute; left: 36px; top: 46%; transform: translateY(-50%); z-index: 5; pointer-events: none; color: #ffb4b4; font-size: 13px; line-height: 1.15; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+.legenda-fusao .leg-op { margin-bottom: 4px; }
+.legenda-fusao .leg-corpo { display: flex; gap: 6px; height: 64px; }
+.legenda-fusao .leg-barra { width: 14px; border: 1px solid #ddd; }
+.legenda-fusao .leg-rotulos { display: flex; flex-direction: column; justify-content: space-between; }
+.legenda-fusao .leg-un { margin-top: 4px; max-width: 80px; }
