@@ -1,8 +1,9 @@
 /**
  * Arrastar medidas para mudar a posição no corte.
  *
- * - Pressionar sobre uma medida (na linha, numa alça, no texto ou, nas ROIs, no meio) e arrastar
- *   move a medida inteira; ao soltar ela continua selecionada.
+ * - Pressionar sobre uma medida (na linha, no texto ou, nas ROIs, no meio) e arrastar move a
+ *   medida inteira; pressionar numa ponta (alça) de uma medida de linha ou ângulo edita só aquele
+ *   ponto. Ao soltar a medida continua selecionada.
  * - Com uma ferramenta de medida ativa, o clique comum começa outra medida: use Ctrl+arrastar.
  * - Vale para todas as medidas, nativas ou desta aplicação. Ao mover a ROI volumétrica, as
  *   estatísticas são recalculadas na nova posição.
@@ -16,6 +17,12 @@ import { NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
 type Ponto3 = [number, number, number];
 
 const LIMIAR_PX = 3;
+/** Distância (px) para uma alça (ponta) contar como clicada. */
+const RAIO_ALCA_PX = 9;
+/** ROIs e esfera movem inteiras; nas demais, clicar numa ponta edita só aquele ponto. */
+/** Ferramentas do Cornerstone: ele mesmo edita as pontas quando a ferramenta está ativa. */
+const NATIVAS = new Set(['Length', 'Angle', 'EllipticalROI', 'PlanarFreehandROI']);
+const SEM_ALCA = new Set(['EllipticalROI', 'PlanarFreehandROI', 'SphereVOI']);
 
 interface Arrasto {
   ann: Types.Annotation;
@@ -23,6 +30,8 @@ interface Arrasto {
   inicioCanvas: [number, number];
   inicioMundo: Ponto3;
   moveu: boolean;
+  /** Índice da alça (ponta) sendo editada; ausente = mover a medida inteira. */
+  alca?: number;
   /** Cópias das posições originais, para aplicar o deslocamento total a cada movimento. */
   pontos: Ponto3[];
   polilinha?: Ponto3[];
@@ -43,6 +52,12 @@ function aplicarDeslocamento(a: Arrasto, d: Ponto3): void {
     contour?: { polyline?: Ponto3[] };
   };
   const pts = dados.handles?.points;
+  if (pts && a.alca !== undefined) {
+    const o = a.pontos[a.alca];
+    if (o) pts[a.alca] = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+    a.ann.invalidated = true;
+    return;
+  }
   if (pts) {
     for (let i = 0; i < pts.length && i < a.pontos.length; i++) {
       const o = a.pontos[i]!;
@@ -94,7 +109,9 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     'mousedown',
     (ev) => {
       if (ev.button !== 0 || arrasto) return;
-      if (ferramentaAtivaEhMedida() && !ev.ctrlKey) return;
+      // Com ferramenta de medida ativa: só Ctrl move; e uma ponta de medida desta aplicação
+      // (que o Cornerstone não edita) é editada mesmo sem Ctrl.
+      const medindoSemCtrl = ferramentaAtivaEhMedida() && !ev.ctrlKey;
       const alvo = ev.target instanceof Element ? ev.target.closest<HTMLDivElement>('[data-viewport-uid]') : null;
       if (!alvo) return;
       const viewport = getEnabledElement(alvo)?.viewport;
@@ -112,12 +129,27 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
       };
       anotacoes.selection.setAnnotationSelected(uid, true, ev.shiftKey);
       const mundo = viewport.canvasToWorld(canvas);
+      // Clicou numa ponta de uma medida de linha/ângulo? Então só esse ponto é editado.
+      let alca: number | undefined;
+      if (!SEM_ALCA.has(ann.metadata?.toolName ?? '')) {
+        let melhor = RAIO_ALCA_PX;
+        (dados.handles.points ?? []).forEach((q, i) => {
+          const c = viewport.worldToCanvas(q);
+          const dist = Math.hypot(c[0] - canvas[0], c[1] - canvas[1]);
+          if (dist <= melhor) {
+            melhor = dist;
+            alca = i;
+          }
+        });
+      }
+      if (medindoSemCtrl && (alca === undefined || NATIVAS.has(ann.metadata?.toolName ?? ''))) return;
       arrasto = {
         ann,
         element: alvo,
         inicioCanvas: [ev.clientX, ev.clientY],
         inicioMundo: copia(mundo),
         moveu: false,
+        ...(alca !== undefined ? { alca } : {}),
         pontos: (dados.handles.points ?? []).map(copia),
         ...(dados.contour?.polyline ? { polilinha: dados.contour.polyline.map(copia) } : {}),
         ...(dados.handles.textBox?.worldPosition ? { texto: copia(dados.handles.textBox.worldPosition) } : {}),
