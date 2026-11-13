@@ -6,6 +6,7 @@
 
 import { buildIndex, type DicomIndex } from '../io/organize';
 import { readHeaderFromBlob } from '../io/readHeader';
+import { registrarRecente } from '../state/recentes';
 import type { InstanceMeta } from '../io/types';
 import { extrairArquivosDoZip } from './leitorZip';
 
@@ -245,6 +246,7 @@ let acaoAbrirPastaGlobal: (() => void) | null = null;
 let acaoAbrirArquivosGlobal: (() => void) | null = null;
 let acaoAbrirZipGlobal: (() => void) | null = null;
 let acaoLimparListaGlobal: (() => void) | null = null;
+let acaoAbrirRecenteGlobal: ((handle: unknown) => void) | null = null;
 
 export function dispararAbrirPasta(): void {
   acaoAbrirPastaGlobal?.();
@@ -256,6 +258,11 @@ export function dispararAbrirArquivos(): void {
 
 export function dispararAbrirZip(): void {
   acaoAbrirZipGlobal?.();
+}
+
+/** Reabre uma pasta recente (o navegador pede de novo a permissão de leitura, se preciso). */
+export function dispararAbrirRecente(handle: unknown): void {
+  acaoAbrirRecenteGlobal?.(handle);
 }
 
 export function dispararLimparLista(): void {
@@ -368,11 +375,34 @@ export function iniciarAbrirPasta(
         abrirPorEntradaPasta();
         return;
       }
+      void registrarRecente(pasta);
       await processar(async () => {
         const saida: Candidato[] = [];
         await varrerHandle(pasta, pasta.name, saida);
         return saida;
       });
+    })();
+  }
+
+  function abrirRecente(handle: unknown): void {
+    const pasta = handle as HandlePasta & {
+      requestPermission?: (o: { mode: 'read' }) => Promise<PermissionState>;
+    };
+    void (async () => {
+      try {
+        if (pasta.requestPermission && (await pasta.requestPermission({ mode: 'read' })) !== 'granted') {
+          el.resumo.textContent = 'Sem permissão para ler a pasta recente.';
+          return;
+        }
+        void registrarRecente(pasta);
+        await processar(async () => {
+          const saida: Candidato[] = [];
+          await varrerHandle(pasta, pasta.name, saida);
+          return saida;
+        });
+      } catch (e) {
+        el.resumo.textContent = `Não foi possível reabrir a pasta recente: ${mensagemDeErro(e)}`;
+      }
     })();
   }
 
@@ -390,6 +420,7 @@ export function iniciarAbrirPasta(
   acaoAbrirArquivosGlobal = abrirArquivosDicom;
   acaoAbrirZipGlobal = abrirArquivosZip;
   acaoLimparListaGlobal = limparLista;
+  acaoAbrirRecenteGlobal = abrirRecente;
 
   el.botao.addEventListener('click', abrirPastaNativaOuAlternativa);
   el.botaoAlternativo.addEventListener('click', abrirPorEntradaPasta);

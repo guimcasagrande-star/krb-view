@@ -33,9 +33,12 @@ import {
 import { EVENTO_PREFERENCIAS } from '../state/preferencias';
 import { abrirConfiguracoes } from './configuracoes';
 import { alternarAjuda } from '../tools/atalhos';
+import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
+import { exportarImagemAtiva } from './exportarImagem';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
+  dispararAbrirRecente,
   dispararAbrirZip,
   dispararLimparLista,
 } from './abrirPasta';
@@ -236,6 +239,33 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     divisorMenu(),
     itemMenu('Limpar lista de exames', undefined, () => dispararLimparLista(), menuAbrir.fechar),
   );
+  // Pastas recentes (só a referência da pasta) e exportação da imagem.
+  const secaoRecentes = document.createElement('div');
+  menuAbrir.painel.append(secaoRecentes);
+  const montarRecentes = async (): Promise<void> => {
+    const lista = await listarRecentes();
+    secaoRecentes.replaceChildren();
+    if (lista.length === 0) return;
+    secaoRecentes.append(divisorMenu());
+    for (const r of lista) {
+      secaoRecentes.append(itemMenu(`🕘 ${r.nome}`, undefined, () => dispararAbrirRecente(r.handle), menuAbrir.fechar));
+    }
+    secaoRecentes.append(
+      itemMenu('Limpar pastas recentes', undefined, () => void limparRecentes(), menuAbrir.fechar),
+    );
+  };
+  void montarRecentes();
+  document.addEventListener(EVENTO_RECENTES, () => void montarRecentes());
+  const exportar = async (formato: 'png' | 'jpeg'): Promise<void> => {
+    const erro = await exportarImagemAtiva(formato);
+    if (erro) window.alert(erro);
+  };
+  menuAbrir.painel.append(
+    divisorMenu(),
+    itemMenu('Exportar imagem do viewport (PNG)', undefined, () => void exportar('png'), menuAbrir.fechar),
+    itemMenu('Exportar imagem do viewport (JPEG)', undefined, () => void exportar('jpeg'), menuAbrir.fechar),
+  );
+
 
   // 2. Dividir tela (Split screen: 1x1, 1x2, 2x2) + Anotações (A) + Comparar (🔗)
   const grupoTela = document.createElement('div');
