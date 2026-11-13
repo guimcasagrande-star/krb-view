@@ -7,7 +7,8 @@ import { Enums, type Types } from '@cornerstonejs/core';
 import type { StackNode } from '../io/organize';
 import type { InstanceMeta } from '../io/types';
 import { definirEstiloPorFundo } from '../tools/estiloMedidas';
-import { petEmSuv } from './exibicaoInicial';
+import { unidadeDaPilha } from '../pet/provedorSuv';
+import { ehPet } from './exibicaoInicial';
 import { desenharRegua, rotulosOrientacao, vetoresDaTela } from './orientacaoRegua';
 import { montarOverlay, type CantosOverlay } from './overlayTexto';
 
@@ -164,11 +165,13 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
       voiRange: viewport.getProperties()?.voiRange,
       zoom: viewport.getZoom(),
     });
-    // PET com SUV: a janela é mostrada como faixa de SUV (ex.: SUV 0 – 10).
+    // PET: a janela é mostrada como faixa na unidade da série (ex.: SUVbw 0 – 10 ou Bq/mL 0 – 18000).
     const voi = viewport.getProperties()?.voiRange;
-    if (voi && petEmSuv(stack)) {
-      const f = (n: number): string => n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
-      const faixa = `SUV ${f(voi.lower)} – ${f(voi.upper)}`;
+    if (voi && ehPet(stack)) {
+      const un = unidadeDaPilha(stack.id);
+      const casas = un === 'Bq/mL' ? 0 : 1;
+      const f = (n: number): string => n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: casas });
+      const faixa = `${un} ${f(voi.lower)} – ${f(voi.upper)}`;
       const i = texto.inferiorDireito.findIndex((l) => l.startsWith('Janela '));
       if (i >= 0) texto.inferiorDireito[i] = faixa;
       else texto.inferiorDireito.unshift(faixa);

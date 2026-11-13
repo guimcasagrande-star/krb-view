@@ -4,10 +4,17 @@
  */
 
 import { formatInstantPtBr } from '../io/dicomTime';
-import { correcoesDaPilha, resultadoSuv } from '../pet/provedorSuv';
+import {
+  correcoesDaPilha,
+  definirEscalaDaPilha,
+  type EscalaSuv,
+  escalaDaPilha,
+  resultadoSuv,
+} from '../pet/provedorSuv';
+import { definirTetoSuv } from '../tools/grupo';
 import type { ScanTimeSource, SuvResult } from '../pet/suv';
 import { estado } from '../state/store';
-import { EVENTO_ESTADO_VIEWPORTS, EVENTO_SUV_ATUALIZADO } from '../viewer/viewport2d';
+import { aplicarCorrecoesPet, EVENTO_ESTADO_VIEWPORTS, EVENTO_SUV_ATUALIZADO } from '../viewer/viewport2d';
 
 const ORIGEM_HORARIO: Record<ScanTimeSource, string> = {
   serie: 'Série (SeriesDate/Time)',
@@ -99,6 +106,60 @@ export function iniciarPainelSuv(painel: HTMLElement): void {
       tabela.append(tr);
     }
     painel.append(tabela);
+
+    if (r.ok && pilha) {
+      // Escala de exibição (SUVbw, SUL ou SUVbsa): troca recarrega a série na nova escala.
+      const f0 = r.factors[0];
+      const opcoes: Array<[EscalaSuv, string]> = [['bw', 'SUVbw (peso)']];
+      if (f0?.lbm !== undefined) opcoes.push(['lbm', 'SUL (massa magra)']);
+      if (f0?.bsa !== undefined) opcoes.push(['bsa', 'SUVbsa (superfície)']);
+      const controles = document.createElement('div');
+      controles.className = 'suv-controles';
+      if (opcoes.length > 1) {
+        const rotulo = document.createElement('label');
+        rotulo.textContent = 'Escala ';
+        const sel = document.createElement('select');
+        for (const [v, t] of opcoes) {
+          const o = document.createElement('option');
+          o.value = v;
+          o.textContent = t;
+          sel.append(o);
+        }
+        sel.value = escalaDaPilha(id);
+        sel.addEventListener('change', () => {
+          definirEscalaDaPilha(id, sel.value as EscalaSuv);
+          sel.disabled = true;
+          void aplicarCorrecoesPet(pilha, correcoesDaPilha(id) ?? null);
+        });
+        rotulo.append(sel);
+        controles.append(rotulo);
+      }
+      // Teto da janela (a janela vai de 0 até o teto).
+      const rotuloTeto = document.createElement('label');
+      rotuloTeto.textContent = 'Teto da janela ';
+      const teto = document.createElement('input');
+      teto.type = 'number';
+      teto.min = '0.5';
+      teto.step = '0.5';
+      teto.value = '5';
+      teto.setAttribute('aria-label', 'Teto da janela em SUV');
+      teto.addEventListener('change', () => void definirTetoSuv(Number(teto.value.replace(',', '.'))));
+      rotuloTeto.append(teto);
+      controles.append(rotuloTeto);
+      const atalhos = document.createElement('div');
+      for (const v of [5, 7, 10]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = `0–${v}`;
+        b.addEventListener('click', () => {
+          teto.value = String(v);
+          void definirTetoSuv(v);
+        });
+        atalhos.append(b);
+      }
+      controles.append(atalhos);
+      painel.append(controles);
+    }
 
     for (const w of r.warnings) {
       const d = document.createElement('div');

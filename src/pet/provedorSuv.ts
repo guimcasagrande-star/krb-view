@@ -39,6 +39,27 @@ export interface CorrecoesPet {
   aquisicaoDT?: string;
 }
 
+/** Escala em que o PET é entregue: SUVbw (padrão), SUL (massa magra) ou SUVbsa (superfície corporal). */
+export type EscalaSuv = 'bw' | 'lbm' | 'bsa';
+
+const escalaPorPilha = new Map<string, EscalaSuv>();
+
+export function escalaDaPilha(stackId: string): EscalaSuv {
+  return escalaPorPilha.get(stackId) ?? 'bw';
+}
+
+export function definirEscalaDaPilha(stackId: string, e: EscalaSuv): void {
+  if (e === 'bw') escalaPorPilha.delete(stackId);
+  else escalaPorPilha.set(stackId, e);
+}
+
+/** Nome da unidade mostrada: SUVbw, SUL, SUVbsa ou Bq/mL (quando não há SUV). */
+export function unidadeDaPilha(stackId: string): string {
+  if (!pilhaEmSuv(stackId)) return 'Bq/mL';
+  const e = escalaDaPilha(stackId);
+  return e === 'lbm' ? 'SUL' : e === 'bsa' ? 'SUVbsa' : 'SUVbw';
+}
+
 const correcoesPorPilha = new Map<string, CorrecoesPet>();
 
 export function correcoesDaPilha(stackId: string): CorrecoesPet | undefined {
@@ -111,11 +132,15 @@ export function registrarSuvDaPilha(stack: StackNode, imageIds: string[]): SuvRe
   esquecerImagens(stack.id);
   if (!resultado.ok) return resultado;
 
+  const escala = escalaDaPilha(stack.id);
   const n = Math.min(imageIds.length, resultado.factors.length);
   const usados: string[] = [];
   for (let k = 0; k < n; k++) {
     const f = resultado.factors[k]!;
-    const entrada: ScalingModuleSuv = { suvbw: f.bw };
+    // O loader aplica o fator `suvbw` aos pixels: para SUL ou SUVbsa, entrega-se o fator escolhido
+    // nesse campo (se não existir para a série, fica em SUVbw).
+    const escolhido = escala === 'lbm' ? f.lbm : escala === 'bsa' ? f.bsa : undefined;
+    const entrada: ScalingModuleSuv = { suvbw: escolhido ?? f.bw };
     if (f.lbm !== undefined) entrada.suvlbm = f.lbm;
     if (f.bsa !== undefined) entrada.suvbsa = f.bsa;
     fatoresPorImagem.set(imageIds[k]!, entrada);
@@ -135,6 +160,7 @@ export function esquecerSuvDaPilha(stackId: string): void {
   esquecerImagens(stackId);
   resultadoPorPilha.delete(stackId);
   correcoesPorPilha.delete(stackId);
+  escalaPorPilha.delete(stackId);
 }
 
 /** Resultado de `computeSuv` da pilha (se for PET e já tiver sido aberta). */

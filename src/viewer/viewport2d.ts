@@ -25,8 +25,8 @@ import {
   type CorrecoesPet,
   definirCorrecoesDaPilha,
   esquecerSuvDaPilha,
-  pilhaEmSuv,
   registrarSuvDaPilha,
+  unidadeDaPilha,
 } from '../pet/provedorSuv';
 import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from '../tools/voiEsfera';
 import {
@@ -1931,7 +1931,7 @@ async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
       direction: vol.direction,
     });
     const ehPet = stack.instances.some((i) => i.modality === 'PT');
-    const unidade = ehPet ? (pilhaEmSuv(stack.id) ? 'SUV' : 'Bq/mL') : stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
+    const unidade = ehPet ? unidadeDaPilha(stack.id) : stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
     return { volume: { data: dados, grid }, unidade, ehPet };
   } catch (e) {
     return { erro: textoDoErro(e) };

@@ -119,8 +119,9 @@ function linhasDoTexto(voi: DadosVoi): string[] {
   const r = voi.resultado;
   if (voi.estado !== 'pronto' || !r) return [];
   const un = voi.unidade ?? '';
-  const sufixo = un === 'SUV' ? '' : ` ${un}`;
-  const rot = un === 'SUV' ? 'SUV' : '';
+  const eSuv = un.startsWith('SU');
+  const sufixo = eSuv ? '' : ` ${un}`;
+  const rot = un === 'SUVbw' ? 'SUV' : eSuv ? un : '';
   const linhas = [
     `${rot}máx.: ${n(r.max)}${sufixo}`,
     `${rot}média: ${n(r.media)}${sufixo} (DP ${n(r.desvio)})`,

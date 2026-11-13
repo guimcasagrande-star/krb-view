@@ -387,6 +387,14 @@ export function irParaCorte(posicao: 'primeiro' | 'ultimo'): Promise<void> {
   });
 }
 
+/** Janela do PET ativo de 0 até `teto` (na unidade da série). */
+export function definirTetoSuv(teto: number): Promise<void> {
+  if (!(teto > 0) || !petEmSuv(estado.pilhaAtiva)) return Promise.resolve();
+  return comViewport((v) => {
+    v.setProperties({ voiRange: { lower: 0, upper: teto } });
+  }, true);
+}
+
 export function aplicarPredefinicao(indice: number): Promise<void> {
   // PET com SUV: teclas 1 a 3 = janelas 0–5, 0–7 e 0–10 (em SUV).
   if (petEmSuv(estado.pilhaAtiva)) {
