@@ -247,6 +247,7 @@ let acaoAbrirArquivosGlobal: (() => void) | null = null;
 let acaoAbrirZipGlobal: (() => void) | null = null;
 let acaoLimparListaGlobal: (() => void) | null = null;
 let acaoAbrirRecenteGlobal: ((handle: unknown) => void) | null = null;
+let acaoAbrirCandidatosGlobal: ((c: Array<{ path: string; obter(): Promise<File> }>) => void) | null = null;
 
 export function dispararAbrirPasta(): void {
   acaoAbrirPastaGlobal?.();
@@ -258,6 +259,11 @@ export function dispararAbrirArquivos(): void {
 
 export function dispararAbrirZip(): void {
   acaoAbrirZipGlobal?.();
+}
+
+/** Abre arquivos já localizados (ex.: o estudo baixado do PACS), pelo mesmo fluxo de "Abrir pasta". */
+export function dispararAbrirCandidatos(candidatos: Array<{ path: string; obter(): Promise<File> }>): void {
+  acaoAbrirCandidatosGlobal?.(candidatos);
 }
 
 /** Reabre uma pasta recente (o navegador pede de novo a permissão de leitura, se preciso). */
@@ -421,6 +427,7 @@ export function iniciarAbrirPasta(
   acaoAbrirZipGlobal = abrirArquivosZip;
   acaoLimparListaGlobal = limparLista;
   acaoAbrirRecenteGlobal = abrirRecente;
+  acaoAbrirCandidatosGlobal = (c) => void processar(async () => c);
 
   el.botao.addEventListener('click', abrirPastaNativaOuAlternativa);
   el.botaoAlternativo.addEventListener('click', abrirPorEntradaPasta);

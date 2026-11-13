@@ -36,6 +36,7 @@ import { alternarAjuda } from '../tools/atalhos';
 import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
 import { pacsDisponivel } from '../pacs/transporteTauri.ts';
 import { exportarImagemAtiva } from './exportarImagem';
+import { abrirBuscarPacs } from './buscarPacs';
 import { abrirServidoresPacs } from './servidoresPacs';
 import {
   dispararAbrirArquivos,
@@ -268,6 +269,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   if (pacsDisponivel()) {
     menuAbrir.painel.append(
       divisorMenu(),
+      itemMenu('Buscar no PACS…', undefined, () => abrirBuscarPacs(), menuAbrir.fechar),
       itemMenu('Servidores PACS…', undefined, () => abrirServidoresPacs(), menuAbrir.fechar),
     );
   }

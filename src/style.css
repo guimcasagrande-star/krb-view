@@ -600,3 +600,16 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .pacs-resultado.ok { color: #4ade80; }
 .pacs-resultado.erro { color: #f87171; max-width: 260px; font-size: 12px; }
 .pacs-botoes { display: flex; gap: 8px; margin-top: 10px; }
+
+/* Buscar no PACS */
+#buscar-pacs { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+#buscar-pacs::backdrop { background: rgba(0, 0, 0, 0.6); }
+#buscar-pacs h2 { margin: 0 0 10px; font-size: 16px; }
+.busca-servidores { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.busca-periodo { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.busca-tabela tr.busca-linha { cursor: pointer; }
+.busca-tabela tr.busca-linha:hover, .busca-tabela tr.selecionada { background: #1f3a57; }
+.busca-resultados { max-height: 220px; overflow: auto; margin-top: 8px; }
+.busca-series { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 180px; overflow: auto; }
+.busca-pastarow { margin-top: 10px; gap: 8px; }
+.busca-pasta { flex: 1; min-width: 200px; }
