@@ -560,8 +560,9 @@ function irParaPosicaoMm(d: Slot, mm: number): number | undefined {
     const posicoes = d.pilha.geometry.positions;
     if (posicoes.length === 0) return undefined;
     const idx = nearestIndex(posicoes, mm);
+    if (d.viewport.getImageIds().length <= idx) return undefined; // série ainda sendo (re)carregada
     if (d.viewport.getCurrentImageIdIndex() === idx) return undefined;
-    void d.viewport.setImageIdIndex(idx);
+    void d.viewport.setImageIdIndex(idx).catch(() => undefined);
     return posicoes[idx]!;
   }
   const n = normalDoSlot(d);
@@ -674,6 +675,27 @@ let sincronizandoCameraEstudo = false;
  * reconstruídos), então o zoom e o pan entre os cortes do mesmo plano são copiados aqui.
  */
 function aoMudarCameraEstudo(origem: number): void {
+  // Comparação com fusões (volumes): zoom/pan copiados entre os dois lados quando ligados.
+  if (compararAtivo && !mprAtivo) {
+    if (!zoomPanCompararLigado || sincronizandoCameraEstudo || (origem !== 0 && origem !== 1)) return;
+    const so = slots[origem];
+    const d = slots[origem === 0 ? 1 : 0];
+    if (!so?.viewport || !d?.viewport || ('setImageIdIndex' in so.viewport && 'setImageIdIndex' in d.viewport)) return;
+    const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
+    const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport;
+    const zoom = v.getZoom?.();
+    const pan = v.getPan?.();
+    sincronizandoCameraEstudo = true;
+    try {
+      if (zoom !== undefined && Math.abs((t.getZoom?.() ?? zoom) - zoom) > 1e-6) t.setZoom?.(zoom);
+      const pt = t.getPan?.();
+      if (pan && (!pt || Math.abs(pt[0] - pan[0]) > 0.01 || Math.abs(pt[1] - pan[1]) > 0.01)) t.setPan?.(pan);
+      t.render();
+    } finally {
+      sincronizandoCameraEstudo = false;
+    }
+    return;
+  }
   if (!sincroniaEstudoLigada || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
   const so = slots[origem];
   if (!so?.viewport || !so.pilha) return;
@@ -1160,9 +1182,17 @@ function montarControlesFusao(
   const c = slot.controlesFusao;
   c.replaceChildren();
   c.hidden = false;
-  const alvos = opcoes.alvos ?? [slot];
   const reaplicar = (): void => {
-    for (const a of alvos) aplicarFusao(a, volumeCtId, volumePetId);
+    // MPR: os três planos; comparação de dois PET/CT: as duas fusões (mesma escala nos dois lados).
+    const alvos =
+      opcoes.alvos ??
+      (compararAtivo && emFusao(slots[0]!) && emFusao(slots[1]!) && (slot === slots[0] || slot === slots[1])
+        ? [slots[0]!, slots[1]!]
+        : [slot]);
+    for (const a of alvos) {
+      const v = a.volumesFusao ?? { ct: volumeCtId, pet: volumePetId };
+      aplicarFusao(a, v.ct, v.pet);
+    }
   };
   slot.reaplicarFusao = reaplicar;
 
@@ -2111,7 +2141,9 @@ function definirPadroesSincroniaComparar(): void {
   const b = slots[1]?.pilha ?? null;
   const mesmo = mesmoEstudo(a, b);
   zoomPanCompararLigado = mesmo;
-  janelaCompararLigada = mesmo && mesmaModalidade(a, b);
+  // PET x PET (mesmo estudo ou não): a mesma escala de SUV nos dois lados.
+  const ambosPet = !!a?.instances.some((i) => i.modality === 'PT') && !!b?.instances.some((i) => i.modality === 'PT');
+  janelaCompararLigada = (mesmo && mesmaModalidade(a, b)) || ambosPet;
 }
 
 function atualizarSincronizadoresCornerstoneComparar(): void {
@@ -2205,10 +2237,14 @@ function aoRolarSlotComparar(origemIndice: number): void {
       slotDestino.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC &&
       'jumpToWorld' in vpDestino
     ) {
-      const instAlvo = slotDestino.pilha.instances[sincronizado.index];
-      const posMundo = instAlvo?.imagePositionPatient;
-      if (posMundo) {
-        vpDestino.jumpToWorld([posMundo[0], posMundo[1], posMundo[2]]);
+      const posAlvo = slotDestino.pilha.geometry.positions[sincronizado.index];
+      if (posAlvo !== undefined) {
+        // Só ao longo da normal do plano (jumpToWorld com o canto da imagem deslocaria o pan).
+        // A posição vem na convenção da normal da aquisição; a câmera pode ter a normal invertida.
+        const nGeo = slotDestino.pilha.geometry.normal;
+        const nCam = normalDoSlot(slotDestino);
+        const sinalCam = nGeo && nCam && nGeo[0] * nCam[0] + nGeo[1] * nCam[1] + nGeo[2] * nCam[2] < 0 ? -1 : 1;
+        irParaPosicaoMm(slotDestino, posAlvo * sinalCam);
         vpDestino.render();
         slotDestino.overlay.atualizar();
       }
@@ -2744,6 +2780,46 @@ function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
     if (par) return { estudo, par };
   }
   return null;
+}
+
+/**
+ * Comparar PET/CT: dois estudos (atual e anterior) lado a lado, cada um como fusão TC + PET, com a
+ * mesma escala de SUV e rolagem ligada por posição (como na fase 4). O par de cada estudo é o que
+ * envolve a série aberta ou, na falta dele, o melhor candidato.
+ */
+export async function compararPetCt(): Promise<void> {
+  const slotAtivo = slots[ativo] ?? slots[0];
+  const pacientes = estado.resultado?.index.patients ?? [];
+  const ativa = estado.pilhaAtiva?.id;
+  const itens = pacientes
+    .flatMap((p) => p.studies)
+    .map((estudo) => ({ estudo, pares: findFusionCandidates(estudo) }))
+    .filter((x) => x.pares.length > 0);
+  if (itens.length < 2) {
+    if (slotAtivo) {
+      mostrarMensagem(slotAtivo, 'Comparar PET/CT precisa de dois estudos', 'Abra dois estudos que tenham, cada um, uma série de PET e uma de TC ou RM.');
+    }
+    return;
+  }
+  const base = itens.find((x) => x.pares.some((c) => c.pet.id === ativa || c.anatomic.id === ativa)) ?? itens[0]!;
+  const baseUid = base.pares[0]!.pet.instances[0]?.patientId;
+  const outro =
+    itens.find((x) => x !== base && x.pares[0]!.pet.instances[0]?.patientId === baseUid) ?? itens.find((x) => x !== base)!;
+  const chave = (x: (typeof itens)[number]): string => `${x.estudo.date ?? ''}${(x.estudo.time ?? '').padEnd(6, '0')}`;
+  const [atual, anterior] = [base, outro].sort((a, b) => chave(b).localeCompare(chave(a)));
+  const escolher = (x: (typeof itens)[number]): FusionCandidate =>
+    (ativa && x.pares.find((c) => c.pet.id === ativa || c.anatomic.id === ativa)) || x.pares[0]!;
+
+  if (!compararAtivo) await alternarModoComparar();
+  if (!compararAtivo) return;
+  // As duas fusões compartilham as mesmas configurações (escala, colormap, opacidade).
+  slots[1]!.fusao = slots[0]!.fusao;
+  const parA = escolher(atual!);
+  const parB = escolher(anterior!);
+  await configurarFusaoNoSlot(slots[0]!, parA.anatomic, parA.pet, parA.sameFrame);
+  await configurarFusaoNoSlot(slots[1]!, parB.anatomic, parB.pet, parB.sameFrame);
+  zoomPanCompararLigado = true;
+  sincronizar();
 }
 
 /**

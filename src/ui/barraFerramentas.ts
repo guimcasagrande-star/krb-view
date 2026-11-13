@@ -50,6 +50,7 @@ import {
   alternarCine,
   alternarMipRotatorio,
   alternarModoComparar,
+  compararPetCt,
   alternarMpr,
   alternarSincronizacaoJanelaComparar,
   alternarSincronizacaoZoomPanComparar,
@@ -366,6 +367,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   menuComparar.painel.append(
     itemSincEstudo,
     divisorMenu(),
+    itemMenu('Comparar PET/CT (fusão atual × anterior)', undefined, () => void compararPetCt(), menuComparar.fechar),
     itemMenu('Ativar / sair do modo Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar),
     divisorMenu(),
     itemCadeadoMenu,
