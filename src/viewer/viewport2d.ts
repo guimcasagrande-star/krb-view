@@ -211,6 +211,8 @@ interface Slot {
   reaplicarFusao?: () => void;
   /** Ids dos volumes da fusão (TC e PET) para reaplicar propriedades e o registro manual. */
   volumesFusao?: { ct: string; pet: string };
+  /** MPR: o PET deste plano é de outro slot (que guarda as referências); não libera nada. */
+  fusaoCompartilhada?: boolean;
   atualizarLeituraRegistro?: () => void;
   /** Legenda da escala de cores do PET na fusão. */
   legendaFusao?: HTMLDivElement;
@@ -249,12 +251,17 @@ let zoomPanCompararLigado = false;
 let sincronizandoRolagemComparar = false;
 
 /** Pilhas, planos e slabs salvos antes de entrar no MPR, para restaurar ao sair. */
+/** O MPR atual foi aberto a partir de uma fusão: ao sair, volta cada célula à série que tinha. */
+let mprComFusao = false;
+
 let estadoAntesDoMpr: Array<{
   pilha: StackNode | null;
   planoSlot: PlanoSlot;
   modoSlab: ModoSlab;
   slabMm: number;
   corte?: number;
+  pilhaFusao?: StackNode | null;
+  fusao?: Slot['fusao'];
 }> = [];
 
 // ---------- registro de imageIds por pilha ----------
@@ -1013,8 +1020,7 @@ async function configurarFusaoNoSlot(
   sincronizar();
 }
 
-function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
-  slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
+function criarLegendaFusao(slot: Slot): void {
   // Legenda da escala (como nos visualizadores de PET): opacidade, barra de cores, máx, 0 e unidade.
   slot.legendaFusao?.remove();
   const legenda = document.createElement('div');
@@ -1046,11 +1052,28 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
     legUn.textContent = unidadeLegenda(slot.pilhaFusao);
   };
   slot.atualizarLegendaFusao();
+}
+
+/**
+ * Controles e legenda da fusão. No MPR (`mpr: true`) há uma só barra, no 1º plano, que reaplica o
+ * ajuste aos três planos (`alvos`); o registro manual e a troca de séries ficam só na fusão axial.
+ */
+function montarControlesFusao(
+  slot: Slot,
+  volumeCtId: string,
+  volumePetId: string,
+  opcoes: { alvos?: Slot[]; mpr?: boolean } = {},
+): void {
+  slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
+  criarLegendaFusao(slot);
 
   const c = slot.controlesFusao;
   c.replaceChildren();
   c.hidden = false;
-  const reaplicar = (): void => aplicarFusao(slot, volumeCtId, volumePetId);
+  const alvos = opcoes.alvos ?? [slot];
+  const reaplicar = (): void => {
+    for (const a of alvos) aplicarFusao(a, volumeCtId, volumePetId);
+  };
   slot.reaplicarFusao = reaplicar;
 
   const opac = document.createElement('input');
@@ -1194,7 +1217,8 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
   const painel = document.createElement('div');
   painel.className = 'painel-fusao';
   painel.hidden = true;
-  painel.append(seriesFusao, rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
+  if (opcoes.mpr) painel.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto));
+  else painel.append(seriesFusao, rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
   const abrir = document.createElement('button');
   abrir.type = 'button';
   abrir.className = 'btn-fusao';
@@ -1550,6 +1574,12 @@ export async function definirModoSlabAtivo(modo: ModoSlab): Promise<void> {
 
 /** Solta o PET da fusão deste slot (volume e arquivos). */
 function soltarFusao(slot: Slot): void {
+  if (slot.fusaoCompartilhada) {
+    slot.volumeFusaoId = null;
+    slot.pilhaFusao = null;
+    slot.idsFusao = [];
+    slot.fusaoCompartilhada = false;
+  }
   if (slot.volumeFusaoId) {
     liberarVolume(slot.volumeFusaoId);
     slot.volumeFusaoId = null;
@@ -1640,7 +1670,10 @@ export function definirSlabMpr(mm: number): void {
   sincronizar();
 }
 
-async function montarLayoutMpr(stack: StackNode): Promise<void> {
+async function montarLayoutMpr(
+  stack: StackNode,
+  fusaoMpr?: { pet: StackNode; config: Slot['fusao'] },
+): Promise<void> {
   const arquivos = estado.resultado?.arquivos;
   if (!arquivos) return;
 
@@ -1673,12 +1706,34 @@ async function montarLayoutMpr(stack: StackNode): Promise<void> {
     return;
   }
 
+  // Fusão no MPR: o PET entra como 2º volume dos três planos (um só volume, uma só referência).
+  let idsPet: string[] | undefined;
+  let resPet: ReturnType<typeof adquirirVolume> | undefined;
+  if (fusaoMpr) {
+    try {
+      idsPet = adquirirIds(fusaoMpr.pet, arquivos);
+      resPet = adquirirVolume(fusaoMpr.pet, idsPet);
+      if (!resPet.ok) {
+        liberarIds(fusaoMpr.pet.id);
+        idsPet = undefined;
+        resPet = undefined;
+        const slotAtivo = slots[ativo] ?? slots[0];
+        if (slotAtivo) mostrarAvisoVolume(slotAtivo, ['PET sem volume: o MPR abre só com a TC.']);
+      }
+    } catch {
+      idsPet = undefined;
+      resPet = undefined;
+    }
+  }
+
   if (!mprAtivo) {
     estadoAntesDoMpr = slots.map((s) => ({
       pilha: s.pilha,
       planoSlot: s.planoSlot,
       modoSlab: s.modoSlab,
       slabMm: s.slabMm,
+      pilhaFusao: s.pilhaFusao,
+      fusao: { ...s.fusao },
       corte:
         s.tipoViewport === Enums.ViewportType.STACK && s.viewport && 'getCurrentImageIdIndex' in s.viewport
           ? s.viewport.getCurrentImageIdIndex()
@@ -1713,6 +1768,20 @@ async function montarLayoutMpr(stack: StackNode): Promise<void> {
     slots[i]!.slabMm = slabMprMm;
   }
 
+  if (fusaoMpr && idsPet && resPet?.ok) {
+    for (let i = 0; i < 3; i++) {
+      const sl = slots[i]!;
+      sl.pilhaFusao = fusaoMpr.pet;
+      sl.idsFusao = idsPet;
+      sl.fusao = i === 0 ? fusaoMpr.config : slots[0]!.fusao;
+      sl.fusaoCompartilhada = i > 0;
+    }
+    slots[0]!.volumeFusaoId = fusaoMpr.pet.id; // o 1º plano guarda a referência do volume do PET
+    mprComFusao = true;
+  } else if (!mprAtivo || estadoAntesDoMpr.length === 0) {
+    mprComFusao = false;
+  }
+
   grade.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
   grade.style.gridTemplateRows = 'minmax(0, 1fr)';
 
@@ -1737,8 +1806,23 @@ async function montarLayoutMpr(stack: StackNode): Promise<void> {
     if (minhaGeracaoMpr !== geracaoMpr || !mprAtivo) return;
 
     const idsViewports = [slots[0]!.idViewport, slots[1]!.idViewport, slots[2]!.idViewport];
-    await setVolumesForViewports(motor, [{ volumeId: resVol.volumeId }], idsViewports, true);
+    const entradas = [{ volumeId: resVol.volumeId }];
+    if (resPet?.ok) {
+      await resPet.promessa;
+      if (minhaGeracaoMpr !== geracaoMpr || !mprAtivo) return;
+      entradas.push({ volumeId: resPet.volumeId });
+    }
+    await setVolumesForViewports(motor, entradas, idsViewports, true);
     if (minhaGeracaoMpr !== geracaoMpr || !mprAtivo) return;
+    if (resPet?.ok) {
+      for (let i = 0; i < 3; i++) {
+        const sl = slots[i]!;
+        sl.volumesFusao = { ct: resVol.volumeId, pet: resPet.volumeId };
+        if (i === 0) montarControlesFusao(sl, resVol.volumeId, resPet.volumeId, { alvos: [slots[0]!, slots[1]!, slots[2]!], mpr: true });
+        else criarLegendaFusao(sl);
+        aplicarFusao(sl, resVol.volumeId, resPet.volumeId);
+      }
+    }
 
     const voiInicial = voiPadraoDaPilha(stack);
 
@@ -1772,6 +1856,8 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
   definirModoMprFerramentas(false);
 
   const stackPrincipal = slots[0]?.pilha ?? null;
+  const comFusao = mprComFusao;
+  mprComFusao = false;
   const salvas = estadoAntesDoMpr;
   estadoAntesDoMpr = [];
 
@@ -1781,6 +1867,7 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
     if (i === 0) {
       liberarRecursosSlot(s);
     } else {
+      soltarFusao(s); // planos 2 e 3 do MPR: só limpam a fusão compartilhada
       s.pilha = null;
       s.planoSlot = 'original';
       s.modoSlab = 'normal';
@@ -1806,7 +1893,8 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
   if (arquivos) {
     for (let i = 0; i < quantidade; i++) {
       const s = slots[i]!;
-      const restaurada = i === 0 ? (stackPrincipal ?? salvas[0]?.pilha ?? null) : (salvas[i]?.pilha ?? null);
+      const restaurada =
+        i === 0 && !comFusao ? (stackPrincipal ?? salvas[0]?.pilha ?? null) : (salvas[i]?.pilha ?? null);
       const corte = salvas[i]?.corte;
       const plano = salvas[i]?.planoSlot ?? 'original';
       const modo = salvas[i]?.modoSlab ?? 'normal';
@@ -1815,6 +1903,11 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
         try {
           s.ids = adquirirIds(restaurada, arquivos);
           s.pilha = restaurada;
+          if (plano === 'fusao' && salvas[i]?.pilhaFusao) {
+            s.pilhaFusao = salvas[i]!.pilhaFusao!;
+            s.idsFusao = adquirirIds(s.pilhaFusao, arquivos);
+            if (salvas[i]!.fusao) s.fusao = salvas[i]!.fusao!;
+          }
           s.planoSlot = plano;
           s.modoSlab = modo;
           s.slabMm = slab;
@@ -1841,9 +1934,14 @@ export async function alternarMpr(): Promise<void> {
     await sairDoMpr();
     return;
   }
-  const stack = slots[ativo]?.pilha ?? slots[0]?.pilha ?? null;
+  // Se há uma fusão PET/TC no layout (de preferência a do viewport ativo), o MPR leva o PET junto.
+  const fonte =
+    slots[ativo]?.planoSlot === 'fusao' && slots[ativo]?.pilhaFusao
+      ? slots[ativo]
+      : slots.find((s) => !s.celula.hidden && s.planoSlot === 'fusao' && s.pilhaFusao);
+  const stack = fonte?.pilha ?? slots[ativo]?.pilha ?? slots[0]?.pilha ?? null;
   if (!stack) return;
-  await montarLayoutMpr(stack);
+  await montarLayoutMpr(stack, fonte?.pilhaFusao ? { pet: fonte.pilhaFusao, config: { ...fonte.fusao } } : undefined);
 }
 
 // ---------- Modo Comparar (Fase 4: 4.1, 4.2 e 4.3) ----------
