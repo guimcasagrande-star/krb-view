@@ -9,6 +9,7 @@
   <body>
     <div id="app">
       <header id="barra-ferramentas" aria-label="Barra de ferramentas">
+        <button id="btn-lateral" type="button" class="btn-lateral" title="Mostrar ou esconder a barra lateral de exames (Ctrl+B)" aria-label="Barra lateral" aria-pressed="true">☰</button>
         <span class="marca">Visualizador DICOM</span>
         <div id="ferramentas"></div>
       </header>
@@ -21,7 +22,7 @@
             <button id="btn-limpar-lista" type="button" class="link" hidden title="Remover todos os estudos carregados da barra lateral">limpar lista</button>
           </div>
           <input id="entrada-pasta" type="file" webkitdirectory multiple hidden />
-          <p class="dica">Ou arraste pastas, arquivos DICOM ou <code>.zip</code> para a janela.</p>
+          <p class="dica">Abra pela barra de cima (📂 Abrir) ou arraste pastas, arquivos DICOM ou <code>.zip</code> para a janela.</p>
           <progress id="progresso" max="1" value="0" hidden></progress>
           <div id="resumo" role="status" aria-live="polite"></div>
         </section>

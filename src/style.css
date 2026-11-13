@@ -585,3 +585,9 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .legenda-fusao .leg-barra { width: 14px; border: 1px solid #ddd; }
 .legenda-fusao .leg-rotulos { display: flex; flex-direction: column; justify-content: space-between; }
 .legenda-fusao .leg-un { margin-top: 4px; max-width: 80px; }
+
+/* Abrir fica só no menu de cima; os botões da lateral continuam no DOM (a lógica usa) mas ficam ocultos */
+#abrir .linha-botoes { display: none; }
+.btn-lateral { padding: 4px 8px; font-size: 15px; line-height: 1; }
+#app.lateral-recolhida { grid-template-columns: 0 1fr; }
+#app.lateral-recolhida #painel-lateral { display: none; }

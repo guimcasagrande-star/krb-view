@@ -27,6 +27,31 @@ function obter<T extends HTMLElement>(id: string): T {
   return e as T;
 }
 
+// Barra lateral recolhível (lembra a escolha neste computador).
+const appEl = obter('app');
+const botaoLateral = obter<HTMLButtonElement>('btn-lateral');
+function definirLateral(visivel: boolean): void {
+  appEl.classList.toggle('lateral-recolhida', !visivel);
+  botaoLateral.setAttribute('aria-pressed', String(visivel));
+  try {
+    localStorage.setItem('visualizador.lateral', visivel ? '1' : '0');
+  } catch {
+    /* sem armazenamento: vale só nesta sessão */
+  }
+}
+try {
+  if (localStorage.getItem('visualizador.lateral') === '0') definirLateral(false);
+} catch {
+  /* ignora */
+}
+botaoLateral.addEventListener('click', () => definirLateral(appEl.classList.contains('lateral-recolhida')));
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+    e.preventDefault();
+    definirLateral(appEl.classList.contains('lateral-recolhida'));
+  }
+});
+
 const lista = obter('lista-estudos');
 const vazio = obter('vazio');
 configurarViewport2d({ contentor: obter('area-viewports') });
