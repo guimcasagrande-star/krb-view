@@ -536,3 +536,13 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 /* Texto do overlay legível sobre qualquer fundo (preto, branco ou misto): preenchimento claro
    com contorno escuro por fora, em vez de depender da cor do fundo. */
 .overlay { color: #fff; text-shadow: none; -webkit-text-stroke: 3px rgba(0, 0, 0, 0.92); paint-order: stroke fill; }
+
+/* Dados PET */
+.btn-dados-pet { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 6; padding: 2px 8px; font-size: 11px; opacity: 0.75; }
+.btn-dados-pet:hover { opacity: 1; }
+#dados-pet { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; width: min(480px, calc(100vw - 32px)); }
+#dados-pet::backdrop { background: rgba(0, 0, 0, 0.6); }
+#dados-pet h2 { margin: 0 0 10px; font-size: 16px; }
+#dados-pet input[type='number'] { width: 90px; }
+.dados-pet-dose { display: flex; gap: 6px; }
+.dados-pet-botoes { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }

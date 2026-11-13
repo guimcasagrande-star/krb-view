@@ -21,7 +21,13 @@ import { ajustarZoomAoConteudo, exibicaoPadraoPet } from './exibicaoInicial';
 import { SynchronizerManager, synchronizers } from '@cornerstonejs/tools';
 import { nearestIndex } from '../compare/sync';
 import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
-import { esquecerSuvDaPilha, pilhaEmSuv, registrarSuvDaPilha } from '../pet/provedorSuv';
+import {
+  type CorrecoesPet,
+  definirCorrecoesDaPilha,
+  esquecerSuvDaPilha,
+  pilhaEmSuv,
+  registrarSuvDaPilha,
+} from '../pet/provedorSuv';
 import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from '../tools/voiEsfera';
 import {
   adicionarViewportAoGrupo,
@@ -54,7 +60,7 @@ import {
 } from '../compare/modoComparar';
 import { invertLink, type ScrollLink } from '../compare/sync';
 import { estado } from '../state/store';
-import { adquirirVolume, liberarVolume } from '../volume/montarVolume';
+import { adquirirVolume, descartarVolume, liberarVolume } from '../volume/montarVolume';
 import { avaliarVolume } from '../volume/validarVolume';
 import { cineTocando, definirFps, fpsAtual, pararCine, pararTodosCines, tocarCine } from './cine';
 import { idElemento, ID_MOTOR, idViewport, iniciarCornerstone, MAX_VIEWPORTS } from './iniciar';
@@ -71,6 +77,11 @@ export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rota
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
 export const GRADE_MAXIMA = 5;
+
+/** Disparado em `document` quando o usuário pede o painel "Dados PET" (detail = StackNode). */
+export const EVENTO_DADOS_PET = 'abrirDadosPet';
+/** Disparado depois que o SUV de uma pilha foi recalculado com dados corrigidos. */
+export const EVENTO_SUV_ATUALIZADO = 'suvAtualizado';
 
 export interface GeometriaLayout {
   rotulo: string;
@@ -158,6 +169,7 @@ interface Slot {
   controlesMip: HTMLDivElement;
   etiquetaComparacao: HTMLDivElement;
   avisoCobertura: HTMLDivElement;
+  botaoDadosPet: HTMLButtonElement;
   canvasMira: HTMLCanvasElement;
   pontoMiraMundo: Types.Point3 | null;
   controladorMip?: ControladorMipRotatorio;
@@ -498,6 +510,9 @@ function sincronizar(): void {
   for (const x of slots) x.celula.classList.toggle('ativa', varios && maximizado === null && x.indice === ativo);
   atualizarEtiquetasComparacao();
   atualizarSincroniaEstudo();
+  for (const x of slots) {
+    x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
+  }
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
 
@@ -1925,6 +1940,38 @@ async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
   }
 }
 
+/**
+ * Aplica (ou remove, com `null`) as correções do usuário ao SUV de uma pilha de PET.
+ * O SUV é entregue na decodificação, então as imagens e os volumes da série são descartados e
+ * recarregados com os novos fatores; janela, corte e plano de cada viewport são mantidos.
+ */
+export async function aplicarCorrecoesPet(stack: StackNode, correcoes: CorrecoesPet | null): Promise<void> {
+  const ids = registro.get(stack.id)?.ids;
+  if (!ids) return;
+  definirCorrecoesDaPilha(stack.id, correcoes);
+  registrarSuvDaPilha(stack, ids);
+
+  const afetados = slots.filter((s) => s.pilha?.id === stack.id);
+  const salvos = afetados.map((s) => {
+    pararCine(s.indice);
+    return { slot: s, ...salvarEstadoVisualSlot(s) };
+  });
+  descartarVolume(stack.id);
+  for (const id of ids) {
+    try {
+      cache.removeImageLoadObject(id);
+    } catch {
+      /* não estava no cache */
+    }
+  }
+  for (const { slot } of salvos) slot.volumePilhaId = null;
+  for (const { slot, corte, voiPreservado } of salvos) {
+    if (slot.habilitado) await exibirSlot(slot, corte, voiPreservado);
+  }
+  sincronizar();
+  document.dispatchEvent(new CustomEvent(EVENTO_SUV_ATUALIZADO, { detail: stack.id }));
+}
+
 /** Estudo que contém a pilha ativa; se não houver, o mais recente com par PET + TC/RM. */
 function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
   const pacientes = estado.resultado?.index.patients ?? [];
@@ -2077,7 +2124,13 @@ function criarSlot(indice: number): Slot {
   avisoCobertura.hidden = true;
   const canvasMira = document.createElement('canvas');
   canvasMira.className = 'canvas-mira';
-  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, etiquetaComparacao, avisoCobertura);
+  const botaoDadosPet = document.createElement('button');
+  botaoDadosPet.type = 'button';
+  botaoDadosPet.className = 'btn-dados-pet';
+  botaoDadosPet.textContent = 'Dados PET';
+  botaoDadosPet.title = 'Ver e corrigir peso, altura, dose e horários usados no cálculo do SUV';
+  botaoDadosPet.hidden = true;
+  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, etiquetaComparacao, avisoCobertura, botaoDadosPet);
 
   const slot: Slot = {
     indice,
@@ -2089,6 +2142,7 @@ function criarSlot(indice: number): Slot {
     controlesMip,
     etiquetaComparacao,
     avisoCobertura,
+    botaoDadosPet,
     canvasMira,
     pontoMiraMundo: null,
     tipoViewport: Enums.ViewportType.STACK,
@@ -2124,6 +2178,9 @@ function criarSlot(indice: number): Slot {
     atualizarMiraSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+  botaoDadosPet.addEventListener('click', () => {
+    if (slot.pilha) document.dispatchEvent(new CustomEvent(EVENTO_DADOS_PET, { detail: slot.pilha }));
+  });
   // Duplo clique maximiza/restaura. Com ferramenta de medida ativa só com Shift (o duplo clique
   // pode ser parte do desenho, ex.: terminar uma polilinha).
   celula.addEventListener('dblclick', (e) => {

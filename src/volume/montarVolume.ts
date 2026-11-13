@@ -285,6 +285,19 @@ export function liberarVolume(stackId: string | undefined): void {
   descartarDoCache(entrada.volumeId, volume);
 }
 
+/**
+ * Descarta o volume da pilha de uma vez, sem contar referências (ex.: os voxels ficaram
+ * desatualizados porque o SUV foi recalculado). Quem o usava deve pedir outro com `adquirirVolume`.
+ */
+export function descartarVolume(stackId: string): void {
+  const entrada = volumes.get(stackId);
+  if (!entrada) return;
+  volumes.delete(stackId);
+  removerMetadadosPilha(entrada.imageIds);
+  const volume = entrada.volume ?? cache.getVolume(entrada.volumeId);
+  descartarDoCache(entrada.volumeId, volume);
+}
+
 /** Libera todos os volumes ativos (ex.: ao abrir outra pasta). */
 export function limparVolumes(): void {
   for (const entrada of volumes.values()) {

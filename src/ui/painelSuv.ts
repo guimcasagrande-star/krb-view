@@ -4,10 +4,10 @@
  */
 
 import { formatInstantPtBr } from '../io/dicomTime';
-import { resultadoSuv } from '../pet/provedorSuv';
+import { correcoesDaPilha, resultadoSuv } from '../pet/provedorSuv';
 import type { ScanTimeSource, SuvResult } from '../pet/suv';
 import { estado } from '../state/store';
-import { EVENTO_ESTADO_VIEWPORTS } from '../viewer/viewport2d';
+import { EVENTO_ESTADO_VIEWPORTS, EVENTO_SUV_ATUALIZADO } from '../viewer/viewport2d';
 
 const ORIGEM_HORARIO: Record<ScanTimeSource, string> = {
   serie: 'Série (SeriesDate/Time)',
@@ -67,6 +67,12 @@ export function iniciarPainelSuv(painel: HTMLElement): void {
     const titulo = document.createElement('h3');
     titulo.textContent = 'SUV';
     painel.append(titulo);
+    if (correcoesDaPilha(id)) {
+      const editado = document.createElement('div');
+      editado.className = 'suv-aviso';
+      editado.textContent = '✎ Dados corrigidos pelo usuário (o arquivo não foi alterado)';
+      painel.append(editado);
+    }
 
     if (!r.ok) {
       const aviso = document.createElement('div');
@@ -103,5 +109,9 @@ export function iniciarPainelSuv(painel: HTMLElement): void {
   }
 
   document.addEventListener(EVENTO_ESTADO_VIEWPORTS, desenhar);
+  document.addEventListener(EVENTO_SUV_ATUALIZADO, () => {
+    idMostrado = undefined;
+    desenhar();
+  });
   desenhar();
 }

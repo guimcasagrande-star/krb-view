@@ -16,6 +16,7 @@
 
 import { metaData } from '@cornerstonejs/core';
 import type { StackNode } from '../io/organize';
+import type { InstanceMeta } from '../io/types';
 import { computeSuv, type SuvResult } from './suv';
 
 /** Formato esperado pelo loader (e por `utilities.isPTPrescaledWithSUV`). */
@@ -23,6 +24,60 @@ export interface ScalingModuleSuv {
   suvbw: number;
   suvlbm?: number;
   suvbsa?: number;
+}
+
+/**
+ * Valores que o usuário corrigiu no painel "Dados PET" (valem só nesta sessão; o arquivo DICOM
+ * nunca é alterado). Datas e horas no formato DICOM DT: AAAAMMDDHHMMSS.
+ */
+export interface CorrecoesPet {
+  pesoKg?: number;
+  alturaM?: number;
+  /** Dose injetada em Bq. */
+  doseBq?: number;
+  injecaoDT?: string;
+  aquisicaoDT?: string;
+}
+
+const correcoesPorPilha = new Map<string, CorrecoesPet>();
+
+export function correcoesDaPilha(stackId: string): CorrecoesPet | undefined {
+  return correcoesPorPilha.get(stackId);
+}
+
+export function definirCorrecoesDaPilha(stackId: string, c: CorrecoesPet | null): void {
+  if (c && Object.values(c).some((v) => v !== undefined)) correcoesPorPilha.set(stackId, c);
+  else correcoesPorPilha.delete(stackId);
+}
+
+/** Cópias das instâncias com as correções do usuário aplicadas (as originais não mudam). */
+export function instanciasComCorrecoes(instances: InstanceMeta[], c: CorrecoesPet | undefined): InstanceMeta[] {
+  if (!c) return instances;
+  const injHora = c.injecaoDT?.slice(8, 14);
+  const aqData = c.aquisicaoDT?.slice(0, 8);
+  const aqHora = c.aquisicaoDT?.slice(8, 14);
+  return instances.map((i) => {
+    const pet = { ...(i.pet ?? { correctedImage: [] }) };
+    if (c.doseBq !== undefined) pet.radionuclideTotalDoseBq = c.doseBq;
+    if (c.injecaoDT) {
+      pet.radiopharmaceuticalStartDateTime = c.injecaoDT;
+      pet.radiopharmaceuticalStartTime = injHora;
+    }
+    const novo: InstanceMeta = { ...i, pet };
+    if (c.pesoKg !== undefined) novo.patientWeightKg = c.pesoKg;
+    if (c.alturaM !== undefined) novo.patientSizeM = c.alturaM;
+    if (c.aquisicaoDT) {
+      // O horário escolhido vale como início da aquisição: sem tags alternativas que o contradigam.
+      novo.seriesDate = aqData;
+      novo.seriesTime = aqHora;
+      novo.acquisitionDate = aqData;
+      novo.acquisitionTime = aqHora;
+      delete pet.gePrivateScanDateTime;
+      delete pet.frameReferenceTimeMs;
+      delete pet.actualFrameDurationMs;
+    }
+    return novo;
+  });
 }
 
 const fatoresPorImagem = new Map<string, ScalingModuleSuv>();
@@ -51,7 +106,7 @@ export function registrarSuvDaPilha(stack: StackNode, imageIds: string[]): SuvRe
   if (!stack.instances.some((i) => i.modality === 'PT')) return null;
   garantirProvedor();
 
-  const resultado = computeSuv(stack.instances);
+  const resultado = computeSuv(instanciasComCorrecoes(stack.instances, correcoesPorPilha.get(stack.id)));
   resultadoPorPilha.set(stack.id, resultado);
   esquecerImagens(stack.id);
   if (!resultado.ok) return resultado;
@@ -79,6 +134,7 @@ function esquecerImagens(stackId: string): void {
 export function esquecerSuvDaPilha(stackId: string): void {
   esquecerImagens(stackId);
   resultadoPorPilha.delete(stackId);
+  correcoesPorPilha.delete(stackId);
 }
 
 /** Resultado de `computeSuv` da pilha (se for PET e já tiver sido aberta). */
