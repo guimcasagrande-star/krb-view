@@ -63,6 +63,26 @@ export function dataEstudoFormatada(stack: StackNode | null): string {
   return formatDatePtBr(inst?.studyDate ?? inst?.seriesDate) || 'sem data';
 }
 
+/** Hora do estudo (HH:MM), ou '' se não houver. */
+export function horaEstudoFormatada(stack: StackNode | null): string {
+  const inst = stack?.instances[0];
+  const t = (inst?.studyTime ?? inst?.seriesTime ?? '').replace(/\D/g, '');
+  return t.length >= 4 ? `${t.slice(0, 2)}:${t.slice(2, 4)}` : '';
+}
+
+/** Verdadeiro se as duas pilhas são do mesmo estudo (mesmo StudyInstanceUID). */
+export function mesmoEstudo(a: StackNode | null, b: StackNode | null): boolean {
+  const ua = a?.instances[0]?.studyInstanceUid;
+  const ub = b?.instances[0]?.studyInstanceUid;
+  return !!ua && ua === ub;
+}
+
+/** Verdadeiro se as duas pilhas são da mesma modalidade (janela só faz sentido entre iguais). */
+export function mesmaModalidade(a: StackNode | null, b: StackNode | null): boolean {
+  const ma = a?.instances[0]?.modality;
+  return !!ma && ma === b?.instances[0]?.modality;
+}
+
 function normalizarTextoPaciente(v: string | undefined): string {
   if (!v) return '';
   return v
@@ -130,6 +150,18 @@ export function calcularRotulosParaSlots(
   const estudosDistintos = new Set(validas.map(chaveEstudoOuData));
   const datasDistintas = new Set(validas.map((p) => p.instances[0]?.studyDate ?? p.instances[0]?.seriesDate ?? ''));
 
+  // Todas as pilhas visíveis do mesmo estudo (ex.: PET e TC do mesmo exame): não há "atual" nem
+  // "anterior"; só aparece o aviso se o paciente divergir.
+  const todasDoMesmoEstudo =
+    validas.length >= 2 && validas.every((p) => mesmoEstudo(p, validas[0]!));
+  if (todasDoMesmoEstudo && !avisoPaciente) {
+    return pilhasVisiveis.map(() => null);
+  }
+
+  // Exames do mesmo dia: a hora distingue (ex.: 10:30 × 16:45).
+  const datasVisiveis = validas.map((p) => dataEstudoFormatada(p));
+  const mostrarHora = new Set(datasVisiveis).size < datasVisiveis.length;
+
   const deveMostrar =
     forcarExibicao ||
     (validas.length >= 2 && (estudosDistintos.size >= 2 || datasDistintas.size >= 2 || Boolean(avisoPaciente)));
@@ -161,7 +193,9 @@ export function calcularRotulosParaSlots(
     }
     return {
       papel,
-      dataFormatada: dataEstudoFormatada(p),
+      dataFormatada: mostrarHora
+        ? `${dataEstudoFormatada(p)} ${horaEstudoFormatada(p)}`.trim()
+        : dataEstudoFormatada(p),
       avisoPaciente,
     };
   });
@@ -255,7 +289,15 @@ export function criarVinculoComparacao(
   pilha1: StackNode | null,
 ): ResultadoVinculoRolagem {
   if (!pilha0 || !pilha1) return { link: null, erro: null };
-  const res = createLink(pilha0.geometry, pilha1.geometry);
+  // Mesmo estudo e mesmo referencial (ex.: PET e TC do mesmo exame): as posições em mm já
+  // coincidem, então o deslocamento é zero.
+  const fa = pilha0.instances[0]?.frameOfReferenceUid;
+  const mesmoReferencial = mesmoEstudo(pilha0, pilha1) && !!fa && fa === pilha1.instances[0]?.frameOfReferenceUid;
+  const res = createLink(
+    pilha0.geometry,
+    pilha1.geometry,
+    mesmoReferencial ? { alignment: 'mesmo-referencial' } : {},
+  );
   if (isIssue(res)) {
     return { link: null, erro: res };
   }

@@ -47,6 +47,8 @@ import {
   recalcularVinculoPorPosicoesAtuais,
   sincronizarParCornerstone,
   transformarPontoEntrePilhas,
+  mesmaModalidade,
+  mesmoEstudo,
 } from '../compare/modoComparar';
 import { invertLink, type ScrollLink } from '../compare/sync';
 import { estado } from '../state/store';
@@ -1279,6 +1281,19 @@ function atualizarEtiquetasComparacao(): void {
   }
 }
 
+/**
+ * Padrão da sincronia ao formar o par: se os dois lados são do mesmo estudo, zoom e pan ficam
+ * ligados (e a rolagem por posição, que já é o padrão); a janela só quando a modalidade é a mesma
+ * (PET em SUV e TC em HU não compartilham janela). Estudos diferentes: tudo como antes.
+ */
+function definirPadroesSincroniaComparar(): void {
+  const a = slots[0]?.pilha ?? null;
+  const b = slots[1]?.pilha ?? null;
+  const mesmo = mesmoEstudo(a, b);
+  zoomPanCompararLigado = mesmo;
+  janelaCompararLigada = mesmo && mesmaModalidade(a, b);
+}
+
 function atualizarSincronizadoresCornerstoneComparar(): void {
   if (!compararAtivo) {
     destruirSincronizadoresComparacao();
@@ -1457,6 +1472,7 @@ export async function alternarModoComparar(): Promise<void> {
   ]);
 
   atualizarEtiquetasComparacao();
+  definirPadroesSincroniaComparar();
   atualizarSincronizadoresCornerstoneComparar();
   recalcularVinculoInicialComparacao();
 }
@@ -1620,6 +1636,7 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
     await exibirSlot(slot);
     if (compararAtivo) {
       atualizarEtiquetasComparacao();
+      definirPadroesSincroniaComparar();
       atualizarSincronizadoresCornerstoneComparar();
       recalcularVinculoInicialComparacao();
     }
