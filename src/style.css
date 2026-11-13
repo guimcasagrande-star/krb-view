@@ -573,3 +573,7 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .controles-fusao .btn-fusao { align-self: center; opacity: 0.8; font-size: 11px; padding: 2px 8px; }
 .controles-fusao .painel-fusao { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: rgba(0, 0, 0, 0.8); padding: 4px 6px; border-radius: 4px; margin-bottom: 4px; max-width: 260px; }
 .controles-fusao .painel-fusao[hidden] { display: none; }
+
+.series-fusao { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.series-fusao label { display: flex; justify-content: space-between; gap: 6px; }
+.series-fusao select { max-width: 190px; }

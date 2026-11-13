@@ -873,6 +873,39 @@ function aplicarRegistroPet(slot: Slot, volumePetId: string): void {
   ator?.setPosition?.(d[0], d[1], d[2]);
 }
 
+function estudoDaPilha(stack: StackNode): StudyNode | undefined {
+  for (const p of estado.resultado?.index.patients ?? []) {
+    for (const e of p.studies) {
+      if (e.series.some((sr) => sr.stacks.some((st) => st.id === stack.id))) return e;
+    }
+  }
+  return undefined;
+}
+
+/** Põe a fusão (TC/RM como base e PET por cima) no slot, trocando as séries se já havia outras. */
+async function configurarFusaoNoSlot(
+  slot: Slot,
+  anatomic: StackNode,
+  pet: StackNode,
+  sameFrame: boolean,
+): Promise<void> {
+  const arquivos = estado.resultado?.arquivos;
+  if (!arquivos) return;
+  const anteriorAtivo = ativo;
+  ativo = slot.indice;
+  await abrirPilha2d(anatomic); // também solta a fusão anterior do slot
+  slot.pilhaFusao = pet;
+  slot.idsFusao = adquirirIds(pet, arquivos);
+  slot.avisoVolume.hidden = true;
+  await definirPlanoSlotAtivo('fusao');
+  if (!sameFrame) {
+    slot.avisoVolume.textContent = '⚠ Fusão manual: séries de referenciais diferentes';
+    slot.avisoVolume.hidden = false;
+  }
+  ativo = anteriorAtivo;
+  sincronizar();
+}
+
 function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
   slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
   const c = slot.controlesFusao;
@@ -982,10 +1015,47 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
   });
   atualizarLeitura();
   slot.atualizarLeituraRegistro = atualizarLeitura;
+  // Escolha das séries da fusão (as candidatas do estudo): PET e TC/RM.
+  const estudo = slot.pilha ? estudoDaPilha(slot.pilha) : undefined;
+  const pares = estudo ? findFusionCandidates(estudo) : [];
+  const unicos = (pegar: (c: FusionCandidate) => StackNode): StackNode[] => {
+    const m = new Map<string, StackNode>();
+    for (const c of pares) m.set(pegar(c).id, pegar(c));
+    return [...m.values()];
+  };
+  const seletorSerie = (rotulo: string, opcoes: StackNode[], atual: string | undefined, aoEscolher: (st: StackNode) => void): HTMLElement => {
+    const sel = document.createElement('select');
+    sel.title = rotulo;
+    for (const st of opcoes) {
+      const o = document.createElement('option');
+      o.value = st.id;
+      const n = st.instances.length;
+      o.textContent = `${nomeDaSerie(st)} (${n})`;
+      sel.append(o);
+    }
+    if (atual) sel.value = atual;
+    sel.disabled = opcoes.length < 2;
+    sel.addEventListener('change', () => {
+      const st = opcoes.find((x) => x.id === sel.value);
+      if (st) aoEscolher(st);
+    });
+    return rot(`${rotulo} `, sel);
+  };
+  const trocarSeries = (pet: StackNode, anat: StackNode): void => {
+    const par = pares.find((c) => c.pet.id === pet.id && c.anatomic.id === anat.id);
+    void configurarFusaoNoSlot(slot, anat, pet, par ? par.sameFrame : false);
+  };
+  const seriesFusao = document.createElement('div');
+  seriesFusao.className = 'series-fusao';
+  seriesFusao.append(
+    seletorSerie('PET', unicos((c) => c.pet), slot.pilhaFusao?.id, (st) => slot.pilha && trocarSeries(st, slot.pilha)),
+    seletorSerie('TC/RM', unicos((c) => c.anatomic), slot.pilha?.id, (st) => slot.pilhaFusao && trocarSeries(slot.pilhaFusao, st)),
+  );
+
   const painel = document.createElement('div');
   painel.className = 'painel-fusao';
   painel.hidden = true;
-  painel.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
+  painel.append(seriesFusao, rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
   const abrir = document.createElement('button');
   abrir.type = 'button';
   abrir.className = 'btn-fusao';
@@ -2338,7 +2408,9 @@ function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
   const ativa = estado.pilhaAtiva?.id;
   const doAtivo = ativa ? todos.find((e) => e.series.some((sr) => sr.stacks.some((st) => st.id === ativa))) : undefined;
   for (const estudo of doAtivo ? [doAtivo, ...todos] : todos) {
-    const par = findFusionCandidates(estudo)[0];
+    const pares = findFusionCandidates(estudo);
+    // Se a série aberta no viewport ativo (PET ou TC/RM) faz parte de algum par, usa esse par.
+    const par = (ativa && pares.find((c) => c.pet.id === ativa || c.anatomic.id === ativa)) || pares[0];
     if (par) return { estudo, par };
   }
   return null;
@@ -2381,16 +2453,7 @@ export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
       await abrirPilha2d(c.pilha);
       if (c.plano === 'fusao') {
         // TC como base e PET por cima; `sameFrame: false` = fusão manual, com aviso.
-        const arquivosFusao = estado.resultado?.arquivos;
-        if (arquivosFusao) {
-          slot.pilhaFusao = par.pet;
-          slot.idsFusao = adquirirIds(par.pet, arquivosFusao);
-          await definirPlanoSlotAtivo('fusao');
-          if (!par.sameFrame) {
-            slot.avisoVolume.textContent = '⚠ Fusão manual: séries de referenciais diferentes';
-            slot.avisoVolume.hidden = false;
-          }
-        }
+        await configurarFusaoNoSlot(slot, par.anatomic, par.pet, par.sameFrame);
       } else if (c.plano !== 'original') {
         await definirPlanoSlotAtivo(c.plano);
       }
