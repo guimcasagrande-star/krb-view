@@ -749,6 +749,11 @@ function aoMudarCameraEstudo(origem: number): void {
   const origemVolume = !('setImageIdIndex' in so.viewport);
   // Pilha↔pilha já é feito pelo Cornerstone; aqui só os pares em que algum lado é volume.
   const destinos = destinosNoMesmoPlano(grupo, so).filter(({ d }) => origemVolume || !('setImageIdIndex' in d.viewport!));
+  // Layout de comparação PET/CT: o zoom e o pan também vão para a outra linha (outro exame).
+  if (comparacaoPetCtLayout) {
+    const outras = gruposSincroniaEstudo().filter((g) => g !== grupo).flat();
+    destinos.push(...destinosNoMesmoPlano(outras, so));
+  }
   if (destinos.length === 0) return;
   const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
   const pan = v.getPan?.();
