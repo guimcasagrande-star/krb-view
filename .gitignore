@@ -4,3 +4,7 @@ test-data/
 *.dcm
 .DS_Store
 pacs.json
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
