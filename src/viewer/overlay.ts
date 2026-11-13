@@ -126,7 +126,7 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     // Medidas: texto escuro em caixa clara em qualquer viewport invertido (legível sobre qualquer fundo).
     definirEstiloPorFundo(viewport.id, invertido);
 
-    atualizarOrientacaoERegua(viewport, invertido && 'setImageIdIndex' in viewport);
+    atualizarOrientacaoERegua(viewport, false);
 
     const plano = fonte.planoMpr?.();
     const rotuloModo = fonte.modoSlab?.();
