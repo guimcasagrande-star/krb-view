@@ -15,11 +15,14 @@ import {
   type Types,
 } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
-import type { StackNode } from '../io/organize';
+import type { StackNode, StudyNode } from '../io/organize';
+import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
 import { esquecerSuvDaPilha, registrarSuvDaPilha } from '../pet/provedorSuv';
 import {
   adicionarViewportAoGrupo,
   botaoAtribuido,
+  ferramentaPrimariaAtual,
+  FERRAMENTAS_PRIMARIAS,
   definirModoMprFerramentas,
   removerViewportDoGrupo,
 } from '../tools/grupo';
@@ -52,16 +55,38 @@ import { criarOverlay, type Overlay, type PlanoMprOverlay } from './overlay';
 
 const CARGAS_SIMULTANEAS = 4;
 
-export type Layout = '1x1' | '1x2' | '2x2';
+/**
+ * Layout da grade: `${linhas}x${colunas}` (ex.: '2x2', '1x3', '3x4'), até 5x5.
+ * '1x2' = 1 linha e 2 colunas (lado a lado).
+ */
+export type Layout = string;
 export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio';
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
-export const LAYOUTS: Record<Layout, { rotulo: string; colunas: number; linhas: number }> = {
-  '1x1': { rotulo: '1x1', colunas: 1, linhas: 1 },
-  '1x2': { rotulo: '1x2', colunas: 2, linhas: 1 },
-  '2x2': { rotulo: '2x2', colunas: 2, linhas: 2 },
-};
+export const GRADE_MAXIMA = 5;
 
+export interface GeometriaLayout {
+  rotulo: string;
+  colunas: number;
+  linhas: number;
+}
+
+/** Interpreta '2x3' (linhas x colunas); valores fora de 1..5 ou inválidos caem em 1x1. */
+export function geometriaLayout(layout: Layout): GeometriaLayout {
+  const m = /^(\d+)x(\d+)$/.exec(layout);
+  const linhas = m ? Number(m[1]) : 1;
+  const colunas = m ? Number(m[2]) : 1;
+  if (linhas < 1 || colunas < 1 || linhas > GRADE_MAXIMA || colunas > GRADE_MAXIMA) {
+    return { rotulo: '1x1', colunas: 1, linhas: 1 };
+  }
+  return { rotulo: `${linhas}x${colunas}`, colunas, linhas };
+}
+
+export function idLayout(linhas: number, colunas: number): Layout {
+  return `${linhas}x${colunas}`;
+}
+
+/** Grades fixas do menu e do ciclo da tecla L. */
 export const ORDEM_LAYOUTS: Layout[] = ['1x1', '1x2', '2x2'];
 
 export const PLANOS_SLOTS: Record<PlanoSlot, PlanoMprOverlay> = {
@@ -105,6 +130,8 @@ export interface EstadoViewports {
   mipRotatorioVisivel: boolean;
   /** Estado do modo Comparar (Fase 4). */
   comparacao: EstadoComparacao;
+  /** Um viewport está maximizado (tela cheia da grade). */
+  maximizado: boolean;
 }
 
 export interface ElementosViewport2d {
@@ -148,6 +175,10 @@ interface Slot {
 const slots: Slot[] = [];
 let grade: HTMLDivElement;
 let layoutAtual: Layout = '1x1';
+
+// Viewport maximizado por duplo clique (null = grade normal).
+let maximizado: number | null = null;
+let gradeAntesDeMaximizar: { colunas: string; linhas: string; ocultas: boolean[] } | null = null;
 let ativo = 0;
 let mprAtivo = false;
 let modoSlabMpr: ModoSlab = 'normal';
@@ -321,6 +352,7 @@ function estadoAtual(): EstadoViewports {
     modoSlabAtivo: mprAtivo ? modoSlabMpr : (slot?.modoSlab ?? 'normal'),
     slabMm: mprAtivo ? slabMprMm : (slot?.slabMm ?? 1),
     mipRotatorioVisivel,
+    maximizado: maximizado !== null,
     comparacao: {
       ativo: compararAtivo,
       rolagemLigada: rolagemCompararLigada && linkRolagemComparar !== null,
@@ -337,14 +369,14 @@ function sincronizar(): void {
   const s = slots[ativo];
   estado.pilhaAtiva = s?.pilha ?? null;
   estado.idViewportAtivo = s?.idViewport ?? null;
-  const varios = mprAtivo || LAYOUTS[layoutAtual].colunas * LAYOUTS[layoutAtual].linhas > 1;
-  for (const x of slots) x.celula.classList.toggle('ativa', varios && x.indice === ativo);
+  const varios = mprAtivo || geometriaLayout(layoutAtual).colunas * geometriaLayout(layoutAtual).linhas > 1;
+  for (const x of slots) x.celula.classList.toggle('ativa', varios && maximizado === null && x.indice === ativo);
   atualizarEtiquetasComparacao();
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
 
 export function ativarViewport(indice: number): void {
-  const limite = mprAtivo ? 3 : LAYOUTS[layoutAtual].colunas * LAYOUTS[layoutAtual].linhas;
+  const limite = mprAtivo ? 3 : geometriaLayout(layoutAtual).colunas * geometriaLayout(layoutAtual).linhas;
   if (!slots[indice] || indice >= limite || indice === ativo) return;
   ativo = indice;
   sincronizar();
@@ -1089,6 +1121,7 @@ async function montarLayoutMpr(stack: StackNode): Promise<void> {
 }
 
 async function sairDoMpr(novoLayout?: Layout): Promise<void> {
+  desmaximizar();
   if (!mprAtivo) return;
   geracaoMpr++;
   mprAtivo = false;
@@ -1115,7 +1148,7 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
 
   const destino = novoLayout ?? layoutAtual;
   layoutAtual = destino;
-  const { colunas, linhas } = LAYOUTS[destino];
+  const { colunas, linhas } = geometriaLayout(destino);
   const quantidade = colunas * linhas;
   grade.style.gridTemplateColumns = `repeat(${colunas}, minmax(0, 1fr))`;
   grade.style.gridTemplateRows = `repeat(${linhas}, minmax(0, 1fr))`;
@@ -1156,6 +1189,7 @@ async function sairDoMpr(novoLayout?: Layout): Promise<void> {
 
 /** Botão MPR / tecla R: entra ou sai do modo MPR para a série ativa. */
 export async function alternarMpr(): Promise<void> {
+  desmaximizar();
   if (compararAtivo) {
     desativarComparacaoInterno();
   }
@@ -1194,7 +1228,7 @@ function atualizarEtiquetasComparacao(): void {
     }
   }
 
-  const quantidadeVisivel = LAYOUTS[layoutAtual].colunas * LAYOUTS[layoutAtual].linhas;
+  const quantidadeVisivel = geometriaLayout(layoutAtual).colunas * geometriaLayout(layoutAtual).linhas;
   const pilhasVisiveis = slots
     .slice(0, quantidadeVisivel)
     .map((s) => (s.celula.hidden ? null : s.pilha));
@@ -1587,6 +1621,7 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
 
 /** Esvazia todos os viewports (ao abrir outra pasta). */
 export async function limparViewports(): Promise<void> {
+  desmaximizar();
   geracaoMpr++;
   if (compararAtivo) {
     desativarComparacaoInterno();
@@ -1605,7 +1640,7 @@ export async function limparViewports(): Promise<void> {
     slot.overlay.atualizar();
     mostrarMensagem(slot, 'Escolha uma série no painel.');
   }
-  const { colunas, linhas } = LAYOUTS[layoutAtual];
+  const { colunas, linhas } = geometriaLayout(layoutAtual);
   const quantidade = colunas * linhas;
   grade.style.gridTemplateColumns = `repeat(${colunas}, minmax(0, 1fr))`;
   grade.style.gridTemplateRows = `repeat(${linhas}, minmax(0, 1fr))`;
@@ -1636,7 +1671,46 @@ async function redimensionarMotor(manterCamera = false): Promise<void> {
   });
 }
 
+/** Volta da tela cheia de um viewport para a grade anterior. */
+function desmaximizar(redimensionar = false): void {
+  if (maximizado === null || !gradeAntesDeMaximizar) return;
+  grade.style.gridTemplateColumns = gradeAntesDeMaximizar.colunas;
+  grade.style.gridTemplateRows = gradeAntesDeMaximizar.linhas;
+  for (const s of slots) s.celula.hidden = gradeAntesDeMaximizar.ocultas[s.indice] ?? true;
+  maximizado = null;
+  gradeAntesDeMaximizar = null;
+  sincronizar();
+  if (redimensionar) void redimensionarMotor(true);
+}
+
+/**
+ * Duplo clique (ou tecla F): o viewport ativo (ou o indicado) ocupa a grade toda, como num
+ * layout 1x1; de novo, volta à divisão anterior. Os outros viewports continuam carregados.
+ */
+export function alternarMaximizado(indice: number = ativo): void {
+  if (maximizado !== null) {
+    desmaximizar(true);
+    return;
+  }
+  const visiveis = slots.filter((s) => !s.celula.hidden);
+  const alvo = slots[indice];
+  if (visiveis.length < 2 || !alvo || alvo.celula.hidden) return;
+  gradeAntesDeMaximizar = {
+    colunas: grade.style.gridTemplateColumns,
+    linhas: grade.style.gridTemplateRows,
+    ocultas: slots.map((s) => s.celula.hidden === true),
+  };
+  maximizado = alvo.indice;
+  ativo = alvo.indice;
+  grade.style.gridTemplateColumns = 'minmax(0, 1fr)';
+  grade.style.gridTemplateRows = 'minmax(0, 1fr)';
+  for (const s of slots) s.celula.hidden = s.indice !== alvo.indice;
+  sincronizar();
+  void redimensionarMotor(true);
+}
+
 export async function definirLayout(novo: Layout): Promise<void> {
+  desmaximizar();
   if (compararAtivo && novo !== '1x2') {
     desativarComparacaoInterno();
   }
@@ -1645,7 +1719,7 @@ export async function definirLayout(novo: Layout): Promise<void> {
     return;
   }
   layoutAtual = novo;
-  const { colunas, linhas } = LAYOUTS[novo];
+  const { colunas, linhas } = geometriaLayout(novo);
   const quantidade = colunas * linhas;
   grade.style.gridTemplateColumns = `repeat(${colunas}, minmax(0, 1fr))`;
   grade.style.gridTemplateRows = `repeat(${linhas}, minmax(0, 1fr))`;
@@ -1660,6 +1734,69 @@ export async function definirLayout(novo: Layout): Promise<void> {
   for (const slot of slots) {
     if (slot.indice < quantidade && slot.pilha && !slot.habilitado) void exibirSlot(slot, slot.corteSalvo);
   }
+}
+
+/** Estudo que contém a pilha ativa; se não houver, o mais recente com par PET + TC/RM. */
+function estudoParaPet(): { estudo: StudyNode; par: FusionCandidate } | null {
+  const pacientes = estado.resultado?.index.patients ?? [];
+  const todos = pacientes.flatMap((p) => p.studies);
+  const ativa = estado.pilhaAtiva?.id;
+  const doAtivo = ativa ? todos.find((e) => e.series.some((sr) => sr.stacks.some((st) => st.id === ativa))) : undefined;
+  for (const estudo of doAtivo ? [doAtivo, ...todos] : todos) {
+    const par = findFusionCandidates(estudo)[0];
+    if (par) return { estudo, par };
+  }
+  return null;
+}
+
+/**
+ * Grades de PET/CT. Ordem das células:
+ * 4 campos (2x2): MIP 3D, PET, TC, Fusão.  3 campos (lado a lado): PET, TC, Fusão.
+ * A célula de Fusão fica reservada: a fusão em si é da Fase 6.
+ */
+export async function abrirLayoutPet(campos: 3 | 4): Promise<void> {
+  const achado = estudoParaPet();
+  const slotAtivo = slots[ativo] ?? slots[0];
+  if (!achado) {
+    if (slotAtivo) mostrarMensagem(slotAtivo, 'Sem par PET + TC/RM', 'Abra um estudo que tenha uma série de PET e uma de TC ou RM.');
+    return;
+  }
+  const { par } = achado;
+  await definirLayout(campos === 4 ? '2x2' : '1x3');
+  const mip = par.pet;
+  const celulas: Array<{ pilha: StackNode | null; plano: PlanoSlot; aviso?: string }> =
+    campos === 4
+      ? [
+          { pilha: mip, plano: 'mip-rotatorio' },
+          { pilha: par.pet, plano: 'original' },
+          { pilha: par.anatomic, plano: 'original' },
+          { pilha: null, plano: 'original', aviso: 'Fusão PET/TC (Fase 6)' },
+        ]
+      : [
+          { pilha: par.pet, plano: 'original' },
+          { pilha: par.anatomic, plano: 'original' },
+          { pilha: null, plano: 'original', aviso: 'Fusão PET/TC (Fase 6)' },
+        ];
+  for (let i = 0; i < celulas.length; i++) {
+    const c = celulas[i]!;
+    const slot = slots[i];
+    if (!slot) continue;
+    ativo = i;
+    if (c.pilha) {
+      await abrirPilha2d(c.pilha);
+      if (c.plano !== 'original') await definirPlanoSlotAtivo(c.plano);
+    } else if (c.aviso) {
+      // Esvazia a célula (pode ter sobrado uma série de um layout anterior).
+      slot.geracao++;
+      pararCine(slot.indice);
+      liberarRecursosSlot(slot);
+      await desabilitar(slot);
+      slot.overlay.atualizar();
+      mostrarMensagem(slot, c.aviso, 'Esta célula está reservada para a fusão; ainda não disponível.');
+    }
+  }
+  ativo = 0;
+  sincronizar();
 }
 
 /** Tecla L: passa para o próximo layout (1x1, 1x2, 2x2 e volta). */
@@ -1797,6 +1934,15 @@ function criarSlot(indice: number): Slot {
     atualizarMiraSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+  // Duplo clique maximiza/restaura. Com ferramenta de medida ativa só com Shift (o duplo clique
+  // pode ser parte do desenho, ex.: terminar uma polilinha).
+  celula.addEventListener('dblclick', (e) => {
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest('button, input, select, a'))) return;
+    const atual = ferramentaPrimariaAtual();
+    const medindo = FERRAMENTAS_PRIMARIAS.some((f) => f.nome === atual && f.categoria === 'medida');
+    if (medindo && !e.shiftKey) return;
+    alternarMaximizado(indice);
+  });
 
   // Ferramenta Localizador 3D (┼ Localizar): clicando ou arrastando com o botão atribuído,
   // marca a cruzinha neste viewport e sincroniza todos os demais (mesmo exame ou comparado).

@@ -56,10 +56,13 @@ import {
   definirVelocidadeCine,
   EVENTO_ESTADO_VIEWPORTS,
   type EstadoViewports,
-  LAYOUTS,
+  GRADE_MAXIMA,
+  geometriaLayout,
+  idLayout,
+  alternarMaximizado,
+  abrirLayoutPet,
   limparMirasLocalizador,
   type ModoSlab,
-  ORDEM_LAYOUTS,
   type PlanoSlot,
   proximoLayout,
   zerarVinculoRolagemComparar,
@@ -241,17 +244,49 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     dica: 'Alternar divisão de tela (tecla L)',
     acaoPrincipal: () => void proximoLayout(),
   });
-  const itensLayout = ORDEM_LAYOUTS.map((id) => {
-    const item = itemMenu(
-      `Grade ${LAYOUTS[id].rotulo}`,
-      'L',
-      () => void definirLayout(id),
-      menuLayout.fechar,
-    );
-    item.dataset.layout = id;
-    return item;
-  });
-  menuLayout.painel.append(...itensLayout);
+  // Seletor de grade: passe o mouse sobre os quadradinhos e clique para escolher linhas x colunas.
+  const seletorGrade = document.createElement('div');
+  seletorGrade.className = 'seletor-grade';
+  const rotuloGrade = document.createElement('div');
+  rotuloGrade.className = 'rotulo-grade';
+  rotuloGrade.textContent = 'Escolha a grade';
+  const quadrados: HTMLButtonElement[] = [];
+  const marcarGrade = (linhas: number, colunas: number): void => {
+    for (const q of quadrados) {
+      q.classList.toggle('marcado', Number(q.dataset.l) <= linhas && Number(q.dataset.c) <= colunas);
+    }
+    rotuloGrade.textContent = linhas > 0 ? `${linhas} linha(s) × ${colunas} coluna(s)` : 'Escolha a grade';
+  };
+  const areaQuadrados = document.createElement('div');
+  areaQuadrados.className = 'quadrados-grade';
+  for (let l = 1; l <= GRADE_MAXIMA; l++) {
+    for (let c = 1; c <= GRADE_MAXIMA; c++) {
+      const q = document.createElement('button');
+      q.type = 'button';
+      q.dataset.l = String(l);
+      q.dataset.c = String(c);
+      q.title = `${l}x${c}`;
+      q.setAttribute('aria-label', `Grade ${l} linha(s) por ${c} coluna(s)`);
+      q.addEventListener('mouseenter', () => marcarGrade(l, c));
+      q.addEventListener('focus', () => marcarGrade(l, c));
+      q.addEventListener('click', () => {
+        void definirLayout(idLayout(l, c));
+        menuLayout.fechar();
+      });
+      quadrados.push(q);
+      areaQuadrados.append(q);
+    }
+  }
+  areaQuadrados.addEventListener('mouseleave', () => marcarGrade(0, 0));
+  seletorGrade.append(areaQuadrados, rotuloGrade);
+  menuLayout.painel.append(
+    seletorGrade,
+    divisorMenu(),
+    itemMenu('PET/CT 4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuLayout.fechar),
+    itemMenu('PET/CT 3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuLayout.fechar),
+    divisorMenu(),
+    itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
+  );
 
   const menuComparar = criarMenuSuspenso({
     rotulo: '🔗 Comparar',
@@ -654,12 +689,9 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
 
   function atualizarViewports(e: EstadoViewports): void {
-    menuLayout.botaoPrincipal.textContent = `⊞ ${LAYOUTS[e.layout].rotulo}`;
+    menuLayout.botaoPrincipal.textContent = `⊞ ${e.maximizado ? '1x1 (máx.)' : geometriaLayout(e.layout).rotulo}`;
     menuLayout.botaoPrincipal.disabled = e.mprAtivo;
     menuLayout.botaoSeta.disabled = e.mprAtivo;
-    for (const item of itensLayout) {
-      item.setAttribute('aria-pressed', String(!e.mprAtivo && item.dataset.layout === e.layout));
-    }
 
     seletorPlano.value = e.planoAtivo;
     seletorPlano.disabled = e.mprAtivo || (!e.mprDisponivel && e.planoAtivo === 'original');

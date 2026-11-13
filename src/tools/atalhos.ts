@@ -16,6 +16,7 @@ import { alternarOverlay } from '../viewer/overlay';
 import {
   abrirCurvaPerfusaoAtiva,
   alternarCine,
+  alternarMaximizado,
   alternarMpr,
   limparMirasLocalizador,
   proximoLayout,
@@ -26,6 +27,7 @@ export const ACOES_ATALHO: Array<{ id: string; rotulo: string; tecla: string }> 
   { id: 'overlay', rotulo: 'Mostrar/esconder texto nos cantos', tecla: 'o' },
   { id: 'layout', rotulo: 'Alternar layout (1x1, 1x2, 2x2)', tecla: 'l' },
   { id: 'mpr', rotulo: 'Entrar/sair do MPR', tecla: 'r' },
+  { id: 'maximizar', rotulo: 'Maximizar/restaurar viewport ativo', tecla: 'f' },
 ];
 
 export function teclaDaAcao(id: string): string {
@@ -45,7 +47,8 @@ const LINHAS_AJUDA: Array<[string, string]> = [
   ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
   ['Home / End', 'Primeiro / último corte'],
   ['Espaço', 'Toca ou pausa o cine (ou rotação do MIP 3D)'],
-  ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2'],
+  ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2 (outras grades: menu ⊞)'],
+  ['F / 2 cliques', 'Maximiza o viewport (tela cheia da grade) e volta; com medida ativa, Shift+2 cliques'],
   ['1 a 9', 'Janelas predefinidas, na ordem da lista (editável em ⚙ Configurações)'],
   ['⚙', 'Configurações: aparência das medidas, atalhos e janelas'],
   ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
@@ -155,6 +158,10 @@ export function iniciarAtalhos(): void {
     }
     if (tecla === teclaDaAcao('layout')) {
       void proximoLayout();
+      return;
+    }
+    if (tecla === teclaDaAcao('maximizar')) {
+      alternarMaximizado();
       return;
     }
     if (tecla === teclaDaAcao('mpr')) {

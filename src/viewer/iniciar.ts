@@ -30,8 +30,8 @@ import {
 } from '@cornerstonejs/tools';
 
 export const ID_MOTOR = 'motor';
-/** Máximo de viewports na grade (layout 2x2). */
-export const MAX_VIEWPORTS = 4;
+/** Máximo de viewports na grade (grade personalizada de até 5x5). */
+export const MAX_VIEWPORTS = 25;
 
 /** Id do viewport do Cornerstone para a posição `i` da grade. */
 export function idViewport(i: number): string {
