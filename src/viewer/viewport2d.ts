@@ -38,6 +38,7 @@ import {
   botaoAtribuido,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
+  predefinicoes,
   definirModoMprFerramentas,
   removerViewportDoGrupo,
 } from '../tools/grupo';
@@ -881,6 +882,13 @@ async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
   slot.habilitado = false;
 }
 
+/** Janela da TC na fusão: a 1ª predefinição (partes moles por padrão), em vez da janela do arquivo. */
+function voiTcDaFusao(stack: StackNode): { lower: number; upper: number } | undefined {
+  if (!stack.instances.some((i) => i.modality === 'CT')) return undefined;
+  const p = predefinicoes()[0];
+  return p ? { lower: p.centro - p.largura / 2, upper: p.centro + p.largura / 2 } : undefined;
+}
+
 function voiPadraoDaPilha(stack: StackNode): { lower: number; upper: number } | undefined {
   const primeira = stack.instances[0];
   const centro = primeira?.windowCenter[0];
@@ -1514,7 +1522,11 @@ async function exibirSlot(
       }
 
       const pet = voiPreservado || emFusao(slot) ? null : exibicaoPadraoPet(stack);
-      const voi = voiPreservado?.voiRange ?? pet?.voiRange ?? voiPadraoDaPilha(stack);
+      const voi =
+        voiPreservado?.voiRange ??
+        pet?.voiRange ??
+        (emFusao(slot) ? voiTcDaFusao(stack) : undefined) ??
+        voiPadraoDaPilha(stack);
       if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert ?? pet?.invert });
       else if (pet) vp.setProperties({ invert: true });
 
@@ -1994,7 +2006,7 @@ async function montarLayoutMpr(
       }
     }
 
-    const voiInicial = voiPadraoDaPilha(stack);
+    const voiInicial = (resPet?.ok ? voiTcDaFusao(stack) : undefined) ?? voiPadraoDaPilha(stack);
 
     for (let i = 0; i < 3; i++) {
       const vp = vps[i]!;
