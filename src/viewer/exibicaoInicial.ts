@@ -36,7 +36,7 @@ export function exibicaoPadraoPet(
  * atual do viewport; em qualquer dúvida não faz nada.
  */
 export function ajustarZoomAoConteudo(
-  viewport: Types.IStackViewport,
+  viewport: Types.IStackViewport | Types.IVolumeViewport,
   imageId: string,
   modalidade: string | undefined,
 ): void {
@@ -52,7 +52,10 @@ export function ajustarZoomAoConteudo(
 
     let limiar: number;
     if (modalidade === 'CT') {
-      limiar = (-300 - inter) / (slope || 1);
+      // O loader pode já entregar HU (mínimo perto de -1000) ou o valor armazenado: decide pelos dados.
+      let minimo = Infinity;
+      for (let i = 0; i < w * h; i += 5) if (pixels[i]! < minimo) minimo = pixels[i]!;
+      limiar = minimo <= -500 ? -300 : (-300 - inter) / (slope || 1);
     } else {
       let max = -Infinity;
       for (let i = 0; i < w * h; i++) if (pixels[i]! > max) max = pixels[i]!;

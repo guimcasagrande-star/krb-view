@@ -204,6 +204,8 @@ interface Slot {
   /** Id da pilha de PET para a qual o slot tem uma referência de volume. */
   volumeFusaoId: string | null;
   fusao: { opacidade: number; colormap: string; teto: number; minimo: number };
+  /** Já ajustou o zoom da fusão ao conteúdo da TC (uma vez, quando o volume termina de carregar). */
+  zoomFusaoAjustado?: boolean;
   /** Reaplica opacidade, colormap e teto ao PET da fusão (depois de o volume terminar de carregar). */
   reaplicarFusao?: () => void;
   /** Ids dos volumes da fusão (TC e PET) para reaplicar propriedades e o registro manual. */
@@ -436,14 +438,38 @@ function gruposSincroniaEstudo(): Slot[][] {
   return [...grupos.values()].filter((g) => g.length >= 2);
 }
 
+let zoomDoGrupoPendente = false;
+
+/**
+ * Aproxima o zoom ao corpo usando a TC (ou a 1ª série do grupo); o sincronizador leva às demais.
+ * Precisa de uma imagem já carregada: fica pendente e é tentado de novo a cada atualização.
+ */
+function tentarZoomDoGrupo(): void {
+  if (!zoomDoGrupoPendente) return;
+  const grupo = gruposSincroniaEstudo()[0];
+  if (!grupo) return;
+  const base =
+    grupo.find((s) => s.pilha?.instances[0]?.modality === 'CT' && s.viewport && 'setImageIdIndex' in s.viewport) ??
+    grupo.find((s) => s.viewport && 'setImageIdIndex' in s.viewport);
+  if (!base?.viewport || base.ids.length === 0) return;
+  const id = base.ids[Math.floor(base.ids.length / 2)]!;
+  if (!cache.getImage(id)) return;
+  zoomDoGrupoPendente = false;
+  ajustarZoomAoConteudo(base.viewport, id, base.pilha?.instances[0]?.modality);
+}
+
 /** Refaz os sincronizadores de zoom/pan e janela só quando a composição dos grupos muda. */
 function atualizarSincroniaEstudo(): void {
   const grupos = sincroniaEstudoLigada ? gruposSincroniaEstudo() : [];
   const assinatura = grupos
     .map((g) => g.map((s) => `${s.idViewport}:${s.pilha?.id}`).join(','))
     .join('|');
-  if (assinatura === assinaturaSincroniaEstudo) return;
+  if (assinatura === assinaturaSincroniaEstudo) {
+    tentarZoomDoGrupo();
+    return;
+  }
   assinaturaSincroniaEstudo = assinatura;
+  zoomDoGrupoPendente = grupos.length > 0;
 
   SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_ZOOM);
   SynchronizerManager.destroySynchronizer(ID_SYNC_ESTUDO_VOI);
@@ -474,6 +500,7 @@ function atualizarSincroniaEstudo(): void {
   if (mesmas.length >= 2) {
     for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
   }
+  tentarZoomDoGrupo();
 }
 
 /** Posição (mm) do corte atual do slot, para viewports de pilha ou de volume. */
@@ -822,7 +849,7 @@ function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void
           // Abaixo do SUV mínimo o PET é transparente; sobe até a opacidade cheia em ~25% da faixa.
           { value: 0, opacity: 0 },
           { value: piso, opacity: 0 },
-          { value: piso + (teto - piso) * 0.25, opacity: opacidade },
+          { value: piso + (teto - piso) * 0.1, opacity: opacidade },
           { value: Math.max(teto, piso + 0.01), opacity: opacidade },
         ],
       },
@@ -955,7 +982,19 @@ function montarControlesFusao(slot: Slot, volumeCtId: string, volumePetId: strin
   });
   atualizarLeitura();
   slot.atualizarLeituraRegistro = atualizarLeitura;
-  c.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
+  const painel = document.createElement('div');
+  painel.className = 'painel-fusao';
+  painel.hidden = true;
+  painel.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
+  const abrir = document.createElement('button');
+  abrir.type = 'button';
+  abrir.className = 'btn-fusao';
+  abrir.textContent = '⚙ Fusão';
+  abrir.title = 'Opacidade, colormap, SUV mín/máx e ajuste do registro do PET';
+  abrir.addEventListener('click', () => {
+    painel.hidden = !painel.hidden;
+  });
+  c.append(abrir, painel);
 }
 
 function salvarEstadoVisualSlot(slot: Slot): {
@@ -1310,6 +1349,7 @@ function soltarFusao(slot: Slot): void {
   slot.pilhaFusao = null;
   slot.idsFusao = [];
   slot.reaplicarFusao = undefined;
+  slot.zoomFusaoAjustado = false;
   slot.volumesFusao = undefined;
   slot.registro = { ativo: false, deslocamento: [0, 0, 0] };
   slot.controlesFusao.hidden = true;
@@ -2495,7 +2535,7 @@ function criarSlot(indice: number): Slot {
     pilhaFusao: null,
     idsFusao: [],
     volumeFusaoId: null,
-    fusao: { opacidade: 0.85, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
+    fusao: { opacidade: 1, colormap: 'Black-Body Radiation', teto: 5, minimo: 1 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
   };
@@ -2652,6 +2692,11 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
     for (const slot of slots) {
       if (slot.habilitado && slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC) {
         slot.reaplicarFusao?.();
+        // Fusão: aproxima o zoom ao corpo (como nas outras células), uma vez, com a TC já carregada.
+        if (slot.planoSlot === 'fusao' && !slot.zoomFusaoAjustado && slot.viewport && slot.ids.length > 0) {
+          slot.zoomFusaoAjustado = true;
+          ajustarZoomAoConteudo(slot.viewport, slot.ids[Math.floor(slot.ids.length / 2)]!, slot.pilha?.instances[0]?.modality);
+        }
         slot.viewport?.render();
         slot.overlay.atualizar();
       }
