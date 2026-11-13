@@ -322,11 +322,21 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   menuLayout.painel.append(
     seletorGrade,
     divisorMenu(),
-    itemMenu('PET/CT 4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuLayout.fechar),
-    itemMenu('PET/CT 3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuLayout.fechar),
-    itemMenu('PET/CT comparação (6): atual em cima, anterior embaixo', undefined, () => void abrirLayoutComparacaoPetCt(), menuLayout.fechar),
-    divisorMenu(),
     itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
+  );
+
+  // Menu próprio dos layouts de PET/CT (separado da escolha de grade).
+  const menuPetCt = criarMenuSuspenso({
+    rotulo: '☢ PET/CT',
+    dica: 'Layouts de PET/CT: PET, TC e fusão (o par vem da série aberta)',
+    acaoPrincipal: () => void abrirLayoutPet(4),
+  });
+  menuPetCt.painel.append(
+    itemMenu('4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuPetCt.fechar),
+    itemMenu('3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuPetCt.fechar),
+    divisorMenu(),
+    itemMenu('Comparação (6): atual em cima, anterior embaixo', undefined, () => void abrirLayoutComparacaoPetCt(), menuPetCt.fechar),
+    itemMenu('Comparar fusões lado a lado (modo Comparar)', undefined, () => void compararPetCt(), menuPetCt.fechar),
   );
 
   const menuComparar = criarMenuSuspenso({
@@ -367,7 +377,6 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   menuComparar.painel.append(
     itemSincEstudo,
     divisorMenu(),
-    itemMenu('Comparar PET/CT (fusão atual × anterior)', undefined, () => void compararPetCt(), menuComparar.fechar),
     itemMenu('Ativar / sair do modo Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar),
     divisorMenu(),
     itemCadeadoMenu,
@@ -405,6 +414,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoTela.append(
     menuAbrir.contentor,
     menuLayout.contentor,
+    menuPetCt.contentor,
     botaoLinhasRef,
     menuComparar.contentor,
     grupoCompararInline,
@@ -748,6 +758,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     menuLayout.botaoPrincipal.textContent = `⊞ ${e.maximizado ? '1x1 (máx.)' : geometriaLayout(e.layout).rotulo}`;
     menuLayout.botaoPrincipal.disabled = e.mprAtivo;
     menuLayout.botaoSeta.disabled = e.mprAtivo;
+    menuPetCt.botaoPrincipal.disabled = e.mprAtivo;
+    menuPetCt.botaoSeta.disabled = e.mprAtivo;
 
     seletorPlano.value = e.planoAtivo;
     seletorPlano.disabled = e.mprAtivo || (!e.mprDisponivel && e.planoAtivo === 'original');
