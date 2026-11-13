@@ -21,23 +21,36 @@ import {
 } from '@cornerstonejs/tools';
 import { estado } from '../state/store';
 import { PolilinhaTool } from './polilinha';
-import { ID_MOTOR, ID_VIEWPORT_2D, iniciarCornerstone } from '../viewer/iniciar';
+import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 
 export const ID_GRUPO = 'grupo-principal';
-export const ID_ELEMENTO_2D = 'viewport-2d';
 
 export interface FerramentaPrimaria {
   nome: string;
   rotulo: string;
+  /** Tecla de atalho (minúscula) que escolhe esta ferramenta para o botão esquerdo. */
+  tecla: string;
 }
 
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
-  { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível' },
-  { nome: LengthTool.toolName, rotulo: 'Distância' },
-  { nome: AngleTool.toolName, rotulo: 'Ângulo' },
-  { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica' },
-  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre' },
-  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha' },
+  { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w' },
+  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's' },
+  { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd' },
+  { nome: AngleTool.toolName, rotulo: 'Ângulo', tecla: 'a' },
+  { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e' },
+  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm' },
+  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p' },
+];
+
+/** Todas as ferramentas do grupo, sem repetição. */
+const TODAS_AS_FERRAMENTAS = [
+  ...new Set<string>([
+    StackScrollTool.toolName,
+    WindowLevelTool.toolName,
+    ZoomTool.toolName,
+    PanTool.toolName,
+    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome),
+  ]),
 ];
 
 export type Botao = 'esquerdo' | 'direito' | 'meio' | 'roda';
@@ -60,9 +73,6 @@ export const OPCOES_SECUNDARIAS: OpcaoBotao[] = [
 export const OPCOES_RODA: OpcaoBotao[] = OPCOES_SECUNDARIAS.filter((o) =>
   ['', ZoomTool.toolName, StackScrollTool.toolName].includes(o.nome),
 );
-
-/** Opções do botão esquerdo: as ferramentas de medida e a janela. */
-export const OPCOES_ESQUERDO: OpcaoBotao[] = FERRAMENTAS_PRIMARIAS.map((f) => ({ nome: f.nome, rotulo: f.rotulo }));
 
 const BOTAO_DO_MOUSE: Record<Botao, EnumsTools.MouseBindings> = {
   esquerdo: EnumsTools.MouseBindings.Primary,
@@ -98,23 +108,27 @@ export const PREDEFINICOES: Predefinicao[] = [
 
 let grupoCriado = false;
 
-/** Cria o grupo uma vez, com o viewport 2D já habilitado no motor. */
-export function criarGrupoFerramentas(): void {
+/** Cria o grupo uma vez. Os viewports entram depois, cada um que for habilitado. */
+function criarGrupoFerramentas(): void {
   if (grupoCriado) return;
   const grupo = ToolGroupManager.createToolGroup(ID_GRUPO);
   if (!grupo) throw new Error('Não foi possível criar o grupo de ferramentas.');
-  for (const nome of [
-    StackScrollTool.toolName,
-    WindowLevelTool.toolName,
-    ZoomTool.toolName,
-    PanTool.toolName,
-    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome),
-  ]) {
-    grupo.addTool(nome);
-  }
-  grupo.addViewport(ID_VIEWPORT_2D, ID_MOTOR);
+  for (const nome of TODAS_AS_FERRAMENTAS) grupo.addTool(nome);
   grupoCriado = true;
   aplicarAtribuicoes();
+}
+
+/** Coloca um viewport já habilitado no grupo (cria o grupo na primeira vez). */
+export function adicionarViewportAoGrupo(idViewport: string): void {
+  criarGrupoFerramentas();
+  const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+  if (grupo && !grupo.getViewportIds().includes(idViewport)) grupo.addViewport(idViewport, ID_MOTOR);
+}
+
+/** Tira um viewport do grupo (antes de desabilitá-lo). */
+export function removerViewportDoGrupo(idViewport: string): void {
+  const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+  if (grupo?.getViewportIds().includes(idViewport)) grupo.removeViewports(ID_MOTOR, idViewport);
 }
 
 /**
@@ -124,26 +138,25 @@ export function criarGrupoFerramentas(): void {
 function aplicarAtribuicoes(): void {
   const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
   if (!grupo) return;
-  const nomes = new Set<string>([
-    StackScrollTool.toolName,
-    WindowLevelTool.toolName,
-    ZoomTool.toolName,
-    PanTool.toolName,
-    ...FERRAMENTAS_PRIMARIAS.map((f) => f.nome),
-  ]);
-  for (const nome of nomes) {
+  for (const nome of TODAS_AS_FERRAMENTAS) {
     const bindings = (Object.keys(atribuicao) as Botao[])
       .filter((b) => atribuicao[b] === nome)
       .map((b) => ({ mouseButton: BOTAO_DO_MOUSE[b] }));
+    // setToolActive soma os botões novos aos antigos; sem limpar antes, uma ferramenta
+    // que mudou de botão continuaria presa no anterior.
+    grupo.setToolPassive(nome, { removeAllBindings: true });
     if (bindings.length > 0) grupo.setToolActive(nome, { bindings });
-    else grupo.setToolPassive(nome, { removeAllBindings: true });
   }
 }
+
+/** Disparado em `document` quando a ferramenta de algum botão do mouse muda (barra e atalhos). */
+export const EVENTO_BOTOES_MUDARAM = 'botoesMudaram';
 
 /** Escolhe a ferramenta de um botão. Vale mesmo antes do grupo existir. */
 export function definirBotao(botao: Botao, nome: string): void {
   atribuicao[botao] = nome || null;
   aplicarAtribuicoes();
+  document.dispatchEvent(new CustomEvent(EVENTO_BOTOES_MUDARAM));
 }
 
 export function botaoAtribuido(botao: Botao): string {
@@ -159,10 +172,17 @@ export function ferramentaPrimariaAtual(): string {
   return botaoAtribuido('esquerdo');
 }
 
-async function viewportAtivo(): Promise<Types.IStackViewport | undefined> {
-  if (!estado.pilhaAtiva) return undefined;
+/** Viewport ativo da grade, se ele mostra alguma série. */
+export async function viewportAtivo(): Promise<Types.IStackViewport | undefined> {
+  if (!estado.pilhaAtiva || !estado.idViewportAtivo) return undefined;
   const motor = await iniciarCornerstone();
-  return motor.getViewport<Types.IStackViewport>(ID_VIEWPORT_2D);
+  return motor.getViewport<Types.IStackViewport>(estado.idViewportAtivo);
+}
+
+/** Ids de todos os viewports habilitados (os visíveis na grade). */
+async function viewportsHabilitados(): Promise<string[]> {
+  const motor = await iniciarCornerstone();
+  return motor.getViewports().map((v) => v.id);
 }
 
 /** Aplica uma ação ao viewport ativo, se houver série aberta. */
@@ -203,6 +223,20 @@ export function restaurar(): Promise<void> {
   });
 }
 
+/** Teclado: avança (delta > 0) ou volta (delta < 0) cortes no viewport ativo. */
+export function rolarCortes(delta: number): Promise<void> {
+  return comViewport((v) => {
+    v.scroll(delta);
+  });
+}
+
+/** Teclado: vai ao primeiro ou ao último corte do viewport ativo. */
+export function irParaCorte(posicao: 'primeiro' | 'ultimo'): Promise<void> {
+  return comViewport((v) => {
+    void v.setImageIdIndex(posicao === 'primeiro' ? 0 : v.getImageIds().length - 1);
+  });
+}
+
 export function aplicarPredefinicao(indice: number): Promise<void> {
   const p = PREDEFINICOES[indice];
   if (!p) return Promise.resolve();
@@ -215,8 +249,10 @@ export function aplicarPredefinicao(indice: number): Promise<void> {
 
 /** Esc: cancela a medida em andamento, tira a seleção e volta à janela/nível. */
 export async function cancelar(): Promise<void> {
-  const elemento = document.getElementById(ID_ELEMENTO_2D);
-  if (elemento instanceof HTMLDivElement) cancelActiveManipulations(elemento);
+  const motor = await iniciarCornerstone();
+  for (const v of motor.getViewports()) {
+    if (v.element instanceof HTMLDivElement) cancelActiveManipulations(v.element);
+  }
   annotation.selection.deselectAnnotation();
   escolherFerramentaPrimaria(WindowLevelTool.toolName);
   await redesenhar();
@@ -236,6 +272,14 @@ export async function limparMedidas(): Promise<void> {
 }
 
 async function redesenhar(): Promise<void> {
-  if (!estado.pilhaAtiva) return;
-  utilities.triggerAnnotationRenderForViewportIds([ID_VIEWPORT_2D]);
+  const ids = await viewportsHabilitados();
+  if (ids.length > 0) utilities.triggerAnnotationRenderForViewportIds(ids);
+}
+
+/** Escolhe a ferramenta do botão esquerdo pela tecla de atalho. Devolve se achou. */
+export function escolherFerramentaPorTecla(tecla: string): boolean {
+  const f = FERRAMENTAS_PRIMARIAS.find((p) => p.tecla === tecla);
+  if (!f) return false;
+  escolherFerramentaPrimaria(f.nome);
+  return true;
 }

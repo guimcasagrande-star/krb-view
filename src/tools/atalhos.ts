@@ -2,12 +2,25 @@
  * Atalhos de teclado do viewport 2D e a tela de ajuda (tecla ?).
  */
 
-import { aplicarPredefinicao, apagarSelecionadas, cancelar } from './grupo';
+import {
+  aplicarPredefinicao,
+  apagarSelecionadas,
+  cancelar,
+  escolherFerramentaPorTecla,
+  irParaCorte,
+  rolarCortes,
+} from './grupo';
 import { alternarOverlay } from '../viewer/overlay';
+import { alternarCine, proximoLayout } from '../viewer/viewport2d';
 
 const LINHAS_AJUDA: Array<[string, string]> = [
   ['Botão esquerdo', 'Ferramenta escolhida na barra (janela/nível por padrão)'],
   ['Botões direito, meio e roda', 'Escolhidos nos seletores da barra (padrão: zoom, pan e cortes)'],
+  ['W S D A E M P', 'Botão esquerdo: janela/nível, passar cortes, distância, ângulo, ROI elíptica, ROI à mão livre, polilinha'],
+  ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
+  ['Home / End', 'Primeiro / último corte'],
+  ['Espaço', 'Toca ou pausa o cine'],
+  ['L', 'Alterna o layout: 1x1, 1x2, 2x2'],
   ['1 a 6', 'Janela: partes moles, pulmão, osso, fígado, cérebro, mediastino'],
   ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
   ['Esc', 'Cancela a medida em andamento e volta a janela/nível'],
@@ -84,10 +97,38 @@ export function iniciarAtalhos(): void {
       alternarAjuda();
       return;
     }
-    if (e.key.toLowerCase() === 'o') {
+    const tecla = e.key.toLowerCase();
+    if (tecla === 'o') {
       alternarOverlay();
       return;
     }
+    if (tecla === 'l') {
+      void proximoLayout();
+      return;
+    }
+    if (e.key === ' ') {
+      // Num botão focado, a barra de espaço já o aciona; não tocar o cine por cima.
+      if (e.target instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      alternarCine();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+      e.preventDefault();
+      void rolarCortes(1);
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+      e.preventDefault();
+      void rolarCortes(-1);
+      return;
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      void irParaCorte(e.key === 'Home' ? 'primeiro' : 'ultimo');
+      return;
+    }
+    if (escolherFerramentaPorTecla(tecla)) return;
     if (/^[1-6]$/.test(e.key)) {
       void aplicarPredefinicao(Number(e.key) - 1);
     }

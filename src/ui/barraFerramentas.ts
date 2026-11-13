@@ -11,6 +11,7 @@ import {
   definirBotao,
   espelhar,
   escolherFerramentaPrimaria,
+  EVENTO_BOTOES_MUDARAM,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
   girar90,
@@ -23,6 +24,16 @@ import {
   restaurar,
 } from '../tools/grupo';
 import { alternarAjuda } from '../tools/atalhos';
+import { VELOCIDADES_CINE } from '../viewer/cine';
+import {
+  alternarCine,
+  definirLayout,
+  definirVelocidadeCine,
+  EVENTO_ESTADO_VIEWPORTS,
+  type EstadoViewports,
+  LAYOUTS,
+  ORDEM_LAYOUTS,
+} from '../viewer/viewport2d';
 
 function botao(texto: string, dica: string, acao: () => void): HTMLButtonElement {
   const b = document.createElement('button');
@@ -49,10 +60,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoFerramentas.setAttribute('aria-label', 'Ferramenta do botão esquerdo');
 
   const botoesFerramenta = FERRAMENTAS_PRIMARIAS.map((f) => {
-    const b = botao(f.rotulo, `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo`, () => {
-      escolherFerramentaPrimaria(f.nome);
-      atualizarEstado();
-    });
+    const b = botao(
+      f.rotulo,
+      `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${f.tecla.toUpperCase()})`,
+      () => escolherFerramentaPrimaria(f.nome),
+    );
     b.dataset.ferramenta = f.nome;
     return b;
   });
@@ -61,6 +73,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   // Botões direito, meio e roda: escolha de ferramenta por seletor.
   const grupoMouse = document.createElement('div');
   grupoMouse.className = 'grupo-botoes';
+  const campos: Array<[Botao, HTMLSelectElement]> = [];
   const seletores: Array<[Botao, string, OpcaoBotao[]]> = [
     ['direito', 'Direito', OPCOES_SECUNDARIAS],
     ['meio', 'Meio', OPCOES_SECUNDARIAS],
@@ -79,10 +92,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       seletor.append(o);
     }
     seletor.value = botaoAtribuido(botaoMouse);
-    seletor.addEventListener('change', () => {
-      definirBotao(botaoMouse, seletor.value);
-      atualizarEstado();
-    });
+    campos.push([botaoMouse, seletor]);
+    seletor.addEventListener('change', () => definirBotao(botaoMouse, seletor.value));
     rotuloCampo.append(seletor);
     grupoMouse.append(rotuloCampo);
   }
@@ -95,6 +106,35 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botao('Espelhar', 'Espelhar na horizontal', () => void espelhar()),
     botao('Restaurar', 'Restaurar janela, zoom, rotação e espelhamento', () => void restaurar()),
   );
+
+  // Layout da grade e cine.
+  const grupoLayout = document.createElement('div');
+  grupoLayout.className = 'grupo-botoes';
+  grupoLayout.setAttribute('role', 'group');
+  grupoLayout.setAttribute('aria-label', 'Layout dos viewports');
+  const botoesLayout = ORDEM_LAYOUTS.map((id) => {
+    const b = botao(LAYOUTS[id].rotulo, `Layout ${LAYOUTS[id].rotulo} (tecla L alterna)`, () => void definirLayout(id));
+    b.dataset.layout = id;
+    return b;
+  });
+  grupoLayout.append(...botoesLayout);
+
+  const grupoCine = document.createElement('div');
+  grupoCine.className = 'grupo-botoes';
+  const botaoCine = botao('▶ Cine', 'Tocar ou pausar o cine (barra de espaço)', () => alternarCine());
+  const rotuloFps = document.createElement('label');
+  rotuloFps.className = 'seletor-botao';
+  const seletorFps = document.createElement('select');
+  seletorFps.setAttribute('aria-label', 'Velocidade do cine em quadros por segundo');
+  for (const fps of VELOCIDADES_CINE) {
+    const o = document.createElement('option');
+    o.value = String(fps);
+    o.textContent = `${fps} q/s`;
+    seletorFps.append(o);
+  }
+  seletorFps.addEventListener('change', () => definirVelocidadeCine(Number(seletorFps.value)));
+  rotuloFps.append(seletorFps);
+  grupoCine.append(botaoCine, rotuloFps);
 
   const grupoPresets = document.createElement('div');
   grupoPresets.className = 'grupo-botoes';
@@ -114,13 +154,39 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const ajuda = botao('?', 'Atalhos de teclado', () => alternarAjuda());
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
 
-  contentor.append(grupoFerramentas, separador(), grupoMouse, separador(), grupoImagem, separador(), grupoPresets, separador(), grupoMedidas, ajuda);
+  contentor.append(
+    grupoFerramentas,
+    separador(),
+    grupoMouse,
+    separador(),
+    grupoLayout,
+    grupoCine,
+    separador(),
+    grupoImagem,
+    separador(),
+    grupoPresets,
+    separador(),
+    grupoMedidas,
+    ajuda,
+  );
 
+  /** Reflete na barra a ferramenta de cada botão do mouse (também quando muda por atalho). */
   function atualizarEstado(): void {
     const atual = ferramentaPrimariaAtual();
     for (const b of botoesFerramenta) {
       b.setAttribute('aria-pressed', String(b.dataset.ferramenta === atual));
     }
+    for (const [botaoMouse, seletor] of campos) seletor.value = botaoAtribuido(botaoMouse);
   }
   atualizarEstado();
+  document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
+
+  function atualizarViewports(e: EstadoViewports): void {
+    for (const b of botoesLayout) b.setAttribute('aria-pressed', String(b.dataset.layout === e.layout));
+    botaoCine.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
+    botaoCine.setAttribute('aria-pressed', String(e.cineTocando));
+    seletorFps.value = String(e.fps);
+  }
+  document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) => atualizarViewports((ev as CustomEvent<EstadoViewports>).detail));
+  atualizarViewports({ layout: '1x1', pilhaId: null, cineTocando: false, fps: 10 });
 }

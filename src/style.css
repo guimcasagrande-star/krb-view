@@ -139,16 +139,31 @@ progress { width: 100%; height: 6px; margin-top: 8px; accent-color: var(--destaq
 
 body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-offset: -6px; }
 
-#viewport-2d { position: absolute; inset: 0; }
 #vazio { position: relative; z-index: 1; pointer-events: none; }
 #vazio .erro { color: var(--erro); font-weight: 600; }
 #vazio[hidden] { display: none; }
 
-#overlay[hidden] { display: none; }
-#overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; color: #e8ecf0; font-size: 12px; line-height: 1.5; text-shadow: 0 0 3px #000, 0 0 2px #000; font-variant-numeric: tabular-nums; }
-#overlay .canto { position: absolute; padding: 8px 10px; }
-#overlay .canto > div { white-space: nowrap; }
-#overlay .canto-se { top: 0; left: 0; }
-#overlay .canto-sd { top: 0; right: 0; text-align: right; }
-#overlay .canto-ie { bottom: 0; left: 0; }
-#overlay .canto-id { bottom: 0; right: 0; text-align: right; }
+.overlay[hidden] { display: none; }
+.overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; color: #e8ecf0; font-size: 12px; line-height: 1.5; text-shadow: 0 0 3px #000, 0 0 2px #000; font-variant-numeric: tabular-nums; }
+.overlay .canto { position: absolute; padding: 8px 10px; }
+.overlay .canto > div { white-space: nowrap; }
+.overlay .canto-se { top: 0; left: 0; }
+.overlay .canto-sd { top: 0; right: 0; text-align: right; }
+.overlay .canto-ie { bottom: 0; left: 0; }
+.overlay .canto-id { bottom: 0; right: 0; text-align: right; }
+
+/* Grade de viewports (layouts 1x1, 1x2, 2x2) */
+#grade { position: absolute; inset: 0; display: grid; gap: 2px; background: #1b1f24; }
+.celula { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #000; border: 2px solid transparent; }
+.celula[hidden] { display: none; }
+.celula.ativa { border-color: var(--destaque); }
+.viewport-2d { position: absolute; inset: 0; }
+.msg-celula { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 12px; line-height: 1.8; color: var(--texto-fraco); pointer-events: none; }
+.msg-celula[hidden] { display: none; }
+.msg-celula .erro { color: var(--erro); font-weight: 600; }
+
+/* Miniaturas no painel */
+.serie .linha { align-items: center; }
+.serie .mini { flex: none; width: 40px; height: 40px; background: #000; border-radius: 3px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.serie .mini canvas { width: 100%; height: 100%; display: block; }
+.serie .mini-erro { color: var(--aviso); font-weight: 700; cursor: help; }

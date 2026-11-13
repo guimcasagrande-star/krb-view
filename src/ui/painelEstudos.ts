@@ -5,6 +5,7 @@
 
 import { formatDatePtBr } from '../io/dicomTime';
 import type { DicomIndex, SeriesNode, StackNode, StudyNode } from '../io/organize';
+import { criarObservadorMiniaturas, type ObservadorMiniaturas } from './miniaturas';
 
 export const EVENTO_ABRIR_PILHA = 'abrirPilha';
 export type AbrirPilhaEvento = CustomEvent<StackNode>;
@@ -19,6 +20,9 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (texto !== undefined) e.textContent = texto;
   return e;
 }
+
+/** Observador das miniaturas do painel atual (recriado a cada pasta aberta). */
+let miniaturas: ObservadorMiniaturas | undefined;
 
 function plural(n: number, singular: string, pluralTxt: string): string {
   return `${n} ${n === 1 ? singular : pluralTxt}`;
@@ -49,8 +53,12 @@ function criarLinha(
 ): HTMLButtonElement {
   const botao = el('button', nivelPilha ? 'serie pilha' : 'serie');
   botao.type = 'button';
+  botao.dataset.pilhaId = pilha.id;
   const linha = el('span', 'linha');
-  linha.append(el('span', 'num', numero), el('span', 'titulo', titulo));
+  // Miniatura: só é gerada quando a linha aparece na área visível do painel.
+  const mini = el('span', 'mini');
+  miniaturas?.observar(mini, pilha);
+  linha.append(mini, el('span', 'num', numero), el('span', 'titulo', titulo));
   const aviso = iconeAviso(pilha);
   if (aviso) linha.append(aviso);
   linha.append(el('span', 'quant', plural(quantidade, 'img', 'imgs')));
@@ -109,6 +117,13 @@ function criarEstudo(
   return detalhes;
 }
 
+/** Destaca no painel a série que o viewport ativo mostra (null = nenhuma). */
+export function marcarPilhaAtiva(container: HTMLElement, pilhaId: string | null): void {
+  for (const b of container.querySelectorAll<HTMLButtonElement>('button.serie')) {
+    b.classList.toggle('ativa', pilhaId !== null && b.dataset.pilhaId === pilhaId);
+  }
+}
+
 /** Desenha o índice em `container`, substituindo o conteúdo anterior. */
 export function renderizarPainelEstudos(container: HTMLElement, index: DicomIndex): void {
   container.replaceChildren();
@@ -117,11 +132,10 @@ export function renderizarPainelEstudos(container: HTMLElement, index: DicomInde
     return;
   }
 
-  let ativa: HTMLButtonElement | undefined;
-  const aoEscolher = (botao: HTMLButtonElement, pilha: StackNode): void => {
-    ativa?.classList.remove('ativa');
-    botao.classList.add('ativa');
-    ativa = botao;
+  miniaturas?.desconectar();
+  miniaturas = criarObservadorMiniaturas(container);
+  // O destaque da série ativa vem do viewport ativo (ver marcarPilhaAtiva).
+  const aoEscolher = (_botao: HTMLButtonElement, pilha: StackNode): void => {
     container.dispatchEvent(
       new CustomEvent<StackNode>(EVENTO_ABRIR_PILHA, { detail: pilha, bubbles: true }),
     );

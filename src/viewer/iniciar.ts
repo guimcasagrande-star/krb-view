@@ -20,7 +20,18 @@ import {
 } from '@cornerstonejs/tools';
 
 export const ID_MOTOR = 'motor';
-export const ID_VIEWPORT_2D = 'vp-principal';
+/** Máximo de viewports na grade (layout 2x2). */
+export const MAX_VIEWPORTS = 4;
+
+/** Id do viewport do Cornerstone para a posição `i` da grade. */
+export function idViewport(i: number): string {
+  return `vp-${i}`;
+}
+
+/** Id do elemento HTML do viewport da posição `i`. */
+export function idElemento(i: number): string {
+  return `viewport-${i}`;
+}
 
 let promessa: Promise<RenderingEngine> | undefined;
 

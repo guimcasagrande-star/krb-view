@@ -1,18 +1,25 @@
 /**
- * Overlay de texto nos quatro cantos do viewport 2D. Os textos vêm de montarOverlay
- * (função pura). Atualiza ao rolar, mudar janela ou zoom. A tecla O liga e desliga.
+ * Overlay de texto nos quatro cantos de cada viewport 2D. Os textos vêm de montarOverlay
+ * (função pura). Atualiza ao rolar, mudar janela ou zoom. A tecla O liga e desliga todos.
  */
 
 import { Enums, type Types } from '@cornerstonejs/core';
-import { estado } from '../state/store';
+import type { StackNode } from '../io/organize';
 import { montarOverlay, type CantosOverlay } from './overlayTexto';
 
 type Canto = keyof CantosOverlay;
 
-let raiz: HTMLDivElement | undefined;
-let cantos: Record<Canto, HTMLDivElement> | undefined;
-let viewportLigado: Types.IStackViewport | undefined;
-let visivel = true;
+/** O que o overlay precisa saber do viewport a que pertence. */
+export interface FonteOverlay {
+  viewport(): Types.IStackViewport | undefined;
+  pilha(): StackNode | null;
+}
+
+export interface Overlay {
+  atualizar(): void;
+  /** Liga aos eventos do elemento do viewport (rolar, janela e câmera). Uma vez só. */
+  ligar(elemento: HTMLElement): void;
+}
 
 const CLASSE_CANTO: Record<Canto, string> = {
   superiorEsquerdo: 'canto-se',
@@ -21,67 +28,74 @@ const CLASSE_CANTO: Record<Canto, string> = {
   inferiorDireito: 'canto-id',
 };
 
-/** Cria os quatro cantos dentro do contentor (uma vez). */
-export function criarOverlay(contentor: HTMLElement): void {
-  if (raiz) return;
-  raiz = document.createElement('div');
-  raiz.id = 'overlay';
+/** Cada overlay criado: sua raiz no DOM e a função que atualiza o texto. */
+const overlays = new Map<HTMLElement, () => void>();
+let visivel = true;
+
+/** Cria os quatro cantos dentro de `celula` e devolve o controle do overlay. */
+export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay {
+  const raiz = document.createElement('div');
+  raiz.className = 'overlay';
   raiz.setAttribute('aria-hidden', 'true');
   raiz.hidden = !visivel;
-  const novos = {} as Record<Canto, HTMLDivElement>;
+  const cantos = {} as Record<Canto, HTMLDivElement>;
   for (const canto of Object.keys(CLASSE_CANTO) as Canto[]) {
     const d = document.createElement('div');
     d.className = `canto ${CLASSE_CANTO[canto]}`;
-    novos[canto] = d;
+    cantos[canto] = d;
     raiz.append(d);
   }
-  cantos = novos;
-  contentor.append(raiz);
-}
+  celula.append(raiz);
 
-/** Atualiza o texto dos cantos com o corte e os valores atuais do viewport. */
-export function atualizarOverlay(viewport: Types.IStackViewport | undefined = viewportLigado): void {
-  if (!raiz || !cantos || !visivel || !viewport) return;
-  const stack = estado.pilhaAtiva;
-  const indice = viewport.getCurrentImageIdIndex();
-  const atual = stack?.instances[indice];
-  const primeira = stack?.instances[0];
-  if (!stack || !atual || !primeira) {
-    for (const d of Object.values(cantos)) d.replaceChildren();
-    return;
+  function atualizar(): void {
+    if (!visivel) return;
+    const viewport = fonte.viewport();
+    const stack = fonte.pilha();
+    const indice = viewport?.getCurrentImageIdIndex() ?? 0;
+    const atual = stack?.instances[indice];
+    const primeira = stack?.instances[0];
+    if (!viewport || !stack || !atual || !primeira) {
+      for (const d of Object.values(cantos)) d.replaceChildren();
+      return;
+    }
+    const texto = montarOverlay({
+      primeira,
+      atual,
+      indice,
+      total: stack.instances.length,
+      voiRange: viewport.getProperties().voiRange,
+      zoom: viewport.getZoom(),
+    });
+    for (const canto of Object.keys(cantos) as Canto[]) {
+      cantos[canto].replaceChildren(
+        ...texto[canto].map((linha) => {
+          const p = document.createElement('div');
+          p.textContent = linha;
+          return p;
+        }),
+      );
+    }
   }
-  const { voiRange } = viewport.getProperties();
-  const texto = montarOverlay({
-    primeira,
-    atual,
-    indice,
-    total: stack.instances.length,
-    voiRange,
-    zoom: viewport.getZoom(),
-  });
-  for (const canto of Object.keys(cantos) as Canto[]) {
-    cantos[canto].replaceChildren(
-      ...texto[canto].map((linha) => {
-        const p = document.createElement('div');
-        p.textContent = linha;
-        return p;
-      }),
-    );
+
+  function ligar(elemento: HTMLElement): void {
+    elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, atualizar);
+    elemento.addEventListener(Enums.Events.VOI_MODIFIED, atualizar);
+    elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, atualizar);
   }
+
+  overlays.set(raiz, atualizar);
+  return { atualizar, ligar };
 }
 
-/** Liga o overlay aos eventos do viewport (rolar, janela e câmera). Chamar uma vez por elemento. */
-export function ligarOverlay(elemento: HTMLElement, viewport: Types.IStackViewport): void {
-  viewportLigado = viewport;
-  const atualizar = (): void => atualizarOverlay();
-  elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, atualizar);
-  elemento.addEventListener(Enums.Events.VOI_MODIFIED, atualizar);
-  elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, atualizar);
-}
-
-/** Tecla O: mostra ou esconde os textos. */
+/** Tecla O: mostra ou esconde os textos de todos os viewports. */
 export function alternarOverlay(): void {
   visivel = !visivel;
-  if (raiz) raiz.hidden = !visivel;
-  atualizarOverlay();
+  for (const [raiz, atualizar] of overlays) {
+    raiz.hidden = !visivel;
+    atualizar();
+  }
+}
+
+export function overlayVisivel(): boolean {
+  return visivel;
 }

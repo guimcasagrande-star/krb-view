@@ -2,8 +2,19 @@ import { iniciarAtalhos } from './tools/atalhos';
 import { estado } from './state/store';
 import { iniciarAbrirPasta } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
-import { EVENTO_ABRIR_PILHA, renderizarPainelEstudos, type AbrirPilhaEvento } from './ui/painelEstudos';
-import { abrirPilha2d, configurarViewport2d } from './viewer/viewport2d';
+import {
+  EVENTO_ABRIR_PILHA,
+  marcarPilhaAtiva,
+  renderizarPainelEstudos,
+  type AbrirPilhaEvento,
+} from './ui/painelEstudos';
+import {
+  abrirPilha2d,
+  configurarViewport2d,
+  EVENTO_ESTADO_VIEWPORTS,
+  type EstadoViewports,
+  limparViewports,
+} from './viewer/viewport2d';
 
 function obter<T extends HTMLElement>(id: string): T {
   const e = document.getElementById(id);
@@ -13,7 +24,7 @@ function obter<T extends HTMLElement>(id: string): T {
 
 const lista = obter('lista-estudos');
 const vazio = obter('vazio');
-configurarViewport2d({ contentor: obter('area-viewports'), mensagem: vazio });
+configurarViewport2d({ contentor: obter('area-viewports') });
 iniciarBarraFerramentas(obter('ferramentas'));
 iniciarAtalhos();
 
@@ -28,15 +39,17 @@ iniciarAbrirPasta(
   },
   (resultado) => {
     estado.resultado = resultado;
-    estado.pilhaAtiva = null;
+    void limparViewports();
     renderizarPainelEstudos(lista, resultado.index);
-    vazio.hidden = false;
-    vazio.textContent = 'Escolha uma série no painel.';
+    vazio.hidden = true;
   },
 );
 
 document.addEventListener(EVENTO_ABRIR_PILHA, (ev) => {
-  const pilha = (ev as AbrirPilhaEvento).detail;
-  estado.pilhaAtiva = pilha;
-  void abrirPilha2d(pilha);
+  void abrirPilha2d((ev as AbrirPilhaEvento).detail);
+});
+
+// O destaque no painel segue a série do viewport ativo.
+document.addEventListener(EVENTO_ESTADO_VIEWPORTS, (ev) => {
+  marcarPilhaAtiva(lista, (ev as CustomEvent<EstadoViewports>).detail.pilhaId);
 });
