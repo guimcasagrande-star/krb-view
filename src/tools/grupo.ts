@@ -3,7 +3,7 @@
  * do botão esquerdo e ações sobre a imagem (inverter, girar, espelhar, presets, medidas).
  */
 
-import type { Types } from '@cornerstonejs/core';
+import { Enums, type Types } from '@cornerstonejs/core';
 import {
   AngleTool,
   annotation,
@@ -316,10 +316,15 @@ export async function viewportAtivo(): Promise<Viewport2dOuVolume | undefined> {
   return motor.getViewport(estado.idViewportAtivo) as Viewport2dOuVolume | undefined;
 }
 
-/** Todos os viewports habilitados no motor. */
+/** Todos os viewports habilitados no motor (sem os 3D, que têm controles próprios). */
 async function obterViewportsHabilitados(): Promise<Viewport2dOuVolume[]> {
   const motor = await iniciarCornerstone();
-  return motor.getViewports() as Viewport2dOuVolume[];
+  return (motor.getViewports() as Viewport2dOuVolume[]).filter((v) => !eh3d(v));
+}
+
+/** Viewport de renderização 3D: janela, inverter, girar e presets de janela não se aplicam. */
+function eh3d(v: Viewport2dOuVolume): boolean {
+  return v.type === Enums.ViewportType.VOLUME_3D;
 }
 
 /** Ids de todos os viewports habilitados (os visíveis na grade). */
@@ -342,7 +347,7 @@ async function comViewport(
     return;
   }
   const v = await viewportAtivo();
-  if (!v) return;
+  if (!v || eh3d(v)) return;
   acao(v);
   v.render();
 }

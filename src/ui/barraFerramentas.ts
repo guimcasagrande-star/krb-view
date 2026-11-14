@@ -3,7 +3,7 @@
  * - Botões divididos (ação principal + seta `▾` com menu suspenso) para Abrir (Pasta, Arquivo, ZIP),
  *   Dividir tela (1x1, 1x2, 2x2), Sincronização/Comparar, Anotações (A), Navegação,
  *   Janela/Nível + Presets, Medidas (Distância, Desvio de linha média, Ângulo, Seta, ROIs,
- *   Polilinha e Curva Tempo-Intensidade / Perfusão), Transformações, Cine, MPR e MIP 3D.
+ *   Polilinha e Curva Tempo-Intensidade / Perfusão), Transformações, Cine, MPR, MIP 3D e 3D.
  */
 
 import {
@@ -52,6 +52,7 @@ import {
   alternarCadeadoRolagemComparar,
   alternarCine,
   alternarMipRotatorio,
+  alternar3d,
   alternarModoComparar,
   compararPetCt,
   abrirLayoutComparacaoPetCt,
@@ -110,6 +111,7 @@ const OPCOES_PLANO: Array<{ valor: PlanoSlot; rotulo: string }> = [
   { valor: 'coronal', rotulo: 'Coronal' },
   { valor: 'sagital', rotulo: 'Sagital' },
   { valor: 'mip-rotatorio', rotulo: 'MIP rotatório' },
+  { valor: '3d', rotulo: '3D' },
 ];
 
 const OPCOES_MODO_SLAB: Array<{ valor: ModoSlab; rotulo: string }> = [
@@ -717,7 +719,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     () => void alternarMipRotatorio(),
   );
 
-  grupoMpr3d.append(rotuloPlano, rotuloModo, controleSlab, botaoMpr, botaoMip3d);
+  const botao3d = botao(
+    '3D',
+    'Abrir a reconstrução 3D (renderização volumétrica) ao lado do corte 2D. No 3D: esquerdo gira, direito ou roda dão zoom, meio move',
+    () => void alternar3d(),
+  );
+
+  grupoMpr3d.append(rotuloPlano, rotuloModo, controleSlab, botaoMpr, botaoMip3d, botao3d);
 
   const config = botao('⚙', 'Configurações: medidas, atalhos e janelas', () => abrirConfiguracoes());
   config.setAttribute('aria-label', 'Configurações');
@@ -775,7 +783,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     seletorPlano.disabled = e.mprAtivo || (!e.mprDisponivel && e.planoAtivo === 'original');
     rotuloPlano.hidden = e.mprAtivo;
 
-    const emMipRotatorio = !e.mprAtivo && e.planoAtivo === 'mip-rotatorio';
+    const emMipRotatorio = !e.mprAtivo && (e.planoAtivo === 'mip-rotatorio' || e.planoAtivo === '3d');
     seletorModo.value = e.modoSlabAtivo;
     seletorModo.disabled = emMipRotatorio || (!e.mprAtivo && !e.mprDisponivel && e.modoSlabAtivo === 'normal');
     rotuloModo.hidden = emMipRotatorio;
@@ -790,6 +798,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
     botaoMip3d.setAttribute('aria-pressed', String(e.mipRotatorioVisivel));
     botaoMip3d.disabled = !e.mipRotatorioVisivel && !e.mprDisponivel;
+    botao3d.setAttribute('aria-pressed', String(e.visao3dVisivel));
+    botao3d.disabled = !e.visao3dVisivel && !e.mprDisponivel;
 
     itemSincEstudo.setAttribute('aria-pressed', String(e.sincroniaEstudo));
     botaoLinhasRef.setAttribute('aria-pressed', String(e.linhasReferencia));

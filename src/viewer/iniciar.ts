@@ -28,6 +28,7 @@ import {
   PlanarFreehandROITool,
   ReferenceLinesTool,
   StackScrollTool,
+  TrackballRotateTool,
   WindowLevelTool,
   ZoomTool,
 } from '@cornerstonejs/tools';
@@ -76,6 +77,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       PolilinhaTool,
       CrosshairsMprTool,
       MIPJumpToClickTool,
+      TrackballRotateTool,
     ]) {
       addTool(ferramenta);
     }

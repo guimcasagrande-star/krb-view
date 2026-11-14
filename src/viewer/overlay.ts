@@ -25,6 +25,8 @@ export interface FonteOverlay {
   pilha(): StackNode | null;
   planoMpr?(): PlanoMprOverlay | undefined;
   modoSlab?(): string | undefined;
+  /** No 3D (fase 8): nome da predefinição em uso; os textos de corte e janela não se aplicam. */
+  rotulo3d?(): string | undefined;
 }
 
 export interface Overlay {
@@ -126,6 +128,31 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
     raiz.classList.toggle('invertido', invertido && 'setImageIdIndex' in viewport);
     // Medidas: texto escuro em caixa clara em qualquer viewport invertido (legível sobre qualquer fundo).
     definirEstiloPorFundo(viewport.id, invertido);
+
+    const rotulo3d = fonte.rotulo3d?.();
+    if (rotulo3d) {
+      // 3D: paciente e estudo em cima; embaixo só o nome da predefinição. Sem letras e sem régua
+      // (a vista gira livremente e a escala muda com a profundidade).
+      for (const d of Object.values(letras)) d.textContent = '';
+      desenharRegua(canvasRegua, 0, 0, 0, false);
+      const t = montarOverlay({ primeira, atual: primeira, indice: 0, total: 1 });
+      const linhas: CantosOverlay = {
+        superiorEsquerdo: t.superiorEsquerdo,
+        superiorDireito: t.superiorDireito,
+        inferiorEsquerdo: [`3D · ${rotulo3d}`],
+        inferiorDireito: [],
+      };
+      for (const canto of Object.keys(cantos) as Canto[]) {
+        cantos[canto].replaceChildren(
+          ...linhas[canto].map((linha) => {
+            const p = document.createElement('div');
+            p.textContent = linha;
+            return p;
+          }),
+        );
+      }
+      return;
+    }
 
     atualizarOrientacaoERegua(viewport, false);
 

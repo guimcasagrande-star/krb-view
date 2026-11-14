@@ -49,6 +49,14 @@ import {
   type ControladorMipRotatorio,
   criarControladorMipRotatorio,
 } from '../tools/mipRotatorio';
+import { modalidade3d } from '../render3d/predefinicoes3d';
+import {
+  adicionarAoGrupo3d,
+  type Controlador3d,
+  montar3d,
+  removerDoGrupo3d,
+  rotuloPredefinicao3d,
+} from '../render3d/viewport3d';
 import {
   calcularCorteSincronizado,
   calcularRotulosParaSlots,
@@ -78,7 +86,7 @@ const CARGAS_SIMULTANEAS = 4;
  * '1x2' = 1 linha e 2 colunas (lado a lado).
  */
 export type Layout = string;
-export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio';
+export type PlanoSlot = 'original' | 'axial' | 'coronal' | 'sagital' | 'mip-rotatorio' | '3d';
 export type ModoSlab = 'normal' | 'mip' | 'minip' | 'media';
 
 export const GRADE_MAXIMA = 5;
@@ -118,7 +126,13 @@ export const PLANOS_SLOTS: Record<PlanoSlot, PlanoMprOverlay> = {
   coronal: { rotulo: 'Coronal', eixo: Enums.OrientationAxis.CORONAL },
   sagital: { rotulo: 'Sagital', eixo: Enums.OrientationAxis.SAGITTAL },
   'mip-rotatorio': { rotulo: 'MIP rotatório', eixo: Enums.OrientationAxis.CORONAL },
+  '3d': { rotulo: '3D', eixo: Enums.OrientationAxis.CORONAL },
 };
+
+/** Planos sem cortes (MIP rotatório e 3D): ficam fora da rolagem, das linhas e da sincronia. */
+function semCortes(s: { planoSlot: PlanoSlot }): boolean {
+  return s.planoSlot === 'mip-rotatorio' || s.planoSlot === '3d';
+}
 
 export const MODOS_SLAB: Record<ModoSlab, { rotulo: string; blendMode: Enums.BlendModes }> = {
   normal: { rotulo: 'Normal', blendMode: Enums.BlendModes.COMPOSITE },
@@ -154,6 +168,8 @@ export interface EstadoViewports {
   slabMm: number;
   /** Verdadeiro quando algum viewport visível exibe o MIP rotatório. */
   mipRotatorioVisivel: boolean;
+  /** Verdadeiro quando algum viewport visível exibe o 3D (fase 8). */
+  visao3dVisivel: boolean;
   /** Estado do modo Comparar (Fase 4). */
   comparacao: EstadoComparacao;
   /** Um viewport está maximizado (tela cheia da grade). */
@@ -184,6 +200,8 @@ interface Slot {
   canvasMira: HTMLCanvasElement;
   pontoMiraMundo: Types.Point3 | null;
   controladorMip?: ControladorMipRotatorio;
+  /** Controles do 3D (fase 8), quando o slot mostra a renderização volumétrica. */
+  controlador3d?: Controlador3d;
   overlay: Overlay;
   viewport?: Types.IStackViewport | Types.IVolumeViewport;
   tipoViewport: Enums.ViewportType;
@@ -416,6 +434,7 @@ function estadoAtual(): EstadoViewports {
     modoSlabAtivo: mprAtivo ? modoSlabMpr : (slot?.modoSlab ?? 'normal'),
     slabMm: mprAtivo ? slabMprMm : (slot?.slabMm ?? 1),
     mipRotatorioVisivel,
+    visao3dVisivel: slots.some((s) => !s.celula.hidden && s.planoSlot === '3d'),
     maximizado: maximizado !== null,
     sincroniaEstudo: sincroniaEstudoLigada,
     linhasReferencia: linhasReferenciaLigadas,
@@ -460,7 +479,7 @@ function gruposSincroniaEstudo(): Slot[][] {
     if (s.celula.hidden || !s.pilha || !s.habilitado || !s.viewport) continue;
     // Entram os cortes originais (pilha) e a fusão PET/TC (volume axial).
     // Entram cortes originais (pilha) e planos de volume (axial, coronal, sagital; com ou sem fusão).
-    if (s.planoSlot === 'original' ? !('setImageIdIndex' in s.viewport) : s.planoSlot === 'mip-rotatorio') continue;
+    if (s.planoSlot === 'original' ? !('setImageIdIndex' in s.viewport) : semCortes(s)) continue;
     const inst = s.pilha.instances[0];
     if (!inst?.studyInstanceUid || !inst.frameOfReferenceUid) continue;
     const chave = `${inst.studyInstanceUid}|${inst.frameOfReferenceUid}`;
@@ -684,7 +703,7 @@ let linhasReferenciaAtivas: string | null = null;
 function atualizarLinhasReferencia(): void {
   let origem: string | null = null;
   if (linhasReferenciaLigadas && !mprAtivo) {
-    const vis = slots.filter((s) => !s.celula.hidden && s.habilitado && s.viewport && s.planoSlot !== 'mip-rotatorio');
+    const vis = slots.filter((s) => !s.celula.hidden && s.habilitado && s.viewport && !semCortes(s));
     const normais = vis.map((s) => normalDoSlot(s));
     let planosDiferentes = false;
     for (let i = 0; i < vis.length && !planosDiferentes; i++) {
@@ -726,7 +745,8 @@ function aoMudarCameraEstudo(origem: number): void {
     if (!zoomPanCompararLigado || sincronizandoCameraEstudo || (origem !== 0 && origem !== 1)) return;
     const so = slots[origem];
     const d = slots[origem === 0 ? 1 : 0];
-    if (!so?.viewport || !d?.viewport || ('setImageIdIndex' in so.viewport && 'setImageIdIndex' in d.viewport)) return;
+    if (!so?.viewport || !d?.viewport || semCortes(so) || semCortes(d)) return;
+    if ('setImageIdIndex' in so.viewport && 'setImageIdIndex' in d.viewport) return;
     const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
     const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport;
     const zoom = v.getZoom?.();
@@ -857,11 +877,37 @@ async function garantirViewportMpr(
   return slot.viewport as Types.IVolumeViewport;
 }
 
+async function garantirViewport3d(slot: Slot): Promise<Types.IVolumeViewport> {
+  const motor = await iniciarCornerstone();
+  if (slot.habilitado) {
+    await desabilitar(slot, false);
+  }
+  slot.planoMpr = PLANOS_SLOTS['3d'];
+  slot.tipoViewport = Enums.ViewportType.VOLUME_3D;
+  motor.enableElement({
+    viewportId: slot.idViewport,
+    type: Enums.ViewportType.VOLUME_3D,
+    element: slot.elemento,
+    defaultOptions: {
+      orientation: Enums.OrientationAxis.CORONAL,
+      background: [0, 0, 0],
+    },
+  });
+  adicionarAoGrupo3d(slot.idViewport);
+  slot.viewport = motor.getViewport<Types.IVolumeViewport>(slot.idViewport);
+  slot.habilitado = true;
+  return slot.viewport as Types.IVolumeViewport;
+}
+
 /** Desliga o viewport de um slot. A pilha continua nele para voltar depois. */
 async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
   if (slot.controladorMip) {
     slot.controladorMip.destruir();
     slot.controladorMip = undefined;
+  }
+  if (slot.controlador3d) {
+    slot.controlador3d.destruir();
+    slot.controlador3d = undefined;
   }
   if (!slot.habilitado) return;
   pararCine(slot.indice);
@@ -876,6 +922,7 @@ async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
   }
   const motor = await iniciarCornerstone();
   removerViewportDoGrupo(slot.idViewport);
+  removerDoGrupo3d(slot.idViewport);
   motor.disableElement(slot.idViewport);
   slot.viewport = undefined;
   slot.planoMpr = undefined;
@@ -973,7 +1020,7 @@ function indiceCorteMaisProximoDoPonto(stack: StackNode, ponto: Types.Point3): n
 }
 
 function atualizarMiraSlot(slot: Slot): void {
-  if (!slot.pontoMiraMundo || !slot.viewport || !slot.habilitado || slot.celula.hidden || slot.planoSlot === 'mip-rotatorio') {
+  if (!slot.pontoMiraMundo || !slot.viewport || !slot.habilitado || slot.celula.hidden || semCortes(slot)) {
     desenharMiraNoCanvas(slot.canvasMira, null);
     return;
   }
@@ -1010,7 +1057,7 @@ function aplicarLocalizador3d(origemIndice: number, pontoMundoOrigem: Types.Poin
       if (s.indice === origemIndice || s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha) {
         continue;
       }
-      if (s.planoSlot === 'mip-rotatorio') {
+      if (semCortes(s)) {
         s.pontoMiraMundo = null;
         desenharMiraNoCanvas(s.canvasMira, null);
         continue;
@@ -1478,6 +1525,50 @@ async function exibirSlot(
     }
   }
 
+  // 3D (fase 8): renderização volumétrica do mesmo volume, com grupo de ferramentas próprio.
+  const mod3d = modalidade3d(stack.instances[0]?.modality);
+  if (slot.planoSlot === '3d' && (!mod3d || !volumeId || !promessaVolume)) {
+    slot.planoSlot = 'original';
+    if (!mod3d) mostrarAvisoVolume(slot, ['O 3D está disponível para TC e RM; no PET, use o MIP 3D.']);
+  }
+  if (slot.planoSlot === '3d' && mod3d && volumeId && promessaVolume) {
+    slot.montandoVolume = true;
+    mostrarMensagem(slot, `Montando o 3D de ${nome}…`);
+    sincronizar();
+    try {
+      const motor = await iniciarCornerstone();
+      const vp = await garantirViewport3d(slot);
+      slot.montandoVolume = true;
+      if (minhaGeracao !== slot.geracao) return;
+      await promessaVolume;
+      if (minhaGeracao !== slot.geracao) return;
+      await setVolumesForViewports(motor, [{ volumeId }], [slot.idViewport], true);
+      if (minhaGeracao !== slot.geracao) return;
+      slot.controlador3d = montar3d({
+        contentor: slot.celula,
+        modalidade: mod3d,
+        obterViewport: () =>
+          slot.tipoViewport === Enums.ViewportType.VOLUME_3D
+            ? (slot.viewport as Types.IVolumeViewport | undefined)
+            : undefined,
+        aoMudar: () => slot.overlay.atualizar(),
+      });
+      vp.render();
+      slot.montandoVolume = false;
+      esconderMensagem(slot);
+      slot.overlay.atualizar();
+      sincronizar();
+      return;
+    } catch (e) {
+      slot.montandoVolume = false;
+      if (minhaGeracao !== slot.geracao) return;
+      slot.planoSlot = 'original';
+      mostrarAvisoVolume(slot, [`Não foi possível montar o 3D (${textoDoErro(e)}); voltando ao corte original.`]);
+    } finally {
+      if (minhaGeracao === slot.geracao) slot.montandoVolume = false;
+    }
+  }
+
   // Modo de volume individual no slot (sem ir para a janela de 3 planos do MPR):
   if (precisaVolumeViewport(slot) && volumeId && promessaVolume) {
     const infoPlano = PLANOS_SLOTS[slot.planoSlot];
@@ -1618,11 +1709,18 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
       return;
     }
   }
+  if (plano === '3d' && !modalidade3d(slot.pilha.instances[0]?.modality)) {
+    mostrarAvisoVolume(slot, ['O 3D está disponível para TC e RM; no PET, use o MIP 3D.']);
+    sincronizar();
+    return;
+  }
 
   pararCine(slot.indice);
+  const saindoDo3d = slot.planoSlot === '3d';
   const { corte, voiPreservado } = salvarEstadoVisualSlot(slot);
   slot.planoSlot = plano;
-  await exibirSlot(slot, corte, voiPreservado);
+  // A janela do 3D é a da predefinição, não serve para os cortes.
+  await exibirSlot(slot, corte, saindoDo3d ? undefined : voiPreservado);
 }
 
 /**
@@ -1632,7 +1730,16 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
  * - Se já houver um MIP rotatório no layout 1x2 ao lado da mesma série, fecha-o e volta para 1x1.
  * - Nos demais layouts (ou no MPR), alterna o slot ativo entre 'mip-rotatorio' e 'original'.
  */
-export async function alternarMipRotatorio(): Promise<void> {
+export function alternarMipRotatorio(): Promise<void> {
+  return alternarPlanoAoLado('mip-rotatorio');
+}
+
+/** Botão 3D (fase 8): como o MIP 3D, mas com a renderização volumétrica ao lado do corte 2D. */
+export function alternar3d(): Promise<void> {
+  return alternarPlanoAoLado('3d');
+}
+
+async function alternarPlanoAoLado(plano: 'mip-rotatorio' | '3d'): Promise<void> {
   if (mprAtivo) {
     await sairDoMpr('1x2');
   }
@@ -1650,11 +1757,16 @@ export async function alternarMipRotatorio(): Promise<void> {
     sincronizar();
     return;
   }
+  if (plano === '3d' && !modalidade3d(stack.instances[0]?.modality)) {
+    if (slotAtivo) mostrarAvisoVolume(slotAtivo, ['O 3D está disponível para TC e RM; no PET, use o MIP 3D.']);
+    sincronizar();
+    return;
+  }
 
   // Se estamos em 1x2 e o slot 1 já é o MIP rotatório da mesma série, fecha e volta para 1x1:
   if (
     layoutAtual === '1x2' &&
-    slot1?.planoSlot === 'mip-rotatorio' &&
+    slot1?.planoSlot === plano &&
     slot0?.pilha?.id === stack.id &&
     slot1?.pilha?.id === stack.id
   ) {
@@ -1666,7 +1778,7 @@ export async function alternarMipRotatorio(): Promise<void> {
 
   // Se estamos em 1x1, abre 1x2 com [Corte 2D | MIP rotatório]:
   if (layoutAtual === '1x1' && slot0 && slot1) {
-    if (slot0.planoSlot === 'mip-rotatorio') {
+    if (slot0.planoSlot === plano) {
       await definirPlanoSlotAtivo('original');
       return;
     }
@@ -1674,7 +1786,7 @@ export async function alternarMipRotatorio(): Promise<void> {
     const volAnterior1 = slot1.volumePilhaId;
     slot1.ids = adquirirIds(stack, arquivos);
     slot1.pilha = stack;
-    slot1.planoSlot = 'mip-rotatorio';
+    slot1.planoSlot = plano;
     slot1.modoSlab = 'normal';
     slot1.slabMm = 1;
     slot1.volumePilhaId = null;
@@ -1687,7 +1799,7 @@ export async function alternarMipRotatorio(): Promise<void> {
   // Em 1x2 ou 2x2: alterna o slot ativo entre MIP rotatório e Original
   if (slotAtivo) {
     const novoPlano: PlanoSlot =
-      slotAtivo.planoSlot === 'mip-rotatorio' ? 'original' : 'mip-rotatorio';
+      slotAtivo.planoSlot === plano ? 'original' : plano;
     await definirPlanoSlotAtivo(novoPlano);
   }
 }
@@ -2377,7 +2489,7 @@ export async function alternarModoComparar(): Promise<void> {
       s1.volumePilhaId = null;
       if (vol1) liberarVolume(vol1);
       liberarIds(ant1);
-    } else if (s1.planoSlot === 'mip-rotatorio') {
+    } else if (semCortes(s1)) {
       s1.planoSlot = 'original';
     }
   }
@@ -3115,6 +3227,12 @@ function criarSlot(indice: number): Slot {
     pilha: () => slot.pilha,
     planoMpr: () => slot.planoMpr,
     modoSlab: () => MODOS_SLAB[mprAtivo ? modoSlabMpr : slot.modoSlab]?.rotulo,
+    rotulo3d: () => {
+      const m = modalidade3d(slot.pilha?.instances[0]?.modality);
+      return slot.tipoViewport === Enums.ViewportType.VOLUME_3D && slot.habilitado && m
+        ? rotuloPredefinicao3d(slot.idViewport, m)
+        : undefined;
+    },
   });
   slot.overlay.ligar(elemento);
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => {
@@ -3189,7 +3307,7 @@ function criarSlot(indice: number): Slot {
   elemento.addEventListener(
     'mousedown',
     (e) => {
-      if (!slot.viewport || !slot.habilitado || slot.planoSlot === 'mip-rotatorio') return;
+      if (!slot.viewport || !slot.habilitado || semCortes(slot)) return;
       const botao =
         e.button === 0 ? 'esquerdo' : e.button === 1 ? 'meio' : e.button === 2 ? 'direito' : null;
       if (!botao || botaoAtribuido(botao) !== FERRAMENTA_LOCALIZADOR_3D) return;
@@ -3233,7 +3351,7 @@ function criarSlot(indice: number): Slot {
       e.preventDefault();
       e.stopPropagation();
       ativarViewport(indice);
-      if (slot.planoSlot === 'mip-rotatorio') return;
+      if (semCortes(slot)) return;
       const deltaMm = e.deltaY < 0 ? 1 : -1;
       const atual = mprAtivo ? slabMprMm : slot.slabMm;
       definirSlabMpr(atual + deltaMm);
