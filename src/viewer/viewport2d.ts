@@ -36,6 +36,7 @@ import {
   adicionarViewportAoGrupo,
   definirLinhasReferencia,
   botaoAtribuido,
+  EVENTO_BOTOES_MUDARAM,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
   predefinicoes,
@@ -50,6 +51,16 @@ import {
   criarControladorMipRotatorio,
 } from '../tools/mipRotatorio';
 import { modalidade3d } from '../render3d/predefinicoes3d';
+import {
+  apagarTodasSegmentacoes,
+  criarSegmentacao,
+  faixaSegmentacao,
+  mostrarNosViewports,
+  pintarMascara,
+  segmentacaoDaPilha,
+} from '../segmentation/segmentacao';
+import { definirResolvedorCrescer, ehFerramentaSegmentacao } from '../segmentation/ferramentas';
+import { regionGrow } from '../volume/voxelStats';
 import {
   adicionarAoGrupo3d,
   type Controlador3d,
@@ -812,10 +823,107 @@ function sincronizar(): void {
   atualizarEtiquetasComparacao();
   atualizarSincroniaEstudo();
   atualizarLinhasReferencia();
+  atualizarMascaras();
   for (const x of slots) {
     x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
   }
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
+}
+
+// ---------- segmentação (fase 9.1) ----------
+
+/** Quadro pronto para receber a máscara: habilitado, com imagem e com cortes (não 3D nem MIP). */
+function prontoParaMascara(s: Slot): boolean {
+  if (s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha || s.montandoVolume || semCortes(s)) return false;
+  try {
+    return 'setImageIdIndex' in s.viewport ? !!s.viewport.getCurrentImageId() : s.viewport.getActors().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Mostra a máscara da série em cada quadro que a exibe (e tira dos que mudaram de série). */
+function atualizarMascaras(): void {
+  try {
+    mostrarNosViewports(
+      slots.filter(prontoParaMascara).map((s) => ({ idViewport: s.idViewport, pilhaId: s.pilha?.id ?? null })),
+    );
+  } catch (e) {
+    console.warn('Segmentação: não foi possível mostrar a máscara.', e);
+  }
+}
+
+let criandoSegmentacao: Promise<void> | null = null;
+
+/**
+ * Cria a segmentação da série do quadro ativo, se ainda não houver. Usa o volume da série
+ * (montado se preciso) e guarda uma referência a ele enquanto a segmentação existir.
+ */
+export function garantirSegmentacaoAtiva(): Promise<void> {
+  criandoSegmentacao ??= (async () => {
+    const slot = slots[ativo];
+    const stack = slot?.pilha;
+    if (!slot || !stack || segmentacaoDaPilha(stack.id)) return;
+    if (semCortes(slot)) {
+      mostrarAvisoVolume(slot, ['Para segmentar, use um quadro de cortes (original, axial, coronal ou sagital).']);
+      return;
+    }
+    const res = adquirirVolume(stack, slot.ids);
+    if (!res.ok) {
+      mostrarAvisoVolume(slot, [`Segmentação indisponível: ${res.mensagens.join(' · ')}`]);
+      return;
+    }
+    let liberado = false;
+    const liberar = (): void => {
+      if (liberado) return;
+      liberado = true;
+      liberarVolume(stack.id);
+    };
+    try {
+      await res.promessa;
+      criarSegmentacao(stack.id, res.volumeId, liberar);
+    } catch (e) {
+      liberar();
+      mostrarAvisoVolume(slot, [`Não foi possível criar a segmentação (${textoDoErro(e)}).`]);
+    }
+    sincronizar();
+  })().finally(() => {
+    criandoSegmentacao = null;
+  });
+  return criandoSegmentacao;
+}
+
+/** Crescer região: cresce em 3D a partir do ponto, pela faixa do painel, no segmento ativo. */
+async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number]): Promise<string> {
+  const slot = slots.find((s) => s.idViewport === idVp);
+  const stack = slot?.pilha;
+  if (!slot || !stack) return 'Série não encontrada no quadro.';
+  if (!segmentacaoDaPilha(stack.id)) await garantirSegmentacaoAtiva();
+  const seg = segmentacaoDaPilha(stack.id);
+  if (!seg) return 'Crie a segmentação antes (Novo segmento).';
+  if (seg.segmentos.find((x) => x.indice === seg.ativo)?.bloqueado) return 'O segmento ativo está bloqueado.';
+  const v = await carregarVoxels(stack, slot.ids);
+  if ('erro' in v) return v.erro;
+  const ijk = worldToVoxel(v.grid, mundo);
+  if (!ijk) return 'O ponto está fora do volume.';
+  const [nx, ny, nz] = v.grid.dims;
+  const i = Math.round(ijk[0]);
+  const j = Math.round(ijk[1]);
+  const k = Math.round(ijk[2]);
+  if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 'O ponto está fora do volume.';
+  const semente = v.data[i + j * nx + k * nx * ny]!;
+  const ehPet = stack.instances.some((x) => x.modality === 'PT');
+  const f = faixaSegmentacao();
+  // Sem faixa no painel: valor do clique ± 50 (TC e RM) ou a partir de 50% do valor do clique (PET).
+  const min = f.min ?? (ehPet ? semente * 0.5 : semente - 50);
+  const max = f.max ?? (ehPet ? Infinity : semente + 50);
+  const un = unidadeDaSerie(stack);
+  const n = (x: number): string => formatarValor(x, ehPet ? 2 : 0);
+  const faixaTexto = `${n(min)} a ${Number.isFinite(max) ? n(max) : '∞'}${un ? ' ' + un : ''}`;
+  if (semente < min || semente > max) return `O valor do clique (${n(semente)}) está fora da faixa ${faixaTexto}.`;
+  const mascara = regionGrow({ data: v.data, grid: v.grid }, [i, j, k], { min, max, connectivity: 6 });
+  const pintados = pintarMascara(stack.id, mascara, nx, ny);
+  return `Crescer região: ${pintados.toLocaleString('pt-BR')} voxels pintados (faixa ${faixaTexto}).`;
 }
 
 export function ativarViewport(indice: number): void {
@@ -2690,6 +2798,7 @@ export async function limparViewports(): Promise<void> {
   }
   estadoAntesDoMpr = [];
   pararTodosCines();
+  apagarTodasSegmentacoes();
   for (const slot of slots) {
     slot.geracao++;
     liberarRecursosSlot(slot);
@@ -3273,6 +3382,19 @@ function criarSlot(indice: number): Slot {
     atualizarMiraSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+  // Pintando numa série que ainda não tem segmentação: o 1º clique cria a segmentação (sem pintar).
+  celula.addEventListener(
+    'mousedown',
+    (ev) => {
+      if (ev.button !== 0 || !ehFerramentaSegmentacao(ferramentaPrimariaAtual())) return;
+      if (!slot.pilha || semCortes(slot) || segmentacaoDaPilha(slot.pilha.id)) return;
+      if (ev.target instanceof Element && ev.target.closest('button, input, select')) return;
+      ev.stopPropagation();
+      ev.preventDefault();
+      void garantirSegmentacaoAtiva();
+    },
+    true,
+  );
   // Registro manual: com "Mover PET" ligado, arrastar na fusão desloca o PET (no plano da imagem).
   celula.addEventListener(
     'mousedown',
@@ -3316,7 +3438,9 @@ function criarSlot(indice: number): Slot {
   celula.addEventListener('dblclick', (e) => {
     if (e.button !== 0 || (e.target instanceof Element && e.target.closest('button, input, select, a'))) return;
     const atual = ferramentaPrimariaAtual();
-    const medindo = FERRAMENTAS_PRIMARIAS.some((f) => f.nome === atual && f.categoria === 'medida');
+    const medindo = FERRAMENTAS_PRIMARIAS.some(
+      (f) => f.nome === atual && (f.categoria === 'medida' || f.categoria === 'segmentacao'),
+    );
     if (medindo && !e.shiftKey) return;
     alternarMaximizado(indice);
   });
@@ -3384,6 +3508,11 @@ function criarSlot(indice: number): Slot {
 export function configurarViewport2d(elementos: ElementosViewport2d): void {
   definirResolvedorVoi(volumeParaVoi);
   definirResolvedorSonda(valoresNoPonto);
+  definirResolvedorCrescer(crescerRegiaoNoPonto);
+  // Ferramenta de segmentação escolhida (barra, painel ou tecla): cria a segmentação da série ativa.
+  document.addEventListener(EVENTO_BOTOES_MUDARAM, () => {
+    if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) void garantirSegmentacaoAtiva();
+  });
   iniciarVoiEsfera();
   grade = document.createElement('div');
   grade.id = 'grade';

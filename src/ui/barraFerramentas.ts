@@ -38,6 +38,8 @@ import { pacsDisponivel } from '../pacs/transporteTauri.ts';
 import { exportarImagemAtiva } from './exportarImagem';
 import { abrirBuscarPacs } from './buscarPacs';
 import { abrirServidoresPacs } from './servidoresPacs';
+import { FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
+import { apagarSegmentacaoAtiva, novoSegmentoAtivo } from './painelSegmentos';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
@@ -558,7 +560,35 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     () => void abrirCurvaPerfusaoAtiva(),
   );
 
-  grupoNavegacao.append(menuMedidas.contentor, botaoCurvaRapido);
+  // 4b. Segmentação (fase 9.1): botão dividido com a última ferramenta e o menu das demais.
+  let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
+  const menuSegmentar = criarMenuSuspenso({
+    rotulo: '✎ Segmentar',
+    dica: 'Segmentar a série do quadro ativo (cria a segmentação no 1º uso). Seta: ferramentas e segmentos',
+    acaoPrincipal: () => escolherFerramentaPrimaria(ultimaSegmentacao.nome),
+  });
+  for (const f of FERRAMENTAS_SEGMENTACAO) {
+    const item = itemMenu(
+      `${f.icone} ${f.rotulo}`,
+      undefined,
+      () => {
+        ultimaSegmentacao = f;
+        escolherFerramentaPrimaria(f.nome);
+      },
+      menuSegmentar.fechar,
+    );
+    item.title = f.dica;
+    item.dataset.ferramenta = f.nome;
+    botoesFerramenta.push(item);
+    menuSegmentar.painel.append(item);
+  }
+  menuSegmentar.painel.append(
+    divisorMenu(),
+    itemMenu('+ Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar),
+    itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar),
+  );
+
+  grupoNavegacao.append(menuMedidas.contentor, botaoCurvaRapido, menuSegmentar.contentor);
 
   // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
   const grupoImagem = document.createElement('div');

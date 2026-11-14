@@ -19,6 +19,7 @@ import { PolilinhaTool } from '../tools/polilinha';
 import { SetaTool } from '../tools/seta';
 import { SondaTool } from '../tools/sonda';
 import { LesaoPetTool, VoiEsferaTool } from '../tools/voiEsfera';
+import { BrushTool, CrescerRegiaoTool, PaintFillTool } from '../segmentation/ferramentas';
 import {
   addTool,
   AngleTool,
@@ -78,6 +79,9 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       CrosshairsMprTool,
       MIPJumpToClickTool,
       TrackballRotateTool,
+      BrushTool,
+      PaintFillTool,
+      CrescerRegiaoTool,
     ]) {
       addTool(ferramenta);
     }

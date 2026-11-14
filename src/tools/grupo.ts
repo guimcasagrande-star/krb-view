@@ -38,6 +38,7 @@ import { SetaTool } from './seta';
 import { SondaTool } from './sonda';
 import { LesaoPetTool, VoiEsferaTool } from './voiEsfera';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
+import { BrushTool, configuracaoDoPincel, FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
 
 export const ID_GRUPO = 'grupo-principal';
 
@@ -56,7 +57,7 @@ export interface FerramentaPrimaria {
   /** Quando verdadeiro, só fica disponível no modo MPR. */
   apenasMpr?: boolean;
   /** Categoria para agrupar na barra superior estilo RadiAnt. */
-  categoria: 'navegacao' | 'medida';
+  categoria: 'navegacao' | 'medida' | 'segmentacao';
 }
 
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
@@ -80,6 +81,13 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },
   { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm', categoria: 'medida' },
   { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p', categoria: 'medida' },
+  // Segmentação (fase 9.1): sem tecla padrão; dá para escolher uma nas configurações.
+  ...FERRAMENTAS_SEGMENTACAO.map<FerramentaPrimaria>((f) => ({
+    nome: f.nome,
+    rotulo: `Segmentação: ${f.rotulo}`,
+    tecla: '',
+    categoria: 'segmentacao',
+  })),
 ];
 
 /** Todas as ferramentas nativas do grupo Cornerstone, sem repetição. */
@@ -192,6 +200,10 @@ function criarGrupoFerramentas(): void {
       grupo.addTool(nome, { getTextLines: textoAngulo });
     } else if (nome === EllipticalROITool.toolName || nome === PlanarFreehandROITool.toolName) {
       grupo.addTool(nome, { getTextLines: textoRoi });
+    } else if (FERRAMENTAS_SEGMENTACAO.some((f) => f.nome === nome && f.estrategia)) {
+      // Pincel, limiar, esfera e borracha: instâncias da BrushTool com estratégias diferentes.
+      const f = FERRAMENTAS_SEGMENTACAO.find((x) => x.nome === nome)!;
+      grupo.addToolInstance(nome, BrushTool.toolName, configuracaoDoPincel(f));
     } else {
       grupo.addTool(nome);
     }

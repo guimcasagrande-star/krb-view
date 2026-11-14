@@ -8,6 +8,7 @@ import { iniciarBarraFerramentas } from './ui/barraFerramentas';
 import { iniciarDadosPet } from './ui/dadosPet';
 import { iniciarPacs } from './ui/servidoresPacs';
 import { iniciarPainelSuv } from './ui/painelSuv';
+import { iniciarPainelSegmentos } from './ui/painelSegmentos';
 import {
   EVENTO_ABRIR_PILHA,
   marcarPilhaAtiva,
@@ -62,6 +63,7 @@ iniciarEstiloMedidas();
 iniciarSelecaoFacil(obter('area-viewports'));
 iniciarMoverMedidas(obter('area-viewports'));
 iniciarPainelSuv(obter('painel-suv'));
+iniciarPainelSegmentos(obter('painel-segmentos'));
 iniciarDadosPet();
 iniciarPacs();
 
