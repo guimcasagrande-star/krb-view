@@ -329,6 +329,17 @@ export function centroCrosshair(): Types.Point3 | null {
   return [c[0]!, c[1]!, c[2]!];
 }
 
+/** MPR: leva o centro do crosshair (e os outros dois planos) ao ponto `mundo` deste viewport. */
+export function moverCentroCrosshair(enabledElement: unknown, mundo: Types.Point3): void {
+  if (!modoMprAtivo) return;
+  const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+  const inst = grupo?.getToolInstance(CrosshairsTool.toolName) as
+    | { _jump?: (enabledElement: unknown, mundo: Types.Point3) => boolean }
+    | undefined;
+  inst?._jump?.(enabledElement, mundo);
+  if (grupo) utilities.triggerAnnotationRenderForViewportIds(grupo.getViewportIds());
+}
+
 export function emModoMprFerramentas(): boolean {
   return modoMprAtivo;
 }

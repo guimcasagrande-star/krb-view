@@ -10,7 +10,9 @@
 
 import { cache, eventTarget, type Types, volumeLoader } from '@cornerstonejs/core';
 import { Enums as EnumsTools, segmentation } from '@cornerstonejs/tools';
+import { gridFromVolumeProps, worldToVoxel } from '../io/geometry';
 import type { ScalarVolume } from '../volume/voxelStats';
+import { buracosFechados } from './mascaras';
 import { type LinhaVolumetria, volumetriaDosSegmentos } from './volumetria';
 import type { GeometriaSalva, SegmentoSalvo } from './arquivoSegmentacao';
 
@@ -451,6 +453,153 @@ export function pintarMascara(pilhaId: string, mascara: Uint8Array, nx: number, 
     segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(seg.segmentationId, [...cortes], seg.ativo);
   }
   return pintados;
+}
+
+/** Valores que estavam nos voxels antes de uma pintura, para desfazê-la. */
+export interface PinturaDesfazivel {
+  indices: Int32Array;
+  anteriores: Uint8Array;
+}
+
+/**
+ * Pinta os voxels `indices` (lineares, na grade do volume) no segmento ativo, sem sobrescrever
+ * segmentos bloqueados. Devolve o que havia nos voxels mudados, para `desfazerPintura`.
+ */
+export function pintarIndices(pilhaId: string, indices: ArrayLike<number>, porCorte: number): PinturaDesfazivel {
+  const vazio: PinturaDesfazivel = { indices: new Int32Array(0), anteriores: new Uint8Array(0) };
+  const seg = porPilha.get(pilhaId);
+  const vm = seg ? cache.getVolume(seg.labelmapId)?.voxelManager : undefined;
+  if (!seg || !vm) return vazio;
+  const bloqueados = new Set(seg.segmentos.filter((s) => s.bloqueado).map((s) => s.indice));
+  if (bloqueados.has(seg.ativo)) return vazio;
+  const mudados: number[] = [];
+  const antes: number[] = [];
+  const cortes = new Set<number>();
+  for (let n = 0; n < indices.length; n++) {
+    const i = indices[n]!;
+    const atual = vm.getAtIndex(i) as number;
+    if (atual === seg.ativo || (atual !== 0 && bloqueados.has(atual))) continue;
+    vm.setAtIndex(i, seg.ativo);
+    mudados.push(i);
+    antes.push(atual);
+    cortes.add(Math.floor(i / porCorte));
+  }
+  if (mudados.length > 0) {
+    segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(seg.segmentationId, [...cortes], seg.ativo);
+  }
+  return { indices: Int32Array.from(mudados), anteriores: Uint8Array.from(antes) };
+}
+
+/** Devolve aos voxels o que havia antes de `pintarIndices`. */
+export function desfazerPintura(pilhaId: string, pintura: PinturaDesfazivel, porCorte: number): void {
+  const seg = porPilha.get(pilhaId);
+  const vm = seg ? cache.getVolume(seg.labelmapId)?.voxelManager : undefined;
+  if (!seg || !vm || pintura.indices.length === 0) return;
+  const cortes = new Set<number>();
+  for (let n = 0; n < pintura.indices.length; n++) {
+    vm.setAtIndex(pintura.indices[n]!, pintura.anteriores[n]!);
+    cortes.add(Math.floor(pintura.indices[n]! / porCorte));
+  }
+  segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(seg.segmentationId, [...cortes], seg.ativo);
+}
+
+/** Um corte da máscara num dos três eixos da grade: eixo (0 = i, 1 = j, 2 = k) e posição. */
+export interface CorteDaMascara {
+  eixo: 0 | 1 | 2;
+  posicao: number;
+}
+
+/**
+ * Corte da máscara que o viewport mostra: `normal` é a normal da câmera e `ponto` um ponto do
+ * plano (mm). Plano oblíquo à grade devolve undefined (não há um corte só).
+ */
+export function corteDaMascara(
+  pilhaId: string,
+  normal: ArrayLike<number>,
+  ponto: [number, number, number],
+): CorteDaMascara | undefined {
+  const seg = porPilha.get(pilhaId);
+  const vol = seg ? cache.getVolume(seg.labelmapId) : undefined;
+  if (!vol) return undefined;
+  const grid = gridFromVolumeProps({
+    dimensions: vol.dimensions,
+    spacing: vol.spacing,
+    origin: vol.origin,
+    direction: vol.direction,
+  });
+  const passos = [grid.stepI, grid.stepJ, grid.stepK];
+  const norma = Math.hypot(normal[0]!, normal[1]!, normal[2]!) || 1;
+  let eixo: 0 | 1 | 2 | undefined;
+  for (const e of [0, 1, 2] as const) {
+    const p = passos[e]!;
+    const cos = Math.abs(p[0] * normal[0]! + p[1] * normal[1]! + p[2] * normal[2]!) / (Math.hypot(p[0], p[1], p[2]) * norma);
+    if (cos > 0.999) eixo = e;
+  }
+  if (eixo === undefined) return undefined;
+  const ijk = worldToVoxel(grid, ponto);
+  if (!ijk) return undefined;
+  const posicao = Math.round(ijk[eixo]!);
+  if (posicao < 0 || posicao >= grid.dims[eixo]) return undefined;
+  return { eixo, posicao };
+}
+
+/** Índices lineares dos voxels do corte, linha a linha, e o tamanho dele. */
+function indicesDoCorte(dims: ArrayLike<number>, corte: CorteDaMascara): { indices: Int32Array; nu: number; nv: number } {
+  const nx = dims[0]!;
+  const ny = dims[1]!;
+  const nz = dims[2]!;
+  const eixoU = corte.eixo === 0 ? 1 : 0;
+  const eixoV = corte.eixo === 2 ? 1 : 2;
+  const tamanhos = [nx, ny, nz];
+  const nu = tamanhos[eixoU]!;
+  const nv = tamanhos[eixoV]!;
+  const passo = [1, nx, nx * ny];
+  const indices = new Int32Array(nu * nv);
+  const base = corte.posicao * passo[corte.eixo]!;
+  for (let v = 0; v < nv; v++) {
+    for (let u = 0; u < nu; u++) indices[u + v * nu] = base + u * passo[eixoU]! + v * passo[eixoV]!;
+  }
+  return { indices, nu, nv };
+}
+
+/** Voxels do corte cercados pelo segmento ativo (o miolo de contornos fechados). */
+export function buracosDoCorte(pilhaId: string, corte: CorteDaMascara): Set<number> {
+  const seg = porPilha.get(pilhaId);
+  const vol = seg ? cache.getVolume(seg.labelmapId) : undefined;
+  const vm = vol?.voxelManager;
+  const achados = new Set<number>();
+  if (!seg || !vol || !vm) return achados;
+  const { indices, nu, nv } = indicesDoCorte(vol.dimensions, corte);
+  const dentro = new Uint8Array(indices.length);
+  let algum = false;
+  for (let p = 0; p < indices.length; p++) {
+    if ((vm.getAtIndex(indices[p]!) as number) === seg.ativo) {
+      dentro[p] = 1;
+      algum = true;
+    }
+  }
+  if (!algum) return achados;
+  const buracos = buracosFechados(dentro, nu, nv);
+  for (let p = 0; p < indices.length; p++) if (buracos[p] === 1) achados.add(indices[p]!);
+  return achados;
+}
+
+/**
+ * Pincel: preenche o miolo dos contornos que a pincelada fechou. `antes` são os buracos que já
+ * existiam no corte (feitos de propósito, com a borracha, por exemplo): esses ficam como estão.
+ * Só voxels sem segmento são pintados. Devolve quantos foram.
+ */
+export function preencherBuracosNovos(pilhaId: string, corte: CorteDaMascara, antes: Set<number>): number {
+  const seg = porPilha.get(pilhaId);
+  const vol = seg ? cache.getVolume(seg.labelmapId) : undefined;
+  const vm = vol?.voxelManager;
+  if (!seg || !vol || !vm) return 0;
+  const novos: number[] = [];
+  for (const i of buracosDoCorte(pilhaId, corte)) {
+    if (!antes.has(i) && (vm.getAtIndex(i) as number) === 0) novos.push(i);
+  }
+  if (novos.length === 0) return 0;
+  return pintarIndices(pilhaId, novos, vol.dimensions[0] * vol.dimensions[1]).indices.length;
 }
 
 // ---------- salvar e reabrir (fase 9.3) ----------

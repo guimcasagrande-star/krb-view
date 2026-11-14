@@ -696,3 +696,7 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .cubo-face { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; line-height: 1; color: #0b1620; background: rgba(125, 211, 252, 0.92); border: 1px solid #0c4a6e; backface-visibility: hidden; }
 .cubo-rotulo { font-size: 11px; font-weight: 600; color: #fff; -webkit-text-stroke: 3px rgba(0, 0, 0, 0.92); paint-order: stroke fill; white-space: nowrap; }
 .cubo-orientacao:hover .cubo-face { background: #e0f2fe; }
+
+/* Textos do canto que abrem menu ao clicar (zoom e espessura). */
+.overlay .overlay-clicavel { pointer-events: auto; cursor: pointer; }
+.overlay .overlay-clicavel:hover { text-decoration: underline; color: #7dd3fc; }

@@ -27,6 +27,17 @@ export interface FonteOverlay {
   modoSlab?(): string | undefined;
   /** No 3D (fase 8): nome da predefinição em uso; os textos de corte e janela não se aplicam. */
   rotulo3d?(): string | undefined;
+  /** Clique no texto do zoom ou da espessura (posição em px da janela). */
+  aoClicar?(campo: CampoClicavel, x: number, y: number): void;
+}
+
+export type CampoClicavel = 'zoom' | 'espessura';
+
+/** Linhas do overlay que abrem um menu ao clicar. */
+function campoDaLinha(linha: string): CampoClicavel | undefined {
+  if (linha.startsWith('Zoom ')) return 'zoom';
+  if (linha.startsWith('Espessura ')) return 'espessura';
+  return undefined;
 }
 
 export interface Overlay {
@@ -233,11 +244,34 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
         ...texto[canto].map((linha) => {
           const p = document.createElement('div');
           p.textContent = linha;
+          const campo = fonte.aoClicar ? campoDaLinha(linha) : undefined;
+          if (campo) {
+            p.className = 'overlay-clicavel';
+            p.dataset.campo = campo;
+            p.title = campo === 'zoom' ? 'Clique para escolher o zoom' : 'Clique para mudar a espessura (slab)';
+          }
           return p;
         }),
       );
     }
   }
+
+  // Zoom e espessura: o clique é do texto, não da ferramenta nem do duplo clique de maximizar.
+  const campoDoEvento = (e: Event): CampoClicavel | undefined => {
+    const alvo = e.target instanceof Element ? e.target.closest<HTMLElement>('[data-campo]') : null;
+    return alvo?.dataset.campo as CampoClicavel | undefined;
+  };
+  for (const tipo of ['mousedown', 'mouseup', 'dblclick'] as const) {
+    raiz.addEventListener(tipo, (e) => {
+      if (campoDoEvento(e)) e.stopPropagation();
+    });
+  }
+  raiz.addEventListener('click', (e) => {
+    const campo = campoDoEvento(e);
+    if (!campo) return;
+    e.stopPropagation();
+    fonte.aoClicar?.(campo, e.clientX, e.clientY);
+  });
 
   function ligar(elemento: HTMLElement): void {
     elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, atualizar);

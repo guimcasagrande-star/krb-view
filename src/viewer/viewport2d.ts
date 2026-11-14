@@ -10,6 +10,7 @@ import {
   cache,
   Enums,
   eventTarget,
+  getEnabledElement,
   imageLoader,
   setVolumesForViewports,
   type Types,
@@ -35,6 +36,7 @@ import { worldToVoxel } from '../io/geometry';
 import {
   adicionarViewportAoGrupo,
   centroCrosshair,
+  moverCentroCrosshair,
   definirLinhasReferencia,
   botaoAtribuido,
   EVENTO_BOTOES_MUDARAM,
@@ -63,11 +65,22 @@ import {
   temVoxelsPintados,
   faixaSegmentacao,
   mostrarNosViewports,
-  pintarMascara,
+  buracosDoCorte,
+  corteDaMascara,
+  type CorteDaMascara,
+  desfazerPintura,
+  pintarIndices,
+  type PinturaDesfazivel,
+  preencherBuracosNovos,
   segmentacaoDaPilha,
 } from '../segmentation/segmentacao';
-import { definirResolvedorCrescer, ehFerramentaSegmentacao } from '../segmentation/ferramentas';
-import { regionGrow } from '../volume/voxelStats';
+import {
+  definirResolvedorCrescer,
+  ehFerramentaSegmentacao,
+  NOME_PINCEL,
+  type SessaoCrescer,
+} from '../segmentation/ferramentas';
+import { crescerNaEsfera, faixaPelaSemente } from '../segmentation/mascaras';
 import { conferirSegmentacao, lerSegmentacao } from '../segmentation/arquivoSegmentacao';
 import {
   adicionarAoGrupo3d,
@@ -946,7 +959,7 @@ export async function abrirSegmentacaoSalva(bytes: Uint8Array): Promise<string> 
 }
 
 /** Crescer região: cresce em 3D a partir do ponto, pela faixa do painel, no segmento ativo. */
-async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number]): Promise<string> {
+async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number]): Promise<SessaoCrescer | string> {
   const slot = slots.find((s) => s.idViewport === idVp);
   const stack = slot?.pilha;
   if (!slot || !stack) return 'Série não encontrada no quadro.';
@@ -959,23 +972,66 @@ async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number
   const ijk = worldToVoxel(v.grid, mundo);
   if (!ijk) return 'O ponto está fora do volume.';
   const [nx, ny, nz] = v.grid.dims;
-  const i = Math.round(ijk[0]);
-  const j = Math.round(ijk[1]);
-  const k = Math.round(ijk[2]);
+  const semente: [number, number, number] = [Math.round(ijk[0]), Math.round(ijk[1]), Math.round(ijk[2])];
+  const [i, j, k] = semente;
   if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 'O ponto está fora do volume.';
-  const semente = v.data[i + j * nx + k * nx * ny]!;
+  const valor = v.data[i + j * nx + k * nx * ny]!;
+  const modalidade = stack.instances[0]?.modality;
   const ehPet = stack.instances.some((x) => x.modality === 'PT');
+  const volume = { data: v.data, grid: v.grid };
+  // Sem faixa no painel: a faixa vem dos valores em volta do clique (ver faixaPelaSemente).
+  const auto = faixaPelaSemente(volume, semente, ehPet ? 'pet' : modalidade === 'CT' ? 'tc' : 'outro');
   const f = faixaSegmentacao();
-  // Sem faixa no painel: valor do clique ± 50 (TC e RM) ou a partir de 50% do valor do clique (PET).
-  const min = f.min ?? (ehPet ? semente * 0.5 : semente - 50);
-  const max = f.max ?? (ehPet ? Infinity : semente + 50);
+  const min = f.min ?? auto.min;
+  const max = f.max ?? auto.max;
   const un = unidadeDaSerie(stack);
   const n = (x: number): string => formatarValor(x, ehPet ? 2 : 0);
   const faixaTexto = `${n(min)} a ${Number.isFinite(max) ? n(max) : '∞'}${un ? ' ' + un : ''}`;
-  if (semente < min || semente > max) return `O valor do clique (${n(semente)}) está fora da faixa ${faixaTexto}.`;
-  const mascara = regionGrow({ data: v.data, grid: v.grid }, [i, j, k], { min, max, connectivity: 6 });
-  const pintados = pintarMascara(stack.id, mascara, nx, ny);
-  return `Crescer região: ${pintados.toLocaleString('pt-BR')} voxels pintados (faixa ${faixaTexto}).`;
+  if (valor < min || valor > max) return `O valor do clique (${n(valor)}) está fora da faixa ${faixaTexto}.`;
+  const pilhaId = stack.id;
+  const porCorte = nx * ny;
+  let pintura: PinturaDesfazivel | null = null;
+  return {
+    crescer: (raioMm) => {
+      // Cada raio novo refaz a pintura a partir do que havia antes do clique.
+      if (pintura) desfazerPintura(pilhaId, pintura, porCorte);
+      const regiao = crescerNaEsfera(volume, semente, { min, max, raioMm });
+      pintura = pintarIndices(pilhaId, regiao.indices, porCorte);
+      return `Crescer região: raio ${raioMm} mm, ${regiao.indices.length.toLocaleString('pt-BR')} voxels (faixa ${faixaTexto}). Arraste para longe do clique para crescer mais.`;
+    },
+  };
+}
+
+// Pincel: ao soltar o botão, o miolo de um contorno fechado pela pincelada é preenchido.
+function iniciarPreenchimentoDoPincel(): void {
+  let pincelada: { pilhaId: string; corte: CorteDaMascara; antes: Set<number> } | null = null;
+  grade.addEventListener(
+    'mousedown',
+    (ev) => {
+      pincelada = null;
+      if (ev.button !== 0 || ferramentaPrimariaAtual() !== NOME_PINCEL || !(ev.target instanceof Node)) return;
+      const slot = slots.find((s) => s.elemento.contains(ev.target as Node));
+      const v = slot?.viewport;
+      if (!slot?.pilha || !v || semCortes(slot) || !segmentacaoDaPilha(slot.pilha.id)) return;
+      const camera = v.getCamera();
+      if (!camera.viewPlaneNormal || !camera.focalPoint) return;
+      const fp = camera.focalPoint;
+      const corte = corteDaMascara(slot.pilha.id, camera.viewPlaneNormal, [fp[0], fp[1], fp[2]]);
+      if (!corte) return;
+      pincelada = { pilhaId: slot.pilha.id, corte, antes: buracosDoCorte(slot.pilha.id, corte) };
+    },
+    true,
+  );
+  window.addEventListener(
+    'mouseup',
+    () => {
+      const p = pincelada;
+      pincelada = null;
+      // Depois de o pincel do Cornerstone terminar a pincelada deste mesmo mouseup.
+      if (p) setTimeout(() => preencherBuracosNovos(p.pilhaId, p.corte, p.antes), 0);
+    },
+    true,
+  );
 }
 
 export function ativarViewport(indice: number): void {
@@ -1895,6 +1951,87 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
   slot.planoSlot = plano;
   // A janela do 3D é a da predefinição, não serve para os cortes.
   await exibirSlot(slot, corte, saindoDo3d ? undefined : voiPreservado);
+}
+
+/** Zooms oferecidos ao clicar no texto "Zoom" do canto (100% = imagem ajustada ao quadro). */
+const ZOOMS_PREDEFINIDOS = [50, 75, 100, 125, 150, 200, 300, 400];
+
+/** Itens do menu de zoom do quadro `indice`. */
+export function itensMenuZoom(indice: number = ativo): EntradaMenuFlutuante[] {
+  const slot = slots[indice];
+  const v = slot?.viewport;
+  if (!slot || !v || !slot.habilitado || slot.planoSlot === '3d') return [];
+  const atual = Math.round(v.getZoom() * 100);
+  return ZOOMS_PREDEFINIDOS.map<EntradaMenuFlutuante>((pct) => ({
+    rotulo: pct === 100 ? '100% (ajustar ao quadro)' : `${pct}%`,
+    marcado: atual === pct,
+    acao: () => {
+      const alvo = slots[indice]?.viewport;
+      if (!alvo) return;
+      alvo.setZoom(pct / 100);
+      alvo.render();
+      slots[indice]!.overlay.atualizar();
+    },
+  }));
+}
+
+/** Espessuras (mm) oferecidas ao clicar no texto "Espessura" do canto. */
+const ESPESSURAS_MM = [3, 5, 10, 15, 20, 30, 50];
+
+/**
+ * Itens do menu de espessura do quadro `indice`. No modo Normal, engrossar o corte usa a média
+ * (é o que `aplicarSlabAoViewport` faz); em MIP, MinIP ou Média só a espessura muda.
+ */
+export function itensMenuEspessura(indice: number = ativo): EntradaMenuFlutuante[] {
+  const slot = slots[indice];
+  if (!slot?.pilha || !slot.habilitado || semCortes(slot)) return [];
+  const modo = mprAtivo ? modoSlabMpr : slot.modoSlab;
+  const mm = mprAtivo ? slabMprMm : slot.slabMm;
+  const engrossar = (alvo: number): void => {
+    ativarViewport(indice);
+    const s = slots[indice];
+    if (!s?.pilha) return;
+    const av = avaliarVolume(s.pilha);
+    if (!av.ok) {
+      mostrarAvisoVolume(s, av.mensagens);
+      return;
+    }
+    definirSlabMpr(alvo);
+  };
+  const itens: EntradaMenuFlutuante[] = [
+    {
+      rotulo: 'Corte original (sem engrossar)',
+      marcado: modo === 'normal' && mm <= 1,
+      acao: () => {
+        ativarViewport(indice);
+        if (modo !== 'normal') void definirModoSlabAtivo('normal');
+        else definirSlabMpr(1);
+      },
+    },
+    ...ESPESSURAS_MM.map<EntradaMenuFlutuante>((e) => ({
+      rotulo: `${e} mm`,
+      marcado: mm === e,
+      acao: () => engrossar(e),
+    })),
+    'divisor',
+  ];
+  const modos: Array<[ModoSlab, string]> = [
+    ['normal', 'Média (padrão)'],
+    ['mip', 'MIP'],
+    ['minip', 'MinIP'],
+  ];
+  for (const [m, rotulo] of modos) {
+    itens.push({
+      rotulo,
+      // "Média" do menu de modo da barra é o mesmo cálculo do Normal com corte grosso.
+      marcado: m === modo || (m === 'normal' && modo === 'media'),
+      acao: () => {
+        ativarViewport(indice);
+        void definirModoSlabAtivo(m);
+      },
+    });
+  }
+  return itens;
 }
 
 /** Planos que o cubo de orientação e o menu do botão direito oferecem. */
@@ -3482,6 +3619,10 @@ function criarSlot(indice: number): Slot {
     pilha: () => slot.pilha,
     planoMpr: () => slot.planoMpr,
     modoSlab: () => MODOS_SLAB[mprAtivo ? modoSlabMpr : slot.modoSlab]?.rotulo,
+    aoClicar: (campo, x, y) => {
+      ativarViewport(indice);
+      abrirMenuFlutuante(x, y, campo === 'zoom' ? itensMenuZoom(indice) : itensMenuEspessura(indice));
+    },
     rotulo3d: () => {
       const m = modalidade3d(slot.pilha?.instances[0]?.modality);
       return slot.tipoViewport === Enums.ViewportType.VOLUME_3D && slot.habilitado && m
@@ -3680,6 +3821,15 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
       const p = slots.find((s) => s.idViewport === id)?.pontoMiraMundo;
       return p ? [p[0], p[1], p[2]] : null;
     },
+    marcar: (id, mundo) => {
+      const slot = slots.find((s) => s.idViewport === id);
+      if (!slot?.viewport) return;
+      if (mprAtivo) {
+        moverCentroCrosshair(getEnabledElement(slot.elemento), mundo);
+        return;
+      }
+      aplicarLocalizador3d(slot.indice, mundo);
+    },
     semVolume: (id) => {
       const slot = slots.find((s) => s.idViewport === id);
       if (!slot) return;
@@ -3703,6 +3853,7 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
     observadorTamanho.observe(slot.elemento);
   }
   elementos.contentor.append(grade);
+  iniciarPreenchimentoDoPincel();
   eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, () => {
     for (const slot of slots) {
       if (slot.habilitado && slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC) {

@@ -2,6 +2,8 @@
  * Girar plano: arrastar inclina o plano da imagem em torno de um ponto fixo (o ponto marcado com
  * ┼ Localizar, o centro do crosshair no MPR ou, sem nenhum dos dois, o centro da imagem).
  *
+ * - Clicar sem arrastar muda o centro do giro para o ponto clicado (a cruzinha ┼ vai para lá;
+ *   no MPR, o centro do crosshair).
  * - Arrastar para os lados gira em torno do eixo vertical da tela; para cima/baixo, em torno do
  *   eixo horizontal. Com Shift, gira a imagem dentro do próprio plano.
  * - Só vale em imagens reconstruídas (viewport de volume); a conta (`girarCamera`) é pura e
@@ -69,6 +71,8 @@ export function girarCamera(camera: CameraPlano, pivo: Vec, eixo: Vec, rad: numb
 /** Quem conhece os viewports informa o ponto marcado (ou null) e avisa quando não dá para girar. */
 export interface ApoioGirarPlano {
   pivo(idViewport: string): Vec | null;
+  /** Clique sem arrastar: o ponto clicado passa a ser o centro do giro. */
+  marcar(idViewport: string, mundo: Vec): void;
   semVolume(idViewport: string): void;
 }
 
@@ -140,6 +144,14 @@ export class GirarPlanoTool extends BaseTool {
     const marcado = apoio?.pivo(viewport.id);
     this.pivo = marcado ? projetarNoPlano(marcado, camera) : camera.focalPoint;
     return false;
+  };
+
+  mouseClickCallback = (evt: Types.EventTypes.InteractionEventType): void => {
+    const viewport = getEnabledElement(evt.detail.element)?.viewport;
+    const mundo = (evt.detail as { currentPoints?: { world?: ArrayLike<number> } }).currentPoints?.world;
+    if (!viewport || !mundo || 'setImageIdIndex' in viewport) return;
+    if (![mundo[0], mundo[1], mundo[2]].every((x) => Number.isFinite(x))) return;
+    apoio?.marcar(viewport.id, [mundo[0]!, mundo[1]!, mundo[2]!]);
   };
 
   mouseDragCallback = (evt: Types.EventTypes.InteractionEventType): void => {

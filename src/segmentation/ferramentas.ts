@@ -1,9 +1,9 @@
 /**
  * Ferramentas de segmentação (fase 9.1). Pincel, pincel com limiar, esfera e borracha são
  * instâncias da `BrushTool` do Cornerstone com estratégias diferentes; preencher é a
- * `PaintFillTool` (no corte). "Crescer região" é própria: um clique chama o `regionGrow` de
- * `src/volume/voxelStats.ts` (em 3D, pela faixa de valores) através de um resolvedor registrado
- * por `viewport2d`, que conhece os volumes. As ferramentas prontas de crescimento do Cornerstone
+ * `PaintFillTool` (no corte). "Crescer região" é própria: clicar e arrastar chama o
+ * `crescerNaEsfera` de `mascaras.ts` (em 3D, pela faixa de valores, limitado ao raio arrastado)
+ * através de um resolvedor registrado por `viewport2d`, que conhece os volumes. As ferramentas prontas de crescimento do Cornerstone
  * dependem de WebGPU e por isso não são usadas.
  */
 
@@ -12,14 +12,26 @@ import { BaseTool, BrushTool, PaintFillTool, type Types } from '@cornerstonejs/t
 
 export { BrushTool, PaintFillTool };
 
-/** Resultado do crescer região, para o painel (texto pronto) ou um erro em português. */
-export type ResolvedorCrescer = (idViewport: string, mundo: [number, number, number]) => Promise<string>;
+/**
+ * Crescimento em andamento: começa no clique e é refeito a cada raio (a distância arrastada).
+ * `crescer` devolve o texto para o painel.
+ */
+export interface SessaoCrescer {
+  crescer(raioMm: number): string;
+}
+
+/** Abre a sessão no ponto clicado, ou devolve o motivo (texto pronto) de não poder. */
+export type ResolvedorCrescer = (idViewport: string, mundo: [number, number, number]) => Promise<SessaoCrescer | string>;
 
 let resolvedorCrescer: ResolvedorCrescer | null = null;
 
 export function definirResolvedorCrescer(fn: ResolvedorCrescer): void {
   resolvedorCrescer = fn;
 }
+
+/** Raio de um clique sem arrastar e raio máximo do arrasto, em mm. */
+export const RAIO_CRESCER_CLIQUE_MM = 5;
+export const RAIO_CRESCER_MAXIMO_MM = 80;
 
 /** Disparado em `document` com `detail` = texto a mostrar no painel de segmentos. */
 export const EVENTO_MENSAGEM_SEGMENTACAO = 'mensagemSegmentacao';
@@ -46,11 +58,57 @@ export class CrescerRegiaoTool extends BaseTool {
     const mundo = [...currentPoints.world] as [number, number, number];
     this.ocupado = true;
     mensagem('Crescendo a região…');
+
+    // O raio é a distância arrastada a partir do clique (no plano da imagem).
+    let raio = RAIO_CRESCER_CLIQUE_MM;
+    let sessao: SessaoCrescer | null = null;
+    let solto = false;
+    let agendado = false;
+    const refazer = (): void => {
+      agendado = false;
+      if (sessao) mensagem(sessao.crescer(raio));
+    };
+    const aoMover = (ev: MouseEvent): void => {
+      const rect = element.getBoundingClientRect();
+      const p = vp.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
+      const d = Math.hypot(p[0] - mundo[0], p[1] - mundo[1], p[2] - mundo[2]);
+      const novo = Math.min(RAIO_CRESCER_MAXIMO_MM, Math.max(RAIO_CRESCER_CLIQUE_MM, Math.round(d)));
+      if (novo === raio) return;
+      raio = novo;
+      if (sessao && !agendado) {
+        agendado = true;
+        requestAnimationFrame(refazer);
+      }
+    };
+    const aoSoltar = (): void => {
+      solto = true;
+      window.removeEventListener('mousemove', aoMover, true);
+      window.removeEventListener('mouseup', aoSoltar, true);
+      if (sessao) {
+        refazer();
+        this.ocupado = false;
+      }
+    };
+    window.addEventListener('mousemove', aoMover, true);
+    window.addEventListener('mouseup', aoSoltar, true);
+
     void resolvedorCrescer(vp.id, mundo)
-      .then(mensagem)
+      .then((r) => {
+        if (typeof r === 'string') {
+          mensagem(r);
+          return;
+        }
+        sessao = r;
+        refazer();
+      })
       .catch((e: unknown) => mensagem(e instanceof Error ? e.message : 'Falha ao crescer a região.'))
       .finally(() => {
-        this.ocupado = false;
+        // Sem sessão (erro) ou botão já solto: a ferramenta fica livre para o próximo clique.
+        if (!sessao || solto) this.ocupado = false;
+        if (!sessao) {
+          window.removeEventListener('mousemove', aoMover, true);
+          window.removeEventListener('mouseup', aoSoltar, true);
+        }
       });
     return true;
   };
@@ -71,7 +129,7 @@ export const FERRAMENTAS_SEGMENTACAO: FerramentaSegmentacao[] = [
     rotulo: 'Pincel',
     icone: '🖌',
     estrategia: 'FILL_INSIDE_CIRCLE',
-    dica: 'Pinta um círculo no corte, no segmento ativo',
+    dica: 'Pinta no corte, no segmento ativo. Contorno fechado é preenchido ao soltar o botão',
   },
   {
     nome: 'SegPincelLimiar',
@@ -104,9 +162,12 @@ export const FERRAMENTAS_SEGMENTACAO: FerramentaSegmentacao[] = [
     nome: CrescerRegiaoTool.toolName,
     rotulo: 'Crescer região',
     icone: '✳',
-    dica: 'Clique numa estrutura: cresce em 3D pelos voxels vizinhos dentro da faixa do painel',
+    dica: 'Clique numa estrutura e arraste: cresce em 3D pelos vizinhos de valor parecido, só até a distância arrastada',
   },
 ];
+
+/** Nome do pincel simples (o que preenche o miolo do contorno ao soltar). */
+export const NOME_PINCEL = 'SegPincel';
 
 export function ehFerramentaSegmentacao(nome: string): boolean {
   return FERRAMENTAS_SEGMENTACAO.some((f) => f.nome === nome);
