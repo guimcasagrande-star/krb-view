@@ -35,6 +35,13 @@ export interface Predefinicao3d {
  * Osso: só o osso. A opacidade começa em 180 HU (acima de músculo, gordura e órgãos sem contraste)
  * e chega ao máximo perto de 400 HU; cor de marfim. A "CT-Bone" do Cornerstone começa em −16 HU
  * e por isso mostra também os músculos (aqui ela se chama "Músculos e ossos").
+ *
+ * Pulmão: parênquima de −950 a −400 HU (o ar das vias aéreas, −1000, fica de fora). Toda borda
+ * entre ar e partes moles (pele, pleura, diafragma) também passa por essa faixa na transição e,
+ * na "CT-Lung" do Cornerstone, aparece como uma casca de parte mole. Aqui a opacidade pelo
+ * gradiente cai de 1 (variação 0) a 0 (150 HU/mm ou mais): bordas abruptas somem e o
+ * parênquima, homogêneo, fica. Sem sombreamento (o parênquima não tem superfície e ficaria
+ * granulado com a luz).
  */
 export const PRESETS_PROPRIOS: Preset3d[] = [
   {
@@ -49,6 +56,20 @@ export const PRESETS_PROPRIOS: Preset3d[] = [
     diffuse: '0.9',
     interpolation: '1',
   },
+  {
+    name: 'Visualizador-Pulmao',
+    // 4 números: gradiente mínimo, opacidade nele, gradiente máximo, opacidade nele (HU/mm).
+    // 150 → 0 e 0 → 1: fator = 1 − gradiente/150, limitado a 0–1.
+    gradientOpacity: '4 150 0 0 1',
+    specularPower: '1',
+    scalarOpacity: '12 -3024 0 -950 0 -850 0.1 -500 0.1 -400 0 3071 0',
+    specular: '0',
+    shade: '0',
+    ambient: '0.3',
+    colorTransfer: '16 -3024 0 0 0 -950 0.85 0.62 0.58 -400 1 0.86 0.8 3071 1 1 1',
+    diffuse: '1',
+    interpolation: '1',
+  },
 ];
 
 export const PREDEFINICOES_3D: Predefinicao3d[] = [
@@ -56,7 +77,7 @@ export const PREDEFINICOES_3D: Predefinicao3d[] = [
   { id: 'musculos-ossos', rotulo: 'Músculos e ossos', preset: 'CT-Bone', modalidade: 'CT' },
   { id: 'vasos', rotulo: 'Vasos com contraste', preset: 'CT-AAA', modalidade: 'CT' },
   { id: 'torax', rotulo: 'Tórax com contraste', preset: 'CT-Chest-Contrast-Enhanced', modalidade: 'CT' },
-  { id: 'pulmao', rotulo: 'Pulmão', preset: 'CT-Lung', modalidade: 'CT' },
+  { id: 'pulmao', rotulo: 'Pulmão', preset: 'Visualizador-Pulmao', modalidade: 'CT' },
   { id: 'mip', rotulo: 'MIP', preset: 'CT-MIP', modalidade: 'CT', mip: true },
   { id: 'rm-padrao', rotulo: 'RM padrão', preset: 'MR-Default', modalidade: 'MR' },
   { id: 'angio-rm', rotulo: 'Angio-RM', preset: 'MR-Angio', modalidade: 'MR' },
