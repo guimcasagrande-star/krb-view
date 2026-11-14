@@ -2709,11 +2709,30 @@ export async function limparViewports(): Promise<void> {
 
 // ---------- layout ----------
 
-async function redimensionarMotor(manterCamera = false): Promise<void> {
+/** Algum viewport visível tem o canvas com tamanho de desenho diferente do tamanho na tela. */
+function canvasDesatualizado(): boolean {
+  const dpr = window.devicePixelRatio || 1;
+  return slots.some((s) => {
+    if (!s.habilitado || s.celula.hidden) return false;
+    const c = s.elemento.querySelector<HTMLCanvasElement>('canvas.cornerstone-canvas') ?? s.elemento.querySelector('canvas');
+    if (!c) return false;
+    const w = Math.round(c.clientWidth * dpr);
+    const h = Math.round(c.clientHeight * dpr);
+    return w > 0 && h > 0 && (c.width !== w || c.height !== h);
+  });
+}
+
+async function redimensionarMotor(manterCamera = false, tentativa = 0): Promise<void> {
   const motor = await iniciarCornerstone();
   requestAnimationFrame(() => {
     try {
       motor.resize(true, manterCamera);
+      // Se havia um quadro de desenho agendado (ex.: o 3D sendo montado ao lado), o Cornerstone só
+      // anota o tamanho novo e não redimensiona o canvas: a imagem fica achatada. Tenta de novo.
+      if (tentativa < 10 && canvasDesatualizado()) {
+        void redimensionarMotor(manterCamera, tentativa + 1);
+        return;
+      }
       for (const s of slots) {
         if (s.habilitado && !s.celula.hidden) {
           if (s.controladorMip) {
