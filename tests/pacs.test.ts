@@ -10,7 +10,14 @@ import {
   type ReceivedInstance,
   type Transport,
 } from '../src/pacs/client.ts';
-import { findServer, instancePath, parseConfig } from '../src/pacs/config.ts';
+import {
+  findServer,
+  formatFingerprint,
+  instancePath,
+  normalizeFingerprint,
+  parseConfig,
+  tlsCertificadoMudou,
+} from '../src/pacs/config.ts';
 import {
   COMMAND,
   MessageAssembler,
@@ -425,6 +432,41 @@ describe('arquivo Part 10 e configuração', () => {
       { ...good, servidores: [server, { ...server, nome: 'HOSPITAL A' }] },
     ];
     for (const b of bad) expect(() => parseConfig(b)).toThrow(PacsError);
+  });
+
+  it('lê a conexão segura (TLS) e a impressão digital do certificado', () => {
+    const hex = 'AB'.repeat(32);
+    const base = { nome: 'Seguro', host: '10.0.0.5', porta: 2762, aeTitle: 'PACSB' };
+    const config = parseConfig({
+      meuAeTitle: 'ESTACAO',
+      servidores: [
+        { ...base, tls: true, certificado: 'ab:'.repeat(31) + 'ab' },
+        { ...base, nome: 'Seguro sem certificado', tls: true },
+        { ...base, nome: 'Aberto', tls: false },
+      ],
+    });
+    expect(config.servers[0]).toEqual({ name: 'Seguro', host: '10.0.0.5', port: 2762, aeTitle: 'PACSB', tls: true, certificateSha256: hex });
+    expect(config.servers[1]).toEqual({ name: 'Seguro sem certificado', host: '10.0.0.5', port: 2762, aeTitle: 'PACSB', tls: true });
+    expect(config.servers[2]).toEqual({ name: 'Aberto', host: '10.0.0.5', port: 2762, aeTitle: 'PACSB' });
+
+    const ruins = [
+      { ...base, tls: 'sim' },
+      { ...base, tls: true, certificado: 'ABCD' },
+      { ...base, tls: true, certificado: 42 },
+      { ...base, certificado: hex }, // certificado sem TLS
+    ];
+    for (const r of ruins) expect(() => parseConfig({ meuAeTitle: 'ESTACAO', servidores: [r] })).toThrow(PacsError);
+  });
+
+  it('normaliza e formata a impressão digital', () => {
+    const hex = '0123456789ABCDEF'.repeat(4);
+    expect(normalizeFingerprint(hex.toLowerCase())).toBe(hex);
+    expect(normalizeFingerprint(formatFingerprint(hex))).toBe(hex);
+    expect(normalizeFingerprint(' 01:23 ' + hex.slice(4))).toBe(hex);
+    expect(normalizeFingerprint(hex.slice(2))).toBeUndefined();
+    expect(normalizeFingerprint(hex.slice(0, 63) + 'G')).toBeUndefined();
+    expect(formatFingerprint('ABCDEF')).toBe('AB:CD:EF');
+    expect(tlsCertificadoMudou(hex, 'FF'.repeat(32))).toMatch(/esperado 01:23:45.*recebido FF:FF:FF/);
   });
 
   it('só aceita UIDs como nome de pasta e de arquivo', () => {

@@ -4,6 +4,7 @@
  */
 
 import type { PacsServer } from '../pacs/client.ts';
+import { normalizeFingerprint } from '../pacs/config.ts';
 
 export interface ConfigPacs {
   meuAeTitle: string;
@@ -23,7 +24,19 @@ export function carregarConfigPacs(): ConfigPacs {
             !!s && typeof s.name === 'string' && typeof s.host === 'string' && typeof s.port === 'number' && typeof s.aeTitle === 'string',
         )
       : [];
-    return { meuAeTitle: typeof bruto.meuAeTitle === 'string' ? bruto.meuAeTitle : padrao.meuAeTitle, servidores };
+    // Só os campos conhecidos, com a impressão digital no formato único.
+    const limpos = servidores.map<PacsServer>((s) => {
+      const digital = typeof s.certificateSha256 === 'string' ? normalizeFingerprint(s.certificateSha256) : undefined;
+      return {
+        name: s.name,
+        host: s.host,
+        port: s.port,
+        aeTitle: s.aeTitle,
+        ...(s.tls === true ? { tls: true } : {}),
+        ...(s.tls === true && digital ? { certificateSha256: digital } : {}),
+      };
+    });
+    return { meuAeTitle: typeof bruto.meuAeTitle === 'string' ? bruto.meuAeTitle : padrao.meuAeTitle, servidores: limpos };
   } catch {
     return padrao;
   }

@@ -82,6 +82,14 @@ export interface PacsServer {
   port: number;
   /** AE title do servidor. */
   aeTitle: string;
+  /** Conexão segura (DICOM TLS). Sem isto a conexão é aberta, como no DICOM comum. */
+  tls?: boolean;
+  /**
+   * Impressão digital SHA-256 do certificado do servidor (64 dígitos hexadecimais, maiúsculos),
+   * confirmada pelo usuário. Com TLS, o transporte só conversa com o servidor que apresentar
+   * exatamente este certificado.
+   */
+  certificateSha256?: string;
 }
 
 export interface ClientOptions {

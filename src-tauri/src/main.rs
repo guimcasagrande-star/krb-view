@@ -10,6 +10,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ponte_pacs::pacs_definir_servidores,
             ponte_pacs::pacs_conectar,
+            ponte_pacs::pacs_certificado,
             ponte_pacs::pacs_enviar,
             ponte_pacs::pacs_fechar,
             exames::exames_pasta_padrao,

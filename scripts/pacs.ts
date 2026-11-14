@@ -3,6 +3,7 @@
  *
  *   npm run pacs -- servidores
  *   npm run pacs -- eco <servidor>
+ *   npm run pacs -- certificado <servidor>   (conexão segura: mostra o certificado para confirmar)
  *   npm run pacs -- buscar <servidor> [--nome "joao silva"] [--id 123] [--acesso A1]
  *                                     [--de 20261101] [--ate 20261113] [--modalidade PT]
  *   npm run pacs -- series <servidor> <UID do estudo>
@@ -16,9 +17,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import * as dicomParserModule from 'dicom-parser';
 import { echo, findSeries, findStudies, retrieve, type ClientOptions } from '../src/pacs/client.ts';
-import { findServer, instancePath, parseConfig, type PacsConfig } from '../src/pacs/config.ts';
+import { findServer, formatFingerprint, instancePath, parseConfig, type PacsConfig } from '../src/pacs/config.ts';
 import { PacsError } from '../src/pacs/errors.ts';
-import { connectNode } from './pacs-transporte-node.ts';
+import { connectNode, fetchCertificateNode } from './pacs-transporte-node.ts';
 
 const dicomParser = ((dicomParserModule as { default?: unknown }).default ??
   dicomParserModule) as typeof dicomParserModule;
@@ -82,15 +83,35 @@ async function main(): Promise<void> {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   const command = positional[0];
   const config = await loadConfig(flags.get('config') ?? 'pacs.json');
-  const options: ClientOptions = { connect: connectNode(), callingAeTitle: config.myAeTitle };
+  const options: ClientOptions = { connect: connectNode(10_000, config.servers), callingAeTitle: config.myAeTitle };
 
   if (command === 'servidores') {
     console.log(`AE title desta estação: ${config.myAeTitle}`);
-    for (const s of config.servers) console.log(`  ${s.name}: ${s.host}:${s.port} (AE ${s.aeTitle})`);
+    for (const s of config.servers) {
+      const seguranca = !s.tls ? 'conexão aberta' : s.certificateSha256 ? 'TLS, certificado confirmado' : 'TLS, certificado a confirmar';
+      console.log(`  ${s.name}: ${s.host}:${s.port} (AE ${s.aeTitle}; ${seguranca})`);
+    }
     return;
   }
 
   const server = findServer(config, need(positional[1], 'o nome do servidor'));
+
+  if (command === 'certificado') {
+    const cert = await fetchCertificateNode(server.host, server.port).catch((error: Error) => {
+      throw new PacsError('SEM_CONEXAO', `Não foi possível ler o certificado de ${server.name}: ${error.message}`);
+    });
+    console.log(`Certificado apresentado por ${server.name} (${server.host}:${server.port}):`);
+    if (cert.titular) console.log(`  emitido para: ${cert.titular}`);
+    if (cert.validoAte) console.log(`  válido até:   ${cert.validoAte}`);
+    console.log(`  SHA-256:      ${formatFingerprint(cert.sha256)}`);
+    if (server.certificateSha256 === cert.sha256) {
+      console.log('É o certificado já confirmado em pacs.json.');
+    } else {
+      console.log('Confira esta impressão digital com o TI do hospital. Se for a mesma, ponha no servidor, em pacs.json:');
+      console.log(`  "tls": true, "certificado": "${formatFingerprint(cert.sha256)}"`);
+    }
+    return;
+  }
 
   if (command === 'eco') {
     const start = Date.now();

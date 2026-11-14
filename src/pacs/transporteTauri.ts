@@ -76,11 +76,33 @@ export async function definirServidoresPermitidos(servidores: PacsServer[]): Pro
   const t = tauri();
   if (!t) return;
   await t.core.invoke('pacs_definir_servidores', {
-    servidores: servidores.map((s) => [s.host, s.port]),
+    servidores: servidores.map((s) => ({
+      host: s.host,
+      porta: s.port,
+      tls: s.tls === true,
+      certificado: s.certificateSha256 ?? null,
+    })),
   });
 }
 
-/** `Connect` para `client.ts`: abre a conexão TCP pela ponte do Tauri. */
+/**
+ * Conexão segura: impressão digital SHA-256 (64 dígitos hexadecimais) do certificado que o
+ * servidor apresenta, para o usuário confirmar. O servidor precisa estar entre os permitidos.
+ */
+export async function obterCertificadoTauri(host: string, port: number): Promise<string> {
+  const t = tauri();
+  if (!t) throw new Error('a busca em PACS só funciona no programa instalado (Tauri).');
+  try {
+    return await t.core.invoke<string>('pacs_certificado', { host, porta: port });
+  } catch (e) {
+    throw new Error(String(e));
+  }
+}
+
+/**
+ * `Connect` para `client.ts`: abre a conexão pela ponte do Tauri (TCP, ou TLS nos servidores
+ * cadastrados com conexão segura; quem decide é o Rust, pela lista de servidores permitidos).
+ */
 export const connectTauri: Connect = async (host, port) => {
   const t = tauri();
   if (!t) throw new Error('a busca em PACS só funciona no programa instalado (Tauri).');

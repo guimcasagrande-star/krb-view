@@ -9,10 +9,15 @@ Depois, em outro terminal (com o servidor "local" do pacs.exemplo.json):
 
     npm run pacs -- eco local
     npm run pacs -- buscar local --nome phantom
+
+Com conexão segura (DICOM TLS), passe o certificado e a chave nas variáveis de ambiente:
+
+    PACS_TLS_CERT=cert.pem PACS_TLS_KEY=chave.pem python scripts/pacs-servidor-teste.py test-data/phantom
 """
 
 import fnmatch
 import os
+import ssl
 import sys
 
 from pydicom import dcmread
@@ -155,9 +160,16 @@ for context in StoragePresentationContexts:
     # Papéis do ponto de vista de quem pede: aceitamos que o cliente seja o SCP de armazenamento.
     ae.add_supported_context(context.abstract_syntax, syntaxes, scu_role=False, scp_role=True)
 
-print(f"servidor de teste {ae_title} na porta {port}", flush=True)
+ssl_context = None
+if os.environ.get("PACS_TLS_CERT"):
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    ssl_context.load_cert_chain(os.environ["PACS_TLS_CERT"], os.environ.get("PACS_TLS_KEY"))
+
+print(f"servidor de teste {ae_title} na porta {port}" + (" (TLS)" if ssl_context else ""), flush=True)
 ae.start_server(
     ("127.0.0.1", port),
+    ssl_context=ssl_context,
     evt_handlers=[
         (evt.EVT_C_FIND, handle_find),
         (evt.EVT_C_GET, handle_get),

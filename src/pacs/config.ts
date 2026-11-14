@@ -23,7 +23,9 @@ function fail(message: string): never {
  *   {
  *     "meuAeTitle": "MINHAESTACAO",
  *     "servidores": [
- *       { "nome": "Hospital A", "host": "pacs.exemplo.org", "porta": 104, "aeTitle": "PACSA" }
+ *       { "nome": "Hospital A", "host": "pacs.exemplo.org", "porta": 104, "aeTitle": "PACSA" },
+ *       { "nome": "Hospital B", "host": "10.0.0.5", "porta": 2762, "aeTitle": "PACSB",
+ *         "tls": true, "certificado": "AB:CD:..." }
  *     ]
  *   }
  */
@@ -56,9 +58,53 @@ export function parseConfig(json: unknown): PacsConfig {
     if (servers.some((x) => x.name.toLowerCase() === name.trim().toLowerCase())) {
       fail(`há dois servidores com o nome "${name}".`);
     }
-    servers.push({ name: name.trim(), host, port, aeTitle: aeTitle.trim() });
+    const tls = s['tls'];
+    if (tls !== undefined && typeof tls !== 'boolean') fail(`servidor "${name}": "tls" deve ser true ou false.`);
+    const cert = s['certificado'];
+    let certificateSha256: string | undefined;
+    if (cert !== undefined && cert !== '') {
+      certificateSha256 = typeof cert === 'string' ? normalizeFingerprint(cert) : undefined;
+      if (!certificateSha256) {
+        fail(`servidor "${name}": "certificado" deve ser a impressão digital SHA-256 (64 dígitos hexadecimais).`);
+      }
+      if (tls !== true) fail(`servidor "${name}": "certificado" só vale com "tls": true.`);
+    }
+    servers.push({
+      name: name.trim(),
+      host,
+      port,
+      aeTitle: aeTitle.trim(),
+      ...(tls === true ? { tls: true } : {}),
+      ...(certificateSha256 ? { certificateSha256 } : {}),
+    });
   }
   return { myAeTitle: myAeTitle.trim(), servers };
+}
+
+/**
+ * Impressão digital SHA-256 em formato único: 64 dígitos hexadecimais maiúsculos, sem separador.
+ * Aceita com ou sem ":" e espaços, em maiúsculas ou minúsculas. Texto inválido devolve undefined.
+ */
+export function normalizeFingerprint(text: string): string | undefined {
+  const hex = text.replace(/[\s:]/g, '').toUpperCase();
+  return /^[0-9A-F]{64}$/.test(hex) ? hex : undefined;
+}
+
+/** Impressão digital para mostrar e conferir: pares separados por ":". */
+export function formatFingerprint(hex: string): string {
+  return (hex.match(/.{1,2}/g) ?? []).join(':');
+}
+
+/** Mensagens (prontas para a tela) das recusas da conexão segura, iguais no Node e no app. */
+export const TLS_SEM_CERTIFICADO =
+  'conexão segura (TLS): o certificado deste servidor ainda não foi confirmado. Confirme-o antes de conectar.';
+
+export function tlsCertificadoMudou(esperado: string, recebido: string): string {
+  return (
+    'conexão segura (TLS): o servidor apresentou um certificado diferente do confirmado ' +
+    `(esperado ${formatFingerprint(esperado).slice(0, 23)}…, recebido ${formatFingerprint(recebido).slice(0, 23)}…). ` +
+    'Não conectei. Confirme com o TI do hospital antes de aceitar o novo certificado.'
+  );
 }
 
 /** Acha um servidor pelo nome, sem diferenciar maiúsculas. */

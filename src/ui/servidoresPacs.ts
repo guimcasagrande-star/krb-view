@@ -1,16 +1,28 @@
 /**
  * Tela "Servidores PACS" (fase 11.2): cadastrar, editar, remover e testar servidores, e o AE title
- * desta estação. Fica guardada no armazenamento do app (pasta de dados do programa, nunca no
+ * desta estação. Conexão segura (DICOM TLS) por servidor: no primeiro teste o app mostra a
+ * impressão digital do certificado do servidor e só conecta depois de o usuário confiar nela. Fica guardada no armazenamento do app (pasta de dados do programa, nunca no
  * projeto) e só existe no app empacotado (Tauri), que é quem abre conexões TCP.
  */
 
-import { echo } from '../pacs/client.ts';
-import { parseConfig } from '../pacs/config.ts';
+import { echo, type PacsServer } from '../pacs/client.ts';
+import { formatFingerprint, parseConfig } from '../pacs/config.ts';
 import { PacsError } from '../pacs/errors.ts';
-import { connectTauri, definirServidoresPermitidos, pacsDisponivel } from '../pacs/transporteTauri.ts';
+import {
+  connectTauri,
+  definirServidoresPermitidos,
+  obterCertificadoTauri,
+  pacsDisponivel,
+} from '../pacs/transporteTauri.ts';
 import { carregarConfigPacs, salvarConfigPacs, type ConfigPacs } from '../state/pacsConfig';
 
 const AVISO = 'Sem VPN ou DICOM TLS, os dados trafegam abertos.';
+
+/** Como o servidor aparece na coluna "Conexão". */
+function textoConexao(s: PacsServer): string {
+  if (!s.tls) return 'aberta';
+  return s.certificateSha256 ? '🔒 TLS' : '🔒 TLS (confirmar)';
+}
 
 let caixa: HTMLDialogElement | undefined;
 let config: ConfigPacs;
@@ -41,7 +53,14 @@ function validar(c: ConfigPacs): string | null {
   try {
     parseConfig({
       meuAeTitle: c.meuAeTitle,
-      servidores: c.servidores.map((s) => ({ nome: s.name, host: s.host, porta: s.port, aeTitle: s.aeTitle })),
+      servidores: c.servidores.map((s) => ({
+        nome: s.name,
+        host: s.host,
+        porta: s.port,
+        aeTitle: s.aeTitle,
+        ...(s.tls ? { tls: true } : {}),
+        ...(s.certificateSha256 ? { certificado: s.certificateSha256 } : {}),
+      })),
     });
     return null;
   } catch (e) {
@@ -80,7 +99,7 @@ function desenhar(): void {
 
   const tabela = el('table', { class: 'cfg-tabela pacs-tabela' });
   tabela.append(
-    el('tr', {}, el('th', {}, 'Nome'), el('th', {}, 'Endereço'), el('th', {}, 'Porta'), el('th', {}, 'AE title'), el('th', {})),
+    el('tr', {}, el('th', {}, 'Nome'), el('th', {}, 'Endereço'), el('th', {}, 'Porta'), el('th', {}, 'AE title'), el('th', {}, 'Conexão'), el('th', {})),
   );
   config.servidores.forEach((s, i) => {
     const resultado = el('span', { class: 'pacs-resultado' });
@@ -91,6 +110,23 @@ function desenhar(): void {
       const t0 = performance.now();
       try {
         await definirServidoresPermitidos(config.servidores);
+        // Conexão segura ainda sem certificado confirmado: mostra o que o servidor apresenta.
+        if (s.tls && !s.certificateSha256) {
+          const digital = await obterCertificadoTauri(s.host, s.port);
+          const confiar = el('button', { type: 'button', class: 'primario', textContent: 'Confiar neste certificado' });
+          confiar.addEventListener('click', () => {
+            s.certificateSha256 = digital;
+            void guardar().then(() => desenhar());
+          });
+          resultado.replaceChildren(
+            el('span', {}, 'Certificado apresentado pelo servidor (SHA-256):'),
+            el('code', { class: 'pacs-digital', textContent: formatFingerprint(digital) }),
+            el('span', {}, 'Confira com o TI do hospital antes de confiar.'),
+            confiar,
+          );
+          resultado.className = 'pacs-resultado pacs-certificado';
+          return;
+        }
         await echo(s, { connect: connectTauri, callingAeTitle: config.meuAeTitle, timeoutMs: 10_000 });
         resultado.textContent = `✓ ${Math.round(performance.now() - t0)} ms`;
         resultado.className = 'pacs-resultado ok';
@@ -114,6 +150,7 @@ function desenhar(): void {
         el('td', {}, s.host),
         el('td', {}, String(s.port)),
         el('td', {}, s.aeTitle),
+        el('td', { title: s.certificateSha256 ? `Certificado confirmado (SHA-256): ${formatFingerprint(s.certificateSha256)}` : '' }, textoConexao(s)),
         el('td', { class: 'pacs-acoes' }, testar, editar, remover, resultado),
       ),
     );
@@ -124,18 +161,51 @@ function desenhar(): void {
   corpo.append(aviso, linhaAe, tabela, adicionar, msg);
 
   function formulario(indice: number): void {
-    const atual = indice >= 0 ? config.servidores[indice]! : { name: '', host: '', port: 104, aeTitle: '' };
+    const atual: PacsServer = indice >= 0 ? config.servidores[indice]! : { name: '', host: '', port: 104, aeTitle: '' };
     const nome = el('input', { type: 'text', value: atual.name });
     const host = el('input', { type: 'text', value: atual.host });
     const porta = el('input', { type: 'number', value: String(atual.port), min: '1', max: '65535' });
     const aet = el('input', { type: 'text', value: atual.aeTitle, maxLength: 16 });
+    const seguro = el('input', { type: 'checkbox', checked: atual.tls === true });
+    // Certificado já confirmado: mostra e deixa esquecer (para confirmar outro no próximo teste).
+    let digital = atual.certificateSha256;
+    const linhaCertificado = el('div', { class: 'cfg-linha pacs-linha-certificado' });
+    const desenharCertificado = (): void => {
+      linhaCertificado.hidden = !seguro.checked;
+      if (!digital) {
+        linhaCertificado.replaceChildren(
+          el('span', {}, 'Certificado do servidor'),
+          el('span', { class: 'cfg-dica' }, 'Ainda não confirmado: salve e use "Testar" para ver e confirmar o certificado.'),
+        );
+        return;
+      }
+      const esquecer = el('button', { type: 'button', textContent: 'Esquecer' });
+      esquecer.title = 'Use quando o hospital trocar o certificado: o próximo teste mostra o novo para confirmar';
+      esquecer.addEventListener('click', () => {
+        digital = undefined;
+        desenharCertificado();
+      });
+      linhaCertificado.replaceChildren(
+        el('span', {}, 'Certificado confirmado'),
+        el('code', { class: 'pacs-digital', textContent: formatFingerprint(digital) }),
+        esquecer,
+      );
+    };
+    seguro.addEventListener('change', desenharCertificado);
+    desenharCertificado();
     const erro = el('p', { class: 'cfg-aviso' });
     erro.hidden = true;
     const salvar = el('button', { type: 'button', class: 'primario', textContent: 'Salvar' });
     const cancelar = el('button', { type: 'button', textContent: 'Cancelar' });
     cancelar.addEventListener('click', () => desenhar());
     salvar.addEventListener('click', async () => {
-      const novo = { name: nome.value.trim(), host: host.value.trim(), port: Number(porta.value), aeTitle: aet.value.trim() };
+      const novo: PacsServer = { name: nome.value.trim(), host: host.value.trim(), port: Number(porta.value), aeTitle: aet.value.trim() };
+      if (seguro.checked) {
+        novo.tls = true;
+        // Endereço ou porta diferentes são outro servidor: o certificado precisa ser confirmado de novo.
+        const mesmoDestino = novo.host.toLowerCase() === atual.host.toLowerCase() && novo.port === atual.port;
+        if (digital && mesmoDestino) novo.certificateSha256 = digital;
+      }
       const copia = { ...config, servidores: [...config.servidores] };
       if (indice >= 0) copia.servidores[indice] = novo;
       else copia.servidores.push(novo);
@@ -155,6 +225,13 @@ function desenhar(): void {
       el('label', { class: 'cfg-linha' }, el('span', {}, 'Endereço (IP ou nome)'), host),
       el('label', { class: 'cfg-linha' }, el('span', {}, 'Porta'), porta),
       el('label', { class: 'cfg-linha' }, el('span', {}, 'AE title do servidor'), aet),
+      el(
+        'label',
+        { class: 'cfg-linha', title: 'Criptografa a conexão com o servidor (TLS 1.2 ou mais novo). O PACS precisa oferecer DICOM TLS nesta porta (é comum ser a 2762).' },
+        el('span', {}, 'Conexão segura (DICOM TLS)'),
+        seguro,
+      ),
+      linhaCertificado,
       erro,
       el('div', { class: 'pacs-botoes' }, salvar, cancelar),
     );

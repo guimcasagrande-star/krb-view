@@ -12,3 +12,7 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
 base64 = "0.22"
+# Conexão segura com o PACS (DICOM TLS): TLS do próprio Windows (schannel) e SHA-256 do certificado.
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+sha2 = "0.10"

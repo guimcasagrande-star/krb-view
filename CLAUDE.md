@@ -232,7 +232,7 @@ Limites conhecidos do que está pronto:
 
 - Testado só contra um servidor pynetdicom. Cada PACS de fabricante tem particularidades; validar com `eco`, depois pesquisa, depois download, em cada servidor real.
 - Só C-GET. Servidor que exige C-MOVE não é atendido (precisaria de uma porta de entrada aberta nesta máquina).
-- Sem DICOM TLS.
+- DICOM TLS só com o certificado do servidor: o usuário confirma a impressão digital SHA-256 no primeiro teste e a conexão é recusada se o certificado mudar (`tls` e `certificado` no cadastro; no Node, `scripts/pacs-transporte-node.ts`; no app, `src-tauri/src/ponte_pacs.rs`). Sem certificado de cliente (TLS mútuo) e sem validação pela cadeia de autoridades. Testado só contra o servidor pynetdicom com certificado autoassinado.
 - A busca por nome depende do PACS: "joão silva" vira `*JOÃO*SILVA*`, então a ordem das palavras importa.
 - Cada imagem recebida fica inteira na memória até ser gravada; um arquivo multiframe de vários GB pode não caber.
 
@@ -259,7 +259,7 @@ Listar os atalhos finais numa tela de ajuda (tecla `?`).
 
 ## Fora do escopo
 
-- Rede além da fase 11: DICOMweb, C-MOVE, DICOM TLS, envio de exames ao PACS, nuvem.
+- Rede além da fase 11: DICOMweb, C-MOVE, TLS mútuo (certificado de cliente), envio de exames ao PACS, nuvem.
 - Emissão de laudo, impressão em filme, gravação de CD.
 - Treinar modelos de IA ou rodar IA dentro do navegador.
 - Imagens multiframe (Enhanced CT/MR/PET): `analyzeStack` avisa com `MULTIFRAME`; abrir só em 2D até haver suporte.
