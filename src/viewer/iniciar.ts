@@ -30,6 +30,7 @@ import {
   ReferenceLinesTool,
   StackScrollTool,
   TrackballRotateTool,
+  VolumeCroppingTool,
   WindowLevelTool,
   ZoomTool,
 } from '@cornerstonejs/tools';
@@ -79,6 +80,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       CrosshairsMprTool,
       MIPJumpToClickTool,
       TrackballRotateTool,
+      VolumeCroppingTool,
       BrushTool,
       PaintFillTool,
       CrescerRegiaoTool,

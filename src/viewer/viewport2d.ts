@@ -71,6 +71,7 @@ import {
   adicionarAoGrupo3d,
   type Controlador3d,
   montar3d,
+  pontoVisivelNoClique,
   removerDoGrupo3d,
   rotuloPredefinicao3d,
 } from '../render3d/viewport3d';
@@ -1704,6 +1705,17 @@ async function exibirSlot(
             ? (slot.viewport as Types.IVolumeViewport | undefined)
             : undefined,
         aoMudar: () => slot.overlay.atualizar(),
+        // Clique no 3D: leva os cortes 2D ao primeiro tecido visível na linha do clique.
+        aoClicar: (canvas) => {
+          void (async () => {
+            const v3 = slot.viewport as Types.IVolumeViewport | undefined;
+            if (!v3 || slot.tipoViewport !== Enums.ViewportType.VOLUME_3D) return;
+            const voxels = await carregarVoxels(stack, ids);
+            if ('erro' in voxels) return;
+            const ponto = pontoVisivelNoClique(v3, canvas, (p) => valorNoPonto(voxels, [p[0], p[1], p[2]]));
+            if (ponto) saltarParaPontoMundo(slot.indice, ponto);
+          })();
+        },
       });
       vp.render();
       slot.montandoVolume = false;
