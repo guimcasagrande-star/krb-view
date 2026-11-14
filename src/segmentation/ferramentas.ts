@@ -129,7 +129,7 @@ export const FERRAMENTAS_SEGMENTACAO: FerramentaSegmentacao[] = [
     rotulo: 'Pincel',
     icone: '🖌',
     estrategia: 'FILL_INSIDE_CIRCLE',
-    dica: 'Pinta no corte, no segmento ativo. Contorno fechado é preenchido ao soltar o botão',
+    dica: 'Pinta no corte, no segmento ativo. Ao soltar o botão: preenche o contorno fechado e liga aos cortes pintados a até 20 mm, preenchendo os vazios entre eles',
   },
   {
     nome: 'SegPincelLimiar',

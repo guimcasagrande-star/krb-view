@@ -12,7 +12,7 @@ import { cache, eventTarget, type Types, volumeLoader } from '@cornerstonejs/cor
 import { Enums as EnumsTools, segmentation } from '@cornerstonejs/tools';
 import { gridFromVolumeProps, worldToVoxel } from '../io/geometry';
 import type { ScalarVolume } from '../volume/voxelStats';
-import { buracosFechados } from './mascaras';
+import { buracosFechados, interpolarCortes } from './mascaras';
 import { type LinhaVolumetria, volumetriaDosSegmentos } from './volumetria';
 import type { GeometriaSalva, SegmentoSalvo } from './arquivoSegmentacao';
 
@@ -600,6 +600,71 @@ export function preencherBuracosNovos(pilhaId: string, corte: CorteDaMascara, an
   }
   if (novos.length === 0) return 0;
   return pintarIndices(pilhaId, novos, vol.dimensions[0] * vol.dimensions[1]).indices.length;
+}
+
+/** Forma do segmento ativo num corte (1 = dentro), ou undefined se o corte não tem o segmento. */
+function formaDoCorte(
+  vm: { getAtIndex(i: number): unknown },
+  indices: Int32Array,
+  ativo: number,
+): Uint8Array | undefined {
+  const forma = new Uint8Array(indices.length);
+  let algum = false;
+  for (let p = 0; p < indices.length; p++) {
+    if ((vm.getAtIndex(indices[p]!) as number) === ativo) {
+      forma[p] = 1;
+      algum = true;
+    }
+  }
+  return algum ? forma : undefined;
+}
+
+/**
+ * Pincel: liga o corte recém-pintado aos cortes pintados mais próximos (para cada lado), pintando
+ * os cortes vazios entre eles com formas intermediárias. Só liga se a distância entre os dois
+ * cortes pintados for de até `limiteMm` e não houver nada do segmento no meio. Só voxels sem
+ * segmento são pintados. Devolve quantos cortes foram preenchidos.
+ */
+export function ligarCortesProximos(pilhaId: string, corte: CorteDaMascara, limiteMm: number): number {
+  const seg = porPilha.get(pilhaId);
+  const vol = seg ? cache.getVolume(seg.labelmapId) : undefined;
+  const vm = vol?.voxelManager;
+  if (!seg || !vol || !vm) return 0;
+  const total = vol.dimensions[corte.eixo]!;
+  const passoMm = vol.spacing[corte.eixo]!;
+  const alcance = Math.floor(limiteMm / passoMm);
+  if (alcance < 2) return 0;
+  const { indices: indicesAqui, nu, nv } = indicesDoCorte(vol.dimensions, corte);
+  const aqui = formaDoCorte(vm, indicesAqui, seg.ativo);
+  if (!aqui) return 0;
+  const porCorte = vol.dimensions[0] * vol.dimensions[1];
+  let cortesPintados = 0;
+  for (const sentido of [-1, 1]) {
+    // Primeiro corte com o segmento neste sentido, dentro do alcance.
+    let vizinho: { posicao: number; forma: Uint8Array } | undefined;
+    for (let d = 1; d <= alcance; d++) {
+      const posicao = corte.posicao + sentido * d;
+      if (posicao < 0 || posicao >= total) break;
+      const forma = formaDoCorte(vm, indicesDoCorte(vol.dimensions, { eixo: corte.eixo, posicao }).indices, seg.ativo);
+      if (forma) {
+        vizinho = { posicao, forma };
+        break;
+      }
+    }
+    const vazios = vizinho ? Math.abs(vizinho.posicao - corte.posicao) - 1 : 0;
+    if (!vizinho || vazios < 1) continue;
+    const formas = interpolarCortes(aqui, vizinho.forma, nu, nv, vazios);
+    const novos: number[] = [];
+    formas.forEach((forma, m) => {
+      const posicao = corte.posicao + sentido * (m + 1);
+      const destino = indicesDoCorte(vol.dimensions, { eixo: corte.eixo, posicao }).indices;
+      for (let p = 0; p < forma.length; p++) {
+        if (forma[p] === 1 && (vm.getAtIndex(destino[p]!) as number) === 0) novos.push(destino[p]!);
+      }
+    });
+    if (novos.length > 0 && pintarIndices(pilhaId, novos, porCorte).indices.length > 0) cortesPintados += vazios;
+  }
+  return cortesPintados;
 }
 
 // ---------- salvar e reabrir (fase 9.3) ----------

@@ -69,6 +69,7 @@ import {
   corteDaMascara,
   type CorteDaMascara,
   desfazerPintura,
+  ligarCortesProximos,
   pintarIndices,
   type PinturaDesfazivel,
   preencherBuracosNovos,
@@ -77,6 +78,7 @@ import {
 import {
   definirResolvedorCrescer,
   ehFerramentaSegmentacao,
+  EVENTO_MENSAGEM_SEGMENTACAO,
   NOME_PINCEL,
   type SessaoCrescer,
 } from '../segmentation/ferramentas';
@@ -1002,7 +1004,11 @@ async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number
   };
 }
 
-// Pincel: ao soltar o botão, o miolo de um contorno fechado pela pincelada é preenchido.
+/** Distância máxima (mm) entre dois cortes pintados para o pincel preencher os cortes entre eles. */
+const LIMITE_LIGAR_CORTES_MM = 20;
+
+// Pincel: ao soltar o botão, o miolo de um contorno fechado pela pincelada é preenchido e o
+// corte é ligado aos cortes pintados próximos (os vazios entre eles recebem formas intermediárias).
 function iniciarPreenchimentoDoPincel(): void {
   let pincelada: { pilhaId: string; corte: CorteDaMascara; antes: Set<number> } | null = null;
   grade.addEventListener(
@@ -1028,7 +1034,18 @@ function iniciarPreenchimentoDoPincel(): void {
       const p = pincelada;
       pincelada = null;
       // Depois de o pincel do Cornerstone terminar a pincelada deste mesmo mouseup.
-      if (p) setTimeout(() => preencherBuracosNovos(p.pilhaId, p.corte, p.antes), 0);
+      if (!p) return;
+      setTimeout(() => {
+        preencherBuracosNovos(p.pilhaId, p.corte, p.antes);
+        const ligados = ligarCortesProximos(p.pilhaId, p.corte, LIMITE_LIGAR_CORTES_MM);
+        if (ligados > 0) {
+          document.dispatchEvent(
+            new CustomEvent(EVENTO_MENSAGEM_SEGMENTACAO, {
+              detail: `Pincel: ${ligados} ${ligados === 1 ? 'corte vazio preenchido' : 'cortes vazios preenchidos'} entre os cortes pintados.`,
+            }),
+          );
+        }
+      }, 0);
     },
     true,
   );

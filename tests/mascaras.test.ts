@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { VolumeGrid } from '../src/io/geometry';
-import { buracosFechados, crescerNaEsfera, faixaPelaSemente } from '../src/segmentation/mascaras';
+import {
+  buracosFechados,
+  crescerNaEsfera,
+  distanciaAssinada,
+  faixaPelaSemente,
+  interpolarCortes,
+} from '../src/segmentation/mascaras';
 
 /** Grade 60×60×60 com voxels de 1 mm. */
 const N = 60;
@@ -126,5 +132,58 @@ describe('buracos fechados no corte', () => {
   it('corte todo vazio ou todo pintado não tem buraco', () => {
     expect(buracosFechados(new Uint8Array(16), 4, 4).some((x) => x === 1)).toBe(false);
     expect(buracosFechados(new Uint8Array(16).fill(1), 4, 4).some((x) => x === 1)).toBe(false);
+  });
+});
+
+describe('interpolação entre cortes', () => {
+  const nu = 41;
+  const nv = 41;
+  const disco = (cu: number, cv: number, raio: number): Uint8Array => {
+    const m = new Uint8Array(nu * nv);
+    for (let v = 0; v < nv; v++) {
+      for (let u = 0; u < nu; u++) if ((u - cu) ** 2 + (v - cv) ** 2 <= raio * raio) m[u + v * nu] = 1;
+    }
+    return m;
+  };
+  const area = (m: Uint8Array): number => m.reduce((s, x) => s + x, 0);
+
+  it('a distância assinada é negativa dentro, positiva fora e vale o raio no centro', () => {
+    const sd = distanciaAssinada(disco(20, 20, 8), nu, nv);
+    expect(sd[20 + 20 * nu]).toBeLessThan(-7);
+    expect(sd[20 + 20 * nu]).toBeGreaterThan(-9.5);
+    expect(sd[0]).toBeGreaterThan(15);
+    // Confere com a força bruta num ponto de fora.
+    let menor = Infinity;
+    const m = disco(20, 20, 8);
+    for (let v = 0; v < nv; v++) {
+      for (let u = 0; u < nu; u++) if (m[u + v * nu]) menor = Math.min(menor, Math.hypot(u - 35, v - 5));
+    }
+    expect(sd[35 + 5 * nu]).toBeCloseTo(menor - 0.5, 4);
+  });
+
+  it('entre um disco pequeno e um grande os cortes crescem aos poucos', () => {
+    const a = disco(20, 20, 4);
+    const b = disco(20, 20, 12);
+    const meio = interpolarCortes(a, b, nu, nv, 3);
+    expect(meio).toHaveLength(3);
+    const areas = [area(a), ...meio.map(area), area(b)];
+    for (let i = 1; i < areas.length; i++) expect(areas[i]).toBeGreaterThan(areas[i - 1]!);
+    // O corte do meio tem raio perto de 8 (área perto de π·8²).
+    expect(Math.abs(areas[2]! - Math.PI * 64)).toBeLessThan(25);
+    // E contém o disco pequeno.
+    for (let p = 0; p < a.length; p++) if (a[p]) expect(meio[1]![p]).toBe(1);
+  });
+
+  it('formas iguais continuam iguais', () => {
+    const a = disco(15, 22, 6);
+    const [meio] = interpolarCortes(a, a, nu, nv, 1);
+    expect(Array.from(meio!)).toEqual(Array.from(a));
+  });
+
+  it('disco deslocado: o corte do meio fica entre as duas posições', () => {
+    const [meio] = interpolarCortes(disco(12, 20, 6), disco(28, 20, 6), nu, nv, 1);
+    expect(meio![20 + 20 * nu]).toBe(1);
+    expect(meio![6 + 20 * nu]).toBe(0);
+    expect(meio![34 + 20 * nu]).toBe(0);
   });
 });
