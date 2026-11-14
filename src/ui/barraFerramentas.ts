@@ -500,7 +500,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const menuMedidas = criarMenuSuspenso({
     rotulo: `📏 ${ultimaMedidaEscolhida.rotulo}`,
-    dica: 'Ativar ferramenta de medida atual ou abrir a lista de medidas e curva de perfusão na seta ao lado',
+    dica: 'Ativar a ferramenta de medida atual; a seta ao lado abre a lista de medidas e a curva de ROI (perfusão)',
     acaoPrincipal: () => escolherFerramentaPrimaria(ultimaMedidaEscolhida.nome),
   });
 
@@ -558,13 +558,6 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     ),
   );
 
-  // Botão rápido direto para Curva de Perfusão também acessível ao lado do menu de medidas:
-  const botaoCurvaRapido = botao(
-    '📈 Curva ROI',
-    'Gerar curva tempo-intensidade / densidade por ROI ao longo dos cortes ou fases de perfusão (Ctrl+Shift+E)',
-    () => void abrirCurvaPerfusaoAtiva(),
-  );
-
   // 4b. Segmentação (fase 9.1): botão dividido com a última ferramenta e o menu das demais.
   let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
   const menuSegmentar = criarMenuSuspenso({
@@ -595,7 +588,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar),
   );
 
-  grupoNavegacao.append(menuMedidas.contentor, botaoCurvaRapido, menuSegmentar.contentor);
+  grupoNavegacao.append(menuMedidas.contentor, menuSegmentar.contentor);
 
   // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
   const grupoImagem = document.createElement('div');

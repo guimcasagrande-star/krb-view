@@ -34,6 +34,7 @@ import { definirResolvedorVoi, iniciarVoiEsfera, type RespostaResolvedor } from 
 import { worldToVoxel } from '../io/geometry';
 import {
   adicionarViewportAoGrupo,
+  centroCrosshair,
   definirLinhasReferencia,
   botaoAtribuido,
   EVENTO_BOTOES_MUDARAM,
@@ -44,6 +45,7 @@ import {
   removerViewportDoGrupo,
 } from '../tools/grupo';
 import { abrirDialogoCurvaPerfusao } from '../tools/curvaPerfusao';
+import { definirApoioGirarPlano, esquecerPlanoGirado, restaurarPlanoGirado } from '../tools/girarPlano';
 import { desenharMiraNoCanvas, FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
 import {
   aplicarCameraMipRotatorio,
@@ -95,7 +97,9 @@ import { adquirirVolume, descartarVolume, liberarVolume } from '../volume/montar
 import { avaliarVolume } from '../volume/validarVolume';
 import { cineTocando, definirFps, fpsAtual, pararCine, pararTodosCines, tocarCine } from './cine';
 import { idElemento, ID_MOTOR, idViewport, iniciarCornerstone, MAX_VIEWPORTS } from './iniciar';
+import { criarCuboOrientacao, type CuboOrientacao } from './cuboOrientacao';
 import { criarOverlay, type Overlay, type PlanoMprOverlay } from './overlay';
+import { abrirMenuFlutuante, type EntradaMenuFlutuante } from '../ui/menuFlutuante';
 
 const CARGAS_SIMULTANEAS = 4;
 
@@ -221,6 +225,8 @@ interface Slot {
   /** Controles do 3D (fase 8), quando o slot mostra a renderização volumétrica. */
   controlador3d?: Controlador3d;
   overlay: Overlay;
+  /** Cubo de orientação no canto inferior direito (some no 3D e no quadro vazio). */
+  cubo: CuboOrientacao;
   viewport?: Types.IStackViewport | Types.IVolumeViewport;
   tipoViewport: Enums.ViewportType;
   planoSlot: PlanoSlot;
@@ -832,6 +838,7 @@ function sincronizar(): void {
   atualizarLinhasReferencia();
   atualizarMascaras();
   for (const x of slots) {
+    x.cubo.atualizar();
     x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
   }
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
@@ -1077,9 +1084,11 @@ async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
   removerViewportDoGrupo(slot.idViewport);
   removerDoGrupo3d(slot.idViewport);
   motor.disableElement(slot.idViewport);
+  esquecerPlanoGirado(slot.idViewport);
   slot.viewport = undefined;
   slot.planoMpr = undefined;
   slot.habilitado = false;
+  slot.cubo.atualizar();
 }
 
 /** Janela da TC na fusão: a 1ª predefinição (partes moles por padrão), em vez da janela do arquivo. */
@@ -1795,7 +1804,8 @@ async function exibirSlot(
               ? (slot.viewport as Types.IVolumeViewport | undefined)
               : undefined,
           aoClicarPontoMaisIntenso: (ponto) => saltarParaPontoMundo(slot.indice, ponto),
-          iniciarGirando: true,
+          // Abre parado na vista anterior (AP); gira com ▶, Espaço ou arrastando.
+          iniciarGirando: false,
         });
       } else {
         aplicarSlabAoViewport(vp, slot.modoSlab, slot.slabMm);
@@ -1885,6 +1895,66 @@ export async function definirPlanoSlotAtivo(plano: PlanoSlot): Promise<void> {
   slot.planoSlot = plano;
   // A janela do 3D é a da predefinição, não serve para os cortes.
   await exibirSlot(slot, corte, saindoDo3d ? undefined : voiPreservado);
+}
+
+/** Planos que o cubo de orientação e o menu do botão direito oferecem. */
+const PLANOS_DO_MENU: Array<'original' | 'axial' | 'coronal' | 'sagital'> = ['original', 'axial', 'coronal', 'sagital'];
+
+/**
+ * MPR: põe `plano` no quadro `slot`. Os três quadros continuam com planos diferentes: o quadro
+ * que mostrava `plano` fica com o que este mostrava. Escolher o plano que o quadro já tem
+ * desfaz um giro (plano oblíquo) e volta ao plano reto.
+ */
+function trocarPlanoMpr(slot: Slot, plano: 'axial' | 'coronal' | 'sagital'): void {
+  const outro = slots.slice(0, 3).find((s) => s !== slot && s.planoSlot === plano);
+  const anterior = slot.planoSlot;
+  const centro = centroCrosshair();
+  const aplicar = (s: Slot, p: PlanoSlot): void => {
+    const v = s.viewport;
+    if (!v || s.tipoViewport !== Enums.ViewportType.ORTHOGRAPHIC || !('setOrientation' in v)) return;
+    s.planoSlot = p;
+    s.planoMpr = PLANOS_SLOTS[p];
+    esquecerPlanoGirado(s.idViewport);
+    v.setOrientation(PLANOS_SLOTS[p].eixo);
+    if (centro) v.jumpToWorld(centro);
+    aplicarSlabAoViewport(v, modoSlabMpr, slabMprMm);
+    v.render();
+    s.overlay.atualizar();
+  };
+  aplicar(slot, plano);
+  if (outro && anterior !== plano) aplicar(outro, anterior);
+  sincronizar();
+}
+
+/** Itens do menu de planos do quadro `indice` (cubo de orientação e menu do botão direito). */
+export function itensMenuPlano(indice: number = ativo): EntradaMenuFlutuante[] {
+  const slot = slots[indice];
+  if (!slot?.pilha || !slot.habilitado || semCortes(slot)) return [];
+  const itens: EntradaMenuFlutuante[] = [];
+  for (const plano of PLANOS_DO_MENU) {
+    if (mprAtivo && plano === 'original') continue;
+    itens.push({
+      rotulo: PLANOS_SLOTS[plano].rotulo,
+      marcado: slot.planoSlot === plano,
+      acao: () => {
+        ativarViewport(indice);
+        if (mprAtivo) {
+          if (plano !== 'original') trocarPlanoMpr(slot, plano);
+          return;
+        }
+        if (slot.planoSlot === plano) {
+          // Mesmo plano: só desfaz o giro (plano oblíquo), se houver.
+          if (slot.viewport && restaurarPlanoGirado(slot.viewport)) {
+            slot.viewport.render();
+            slot.overlay.atualizar();
+          }
+          return;
+        }
+        void definirPlanoSlotAtivo(plano);
+      },
+    });
+  }
+  return itens;
 }
 
 /**
@@ -3405,6 +3475,7 @@ function criarSlot(indice: number): Slot {
     fusao: { opacidade: 0.5, colormap: NOME_HOT_IRON, teto: 10, minimo: 0 },
     registro: { ativo: false, deslocamento: [0, 0, 0] },
     overlay: undefined as unknown as Overlay,
+    cubo: undefined as unknown as CuboOrientacao,
   };
   slot.overlay = criarOverlay(celula, {
     viewport: () => slot.viewport,
@@ -3418,6 +3489,23 @@ function criarSlot(indice: number): Slot {
         : undefined;
     },
   });
+  const overlayBase = slot.overlay;
+  slot.cubo = criarCuboOrientacao(celula.querySelector<HTMLElement>('.overlay') ?? celula, {
+    viewport: () => slot.viewport,
+    visivel: () =>
+      slot.habilitado && !slot.celula.hidden && !!slot.pilha && !slot.montandoVolume && slot.planoSlot !== '3d' && !!slot.mensagem.hidden,
+    aoPedirMenu: (x, y) => {
+      ativarViewport(indice);
+      abrirMenuFlutuante(x, y, itensMenuPlano(indice));
+    },
+  });
+  slot.overlay = {
+    ligar: overlayBase.ligar,
+    atualizar: () => {
+      overlayBase.atualizar();
+      slot.cubo.atualizar();
+    },
+  };
   slot.overlay.ligar(elemento);
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => {
     sincronizarVoiMpr(indice);
@@ -3436,6 +3524,7 @@ function criarSlot(indice: number): Slot {
   elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
     aoMudarCameraEstudo(indice);
     atualizarMiraSlot(slot);
+    slot.cubo.atualizar();
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
   // Pintando numa série que ainda não tem segmentação: o 1º clique cria a segmentação (sem pintar).
@@ -3584,6 +3673,24 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
     if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) void garantirSegmentacaoAtiva();
   });
   iniciarVoiEsfera();
+  // Girar plano: o ponto fixo é o centro do crosshair (MPR) ou a cruzinha do ┼ Localizar.
+  definirApoioGirarPlano({
+    pivo: (id) => {
+      if (mprAtivo) return centroCrosshair();
+      const p = slots.find((s) => s.idViewport === id)?.pontoMiraMundo;
+      return p ? [p[0], p[1], p[2]] : null;
+    },
+    semVolume: (id) => {
+      const slot = slots.find((s) => s.idViewport === id);
+      if (!slot) return;
+      const texto = 'Girar plano só funciona na imagem reconstruída: escolha Axial, Coronal ou Sagital no cubo do canto inferior direito, ou entre no MPR (tecla R).';
+      slot.avisoVolume.textContent = texto;
+      slot.avisoVolume.hidden = false;
+      setTimeout(() => {
+        if (slot.avisoVolume.textContent === texto) esconderAvisoVolume(slot);
+      }, 6000);
+    },
+  });
   grade = document.createElement('div');
   grade.id = 'grade';
   const observadorTamanho = new ResizeObserver(() => {

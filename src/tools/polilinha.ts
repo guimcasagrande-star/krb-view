@@ -66,6 +66,11 @@ export class PolilinhaTool extends AnnotationTool {
   static override toolName = 'Polyline';
 
   private rascunho: Rascunho | null = null;
+
+  /** Há um traçado em andamento (os cliques seguintes são pontos dele). */
+  get desenhando(): boolean {
+    return this.rascunho !== null;
+  }
   private ultimoViewportId: string | undefined;
 
   constructor(

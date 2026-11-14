@@ -1,5 +1,5 @@
 /**
- * Preferências do usuário (aparência das medidas, atalhos e janelas predefinidas).
+ * Preferências do usuário (aparência das medidas, interação, atalhos e janelas predefinidas).
  * Guardadas só neste computador, em localStorage. Nenhum dado de exame entra aqui.
  */
 
@@ -46,8 +46,16 @@ export interface Janela {
   largura: number;
 }
 
+export interface PrefsInteracao {
+  /** Zoom a partir do centro da imagem (padrão); desligado = a partir do ponto do mouse. */
+  zoomNoCentro: boolean;
+  /** Depois de concluir uma medida (linha, ângulo, ROI...), o botão esquerdo volta a passar cortes. */
+  voltarAoScroll: boolean;
+}
+
 export interface PrefsGerais {
   medidas: PrefsMedidas;
+  interacao: PrefsInteracao;
   /** nome da ferramenta (ou id da ação) -> tecla (minúscula). Só o que difere do padrão. */
   atalhos: Record<string, string>;
   /** Janelas predefinidas, nas teclas 1 a 9 pela ordem. */
@@ -70,6 +78,8 @@ export const MEDIDAS_PADRAO: PrefsMedidas = {
   tolerancia: 12,
 };
 
+export const INTERACAO_PADRAO: PrefsInteracao = { zoomNoCentro: true, voltarAoScroll: true };
+
 export const JANELAS_PADRAO: Janela[] = [
   { rotulo: 'Partes moles', centro: 40, largura: 400 },
   { rotulo: 'Pulmão', centro: -600, largura: 1500 },
@@ -87,6 +97,7 @@ export const EVENTO_PREFERENCIAS = 'preferenciasMudaram';
 function copiaPadrao(): PrefsGerais {
   return {
     medidas: { ...MEDIDAS_PADRAO, roi: { ...MEDIDAS_PADRAO.roi } },
+    interacao: { ...INTERACAO_PADRAO },
     atalhos: {},
     janelas: JANELAS_PADRAO.map((j) => ({ ...j })),
     mouse: {},
@@ -123,6 +134,10 @@ export function sanear(bruto: unknown): PrefsGerais {
   for (const k of Object.keys(pm.roi) as Array<keyof PrefsMedidas['roi']>) {
     if (typeof roi[k] === 'boolean') pm.roi[k] = roi[k] as boolean;
   }
+
+  const it = (b.interacao ?? {}) as Record<string, unknown>;
+  if (typeof it.zoomNoCentro === 'boolean') p.interacao.zoomNoCentro = it.zoomNoCentro;
+  if (typeof it.voltarAoScroll === 'boolean') p.interacao.voltarAoScroll = it.voltarAoScroll;
 
   if (b.atalhos && typeof b.atalhos === 'object') {
     for (const [nome, tecla] of Object.entries(b.atalhos as Record<string, unknown>)) {
@@ -164,6 +179,10 @@ try {
 
 export function preferencias(): PrefsGerais {
   return atuais;
+}
+
+export function interacao(): PrefsInteracao {
+  return atuais.interacao;
 }
 
 export function medidas(): PrefsMedidas {

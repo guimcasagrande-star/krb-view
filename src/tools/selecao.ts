@@ -2,21 +2,19 @@
  * Seleção fácil de medidas:
  * - clique perto da linha, de uma alça ou do texto seleciona a medida (tolerância configurável);
  * - Shift+clique soma à seleção; clique no vazio limpa;
- * - com uma ferramenta de medida ativa, Ctrl+clique seleciona sem começar outra medida;
- * - um botão "Apagar" aparece enquanto houver medida selecionada.
+ * - a medida selecionada é apagada com Delete ou pelo menu do botão direito.
  */
 
-import { eventTarget, getEnabledElement, type Types as CoreTypes } from '@cornerstonejs/core';
+import { getEnabledElement, type Types as CoreTypes } from '@cornerstonejs/core';
 import {
   annotation as anotacoes,
-  Enums as EnumsTools,
   ToolGroupManager,
   utilities,
   type Types,
 } from '@cornerstonejs/tools';
 import { medidas } from '../state/preferencias';
 import { circuloVoiCanvas, ehFerramentaVoi } from './voiEsfera';
-import { apagarSelecionadas, FERRAMENTAS_PRIMARIAS, ferramentaPrimariaAtual, ID_GRUPO } from './grupo';
+import { FERRAMENTAS_PRIMARIAS, ferramentaPrimariaAtual, ID_GRUPO } from './grupo';
 
 type Ponto2 = [number, number];
 
@@ -154,8 +152,6 @@ export function iniciarSelecaoFacil(area: HTMLElement): void {
       inicio = null;
       if (!origem || ev.button !== 0) return;
       if (Math.hypot(ev.clientX - origem.x, ev.clientY - origem.y) > MOVIMENTO_MAXIMO_PX) return;
-      // Com ferramenta de medida ativa, o clique comum começa uma medida; Ctrl+clique seleciona.
-      if (ferramentaAtivaEhMedida() && !ev.ctrlKey) return;
       const alvo = ev.target instanceof Element ? ev.target.closest<HTMLDivElement>('[data-viewport-uid]') : null;
       if (!alvo) return;
       const viewport = getEnabledElement(alvo)?.viewport;
@@ -164,6 +160,9 @@ export function iniciarSelecaoFacil(area: HTMLElement): void {
       const uid = medidaNoPonto(alvo, [ev.clientX - rect.left, ev.clientY - rect.top]);
       if (uid) {
         anotacoes.selection.setAnnotationSelected(uid, true, ev.shiftKey);
+      } else if (ferramentaAtivaEhMedida()) {
+        // Clique no vazio com ferramenta de medida ativa: é o começo de outra medida.
+        return;
       } else if (!ev.shiftKey) {
         anotacoes.selection.deselectAnnotation();
       }
@@ -171,22 +170,4 @@ export function iniciarSelecaoFacil(area: HTMLElement): void {
     },
     true,
   );
-
-  // Botão "Apagar" flutuante enquanto houver medidas selecionadas.
-  const chip = document.createElement('button');
-  chip.type = 'button';
-  chip.id = 'chip-apagar-medidas';
-  chip.hidden = true;
-  chip.addEventListener('click', () => void apagarSelecionadas());
-  area.append(chip);
-
-  const atualizarChip = (): void => {
-    const uids = anotacoes.selection
-      .getAnnotationsSelected()
-      .filter((uid) => anotacoes.state.getAnnotation(uid)?.metadata?.toolName !== 'Crosshairs');
-    chip.hidden = uids.length === 0;
-    chip.textContent = `🗑 Apagar ${uids.length === 1 ? 'medida selecionada' : `${uids.length} medidas selecionadas`} (Del)`;
-  };
-  eventTarget.addEventListener(EnumsTools.Events.ANNOTATION_SELECTION_CHANGE, atualizarChip);
-  eventTarget.addEventListener(EnumsTools.Events.ANNOTATION_REMOVED, atualizarChip);
 }

@@ -35,6 +35,8 @@ import {
   ZoomTool,
 } from '@cornerstonejs/tools';
 
+import { GirarPlanoTool } from '../tools/girarPlano';
+
 export const ID_MOTOR = 'motor';
 /** Máximo de viewports na grade (grade personalizada de até 5x5). */
 export const MAX_VIEWPORTS = 25;
@@ -78,6 +80,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       ReferenceLinesTool,
       PolilinhaTool,
       CrosshairsMprTool,
+      GirarPlanoTool,
       MIPJumpToClickTool,
       TrackballRotateTool,
       VolumeCroppingTool,

@@ -224,6 +224,8 @@ export function criarOverlay(celula: HTMLElement, fonte: FonteOverlay): Overlay 
       if (partes.length > 0) {
         texto.superiorEsquerdo.unshift(partes.join(' · '));
       }
+      // MIP de volume inteiro: não há corte, espessura nem posição para mostrar.
+      if (plano.rotulo === 'MIP rotatório') texto.inferiorEsquerdo = [];
     }
 
     for (const canto of Object.keys(cantos) as Canto[]) {

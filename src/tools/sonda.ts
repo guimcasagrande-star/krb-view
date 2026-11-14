@@ -84,6 +84,7 @@ export class SondaTool extends AnnotationTool {
     evt.preventDefault();
     void recalcularSonda(ann);
     utilitarios.triggerAnnotationRenderForViewportIds([d.viewportId]);
+    anotacoes.state.triggerAnnotationCompleted(ann);
     return ann;
   }
 

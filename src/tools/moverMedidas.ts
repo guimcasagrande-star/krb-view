@@ -4,14 +4,25 @@
  * - Pressionar sobre uma medida (na linha, no texto ou, nas ROIs, no meio) e arrastar move a
  *   medida inteira; pressionar numa ponta (alça) de uma medida de linha ou ângulo edita só aquele
  *   ponto. Ao soltar a medida continua selecionada.
- * - Com uma ferramenta de medida ativa, o clique comum começa outra medida: use Ctrl+arrastar.
+ * - Sobre uma medida o cursor vira uma mãozinha: ali o clique arrasta a medida, mesmo com uma
+ *   ferramenta de medida ativa (fora dela, o clique começa outra medida).
+ * - Nas alças da ROI elíptica o cursor vira um dedo: arrastar ali muda o tamanho (pelo Cornerstone).
  * - Vale para todas as medidas, nativas ou desta aplicação. Ao mover a ROI volumétrica, as
  *   estatísticas são recalculadas na nova posição.
  */
 
 import { getEnabledElement } from '@cornerstonejs/core';
-import { annotation as anotacoes, utilities as utilitarios, type Types } from '@cornerstonejs/tools';
-import { ferramentaAtivaEhMedida, medidaNoPonto, noTexto } from './selecao';
+import {
+  annotation as anotacoes,
+  state as estadoTools,
+  ToolGroupManager,
+  utilities as utilitarios,
+  type Types,
+} from '@cornerstonejs/tools';
+import { ehFerramentaSegmentacao } from '../segmentation/ferramentas';
+import { ferramentaPrimariaAtual, ID_GRUPO } from './grupo';
+import { PolilinhaTool } from './polilinha';
+import { medidaNoPonto, noTexto } from './selecao';
 import { NOME_SONDA, recalcularSonda } from './sonda';
 import { ehFerramentaVoi, NOME_LESAO_PET, NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
 
@@ -20,9 +31,13 @@ type Ponto3 = [number, number, number];
 const LIMIAR_PX = 3;
 /** Distância (px) para uma alça (ponta) contar como clicada. */
 const RAIO_ALCA_PX = 9;
+/** Classes de cursor postas no elemento do viewport. */
+const CLASSE_SOBRE = 'sobre-medida';
+const CLASSE_ALCA = 'sobre-alca-medida';
+const CLASSE_ARRASTANDO = 'arrastando-medida';
+/** ROI elíptica: as alças mudam o tamanho, e quem faz isso é o próprio Cornerstone. */
+const REDIMENSIONA_PELA_ALCA = new Set(['EllipticalROI']);
 /** ROIs e esfera movem inteiras; nas demais, clicar numa ponta edita só aquele ponto. */
-/** Ferramentas do Cornerstone: ele mesmo edita as pontas quando a ferramenta está ativa. */
-const NATIVAS = new Set(['Length', 'Angle', 'EllipticalROI', 'PlanarFreehandROI']);
 const SEM_ALCA = new Set(['EllipticalROI', 'PlanarFreehandROI', NOME_VOI_ESFERA, NOME_LESAO_PET]);
 
 interface Arrasto {
@@ -41,12 +56,63 @@ interface Arrasto {
   texto?: Ponto3;
 }
 
+interface Alvo {
+  ann: Types.Annotation;
+  uid: string;
+  /** O ponto está sobre a caixa de texto (move só o rótulo). */
+  soTexto: boolean;
+  /** Índice da ponta sob o ponto, nas medidas de linha e ângulo. */
+  alca?: number;
+  /** Alça de redimensionar da ROI elíptica: fica com o Cornerstone. */
+  redimensiona: boolean;
+}
+
 const copia = (p: ArrayLike<number>): Ponto3 => [p[0]!, p[1]!, p[2]!];
 
 function idsDosViewports(): string[] {
   return Array.from(document.querySelectorAll<HTMLElement>('[data-viewport-uid]'))
     .map((e) => e.getAttribute('data-viewport-uid'))
     .filter((v): v is string => !!v);
+}
+
+/** Há um desenho em andamento (os cliques são pontos dele) ou uma ferramenta de pintura ativa. */
+function ocupado(): boolean {
+  if (estadoTools.isInteractingWithTool) return true;
+  if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) return true;
+  const poli = ToolGroupManager.getToolGroup(ID_GRUPO)?.getToolInstance(PolilinhaTool.toolName) as
+    | { desenhando?: boolean }
+    | undefined;
+  return !!poli?.desenhando;
+}
+
+/** Medida arrastável sob o ponto (em px do elemento), com a parte dela que seria arrastada. */
+function alvoNoPonto(element: HTMLDivElement, canvas: [number, number]): Alvo | null {
+  const viewport = getEnabledElement(element)?.viewport;
+  if (!viewport) return null;
+  const uid = medidaNoPonto(element, canvas);
+  const ann = uid ? anotacoes.state.getAnnotation(uid) : undefined;
+  if (!uid || !ann?.data?.handles || ann.isLocked) return null;
+  const nome = ann.metadata?.toolName ?? '';
+  const soTexto = noTexto(element, ann, canvas, 4);
+  let alca: number | undefined;
+  let melhor = RAIO_ALCA_PX;
+  if (!soTexto) {
+    ((ann.data.handles.points ?? []) as Ponto3[]).forEach((q, i) => {
+      const c = viewport.worldToCanvas(q);
+      const dist = Math.hypot(c[0] - canvas[0], c[1] - canvas[1]);
+      if (dist <= melhor) {
+        melhor = dist;
+        alca = i;
+      }
+    });
+  }
+  const redimensiona = alca !== undefined && REDIMENSIONA_PELA_ALCA.has(nome);
+  if (SEM_ALCA.has(nome)) alca = undefined;
+  return { ann, uid, soTexto, redimensiona, ...(alca !== undefined ? { alca } : {}) };
+}
+
+function elementoDoEvento(ev: MouseEvent): HTMLDivElement | null {
+  return ev.target instanceof Element ? ev.target.closest<HTMLDivElement>('[data-viewport-uid]') : null;
 }
 
 function aplicarDeslocamento(a: Arrasto, d: Ponto3): void {
@@ -112,6 +178,7 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     window.removeEventListener('mousemove', aoMover, true);
     window.removeEventListener('mouseup', aoSoltar, true);
     if (!a) return;
+    a.element.classList.remove(CLASSE_ARRASTANDO);
     if (a.moveu && !a.soTexto && ehFerramentaVoi(a.ann.metadata?.toolName)) recalcularVoi(a.ann);
     if (a.moveu && !a.soTexto && a.ann.metadata?.toolName === NOME_SONDA) void recalcularSonda(a.ann);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
@@ -120,48 +187,29 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
   area.addEventListener(
     'mousedown',
     (ev) => {
-      if (ev.button !== 0 || arrasto) return;
-      // Com ferramenta de medida ativa: só Ctrl move; e uma ponta de medida desta aplicação
-      // (que o Cornerstone não edita) é editada mesmo sem Ctrl.
-      const medindoSemCtrl = ferramentaAtivaEhMedida() && !ev.ctrlKey;
-      const alvo = ev.target instanceof Element ? ev.target.closest<HTMLDivElement>('[data-viewport-uid]') : null;
+      if (ev.button !== 0 || arrasto || ocupado()) return;
+      const alvo = elementoDoEvento(ev);
       if (!alvo) return;
       const viewport = getEnabledElement(alvo)?.viewport;
       if (!viewport) return;
       const rect = alvo.getBoundingClientRect();
       const canvas: [number, number] = [ev.clientX - rect.left, ev.clientY - rect.top];
-      const uid = medidaNoPonto(alvo, canvas);
-      const ann = uid ? anotacoes.state.getAnnotation(uid) : undefined;
-      if (!uid || !ann?.data?.handles) return;
-      if (ann.isLocked) return;
+      const achado = alvoNoPonto(alvo, canvas);
+      if (!achado) return;
+      const { ann, uid, soTexto, alca } = achado;
+      anotacoes.selection.setAnnotationSelected(uid, true, ev.shiftKey);
+      // Alça da ROI elíptica: o Cornerstone redimensiona (este clique segue para ele).
+      if (achado.redimensiona) return;
 
       const dados = ann.data as {
         handles: { points?: Ponto3[]; textBox?: { worldPosition?: Ponto3 } };
         contour?: { polyline?: Ponto3[] };
       };
-      anotacoes.selection.setAnnotationSelected(uid, true, ev.shiftKey);
-      const mundo = viewport.canvasToWorld(canvas);
-      // Clicou na caixa de texto da medida? Move só a caixa de texto (sem deslocar a lesão/seta).
-      const soTexto = noTexto(alvo, ann, canvas, 4);
-      // Clicou numa ponta de uma medida de linha/ângulo? Então só esse ponto é editado.
-      let alca: number | undefined;
-      if (!soTexto && !SEM_ALCA.has(ann.metadata?.toolName ?? '')) {
-        let melhor = RAIO_ALCA_PX;
-        (dados.handles.points ?? []).forEach((q, i) => {
-          const c = viewport.worldToCanvas(q);
-          const dist = Math.hypot(c[0] - canvas[0], c[1] - canvas[1]);
-          if (dist <= melhor) {
-            melhor = dist;
-            alca = i;
-          }
-        });
-      }
-      if (medindoSemCtrl && !soTexto && (alca === undefined || NATIVAS.has(ann.metadata?.toolName ?? ''))) return;
       arrasto = {
         ann,
         element: alvo,
         inicioCanvas: [ev.clientX, ev.clientY],
-        inicioMundo: copia(mundo),
+        inicioMundo: copia(viewport.canvasToWorld(canvas)),
         moveu: false,
         ...(soTexto ? { soTexto: true } : {}),
         ...(alca !== undefined ? { alca } : {}),
@@ -169,7 +217,8 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
         ...(dados.contour?.polyline ? { polilinha: dados.contour.polyline.map(copia) } : {}),
         ...(dados.handles.textBox?.worldPosition ? { texto: copia(dados.handles.textBox.worldPosition) } : {}),
       };
-      // A ferramenta ativa (cortes, janela, pan...) não deve agir neste clique.
+      alvo.classList.add(CLASSE_ARRASTANDO);
+      // A ferramenta ativa (cortes, janela, pan, outra medida...) não deve agir neste clique.
       ev.stopPropagation();
       ev.preventDefault();
       window.addEventListener('mousemove', aoMover, true);
@@ -177,4 +226,38 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     },
     true,
   );
+
+  // Mãozinha: mostra onde o clique arrasta uma medida em vez de usar a ferramenta ativa.
+  let marcado: HTMLDivElement | null = null;
+  let pendente: MouseEvent | null = null;
+  const limparCursor = (): void => {
+    marcado?.classList.remove(CLASSE_SOBRE, CLASSE_ALCA);
+    marcado = null;
+  };
+  const atualizarCursor = (): void => {
+    const ev = pendente;
+    pendente = null;
+    if (!ev || arrasto) return;
+    const element = ev.buttons === 0 && !ocupado() ? elementoDoEvento(ev) : null;
+    let achado: Alvo | null = null;
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      try {
+        achado = alvoNoPonto(element, [ev.clientX - rect.left, ev.clientY - rect.top]);
+      } catch {
+        achado = null;
+      }
+    }
+    if (marcado && marcado !== element) limparCursor();
+    if (!element) return;
+    marcado = element;
+    element.classList.toggle(CLASSE_SOBRE, !!achado && !achado.redimensiona);
+    element.classList.toggle(CLASSE_ALCA, !!achado?.redimensiona);
+  };
+  area.addEventListener('mousemove', (ev) => {
+    const agendar = pendente === null;
+    pendente = ev;
+    if (agendar) requestAnimationFrame(atualizarCursor);
+  });
+  area.addEventListener('mouseleave', limparCursor);
 }

@@ -532,7 +532,6 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .cfg-tecla { min-width: 56px; font-family: monospace; }
 .cfg-tecla.capturando { outline: 2px solid var(--destaque); }
 .cfg-fechar { margin-top: 14px; }
-#chip-apagar-medidas { position: absolute; right: 10px; bottom: 10px; z-index: 20; background: #7f1d1d; color: #fff; border: 1px solid #ef4444; }
 
 /* Seletor de grade */
 .seletor-grade { padding: 8px; }
@@ -670,3 +669,30 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 
 .busca-modalidades { display: flex; gap: 10px; flex-wrap: wrap; }
 .busca-modalidade { white-space: nowrap; }
+
+/* Mãozinha sobre uma medida que pode ser arrastada (vence o cursor da ferramenta ativa). */
+.viewport-2d.sobre-medida, .viewport-2d.sobre-medida * { cursor: grab !important; }
+.viewport-2d.sobre-alca-medida, .viewport-2d.sobre-alca-medida * { cursor: pointer !important; }
+.viewport-2d.arrastando-medida, .viewport-2d.arrastando-medida * { cursor: grabbing !important; }
+
+/* Menu suspenso na posição do mouse (botão direito e cubo de orientação). */
+.menu-flutuante { position: fixed; z-index: 200; font-size: 12px; }
+.menu-flutuante-painel { min-width: 190px; padding: 5px; background: var(--painel); border: 1px solid var(--borda); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; gap: 1px; }
+.menu-flutuante-grupo { position: relative; display: flex; }
+.menu-flutuante-grupo > .menu-flutuante-painel { display: none; position: absolute; left: calc(100% - 2px); top: -6px; z-index: 1; }
+.menu-flutuante-grupo > .menu-flutuante-painel.para-esquerda { left: auto; right: calc(100% - 2px); }
+.menu-flutuante-grupo:hover > .menu-flutuante-painel, .menu-flutuante-grupo:focus-within > .menu-flutuante-painel { display: flex; }
+.menu-flutuante-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 4px 9px; background: transparent; border: 1px solid transparent; border-radius: 4px; text-align: left; font-size: 12px; color: var(--texto); white-space: nowrap; }
+.menu-flutuante-item:hover:not(:disabled), .menu-flutuante-grupo:hover > .menu-flutuante-item { background: var(--item-hover); border-color: var(--borda); }
+.menu-flutuante-item[aria-checked="true"] { background: var(--item-ativo); border-color: var(--destaque); }
+.menu-flutuante-item kbd { font-family: inherit; font-size: 11px; color: var(--texto-fraco); background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 3px; }
+.menu-flutuante-seta { color: var(--texto-fraco); }
+
+/* Cubo de orientação (canto inferior direito, acima do texto do canto). */
+.cubo-orientacao { position: absolute; right: 46px; bottom: 58px; width: 46px; display: flex; flex-direction: column; align-items: center; gap: 5px; pointer-events: auto; cursor: pointer; -webkit-text-stroke: 0; text-shadow: none; user-select: none; }
+.cubo-orientacao[hidden] { display: none; }
+.cubo-cena { width: 30px; height: 30px; margin: 6px 0 4px; }
+.cubo { position: relative; width: 30px; height: 30px; transform-style: preserve-3d; }
+.cubo-face { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; line-height: 1; color: #0b1620; background: rgba(125, 211, 252, 0.92); border: 1px solid #0c4a6e; backface-visibility: hidden; }
+.cubo-rotulo { font-size: 11px; font-weight: 600; color: #fff; -webkit-text-stroke: 3px rgba(0, 0, 0, 0.92); paint-order: stroke fill; white-space: nowrap; }
+.cubo-orientacao:hover .cubo-face { background: #e0f2fe; }

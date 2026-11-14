@@ -1,9 +1,10 @@
 /**
- * Janela de configurações (⚙): aparência e texto das medidas, atalhos de teclado
+ * Janela de configurações (⚙): aparência e texto das medidas, mouse e zoom, atalhos de teclado
  * e janelas predefinidas. Tudo é guardado só neste computador (localStorage).
  */
 
 import {
+  interacao,
   JANELAS_PADRAO,
   MAX_JANELAS,
   medidas,
@@ -18,11 +19,12 @@ import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
 
 let caixa: HTMLDialogElement | undefined;
 let corpo: HTMLElement;
-type Aba = 'medidas' | 'atalhos' | 'janelas';
+type Aba = 'medidas' | 'interacao' | 'atalhos' | 'janelas';
 let abaAtual: Aba = 'medidas';
 
 const ABAS: Array<{ id: Aba; rotulo: string }> = [
   { id: 'medidas', rotulo: 'Medidas' },
+  { id: 'interacao', rotulo: 'Mouse e zoom' },
   { id: 'atalhos', rotulo: 'Atalhos' },
   { id: 'janelas', rotulo: 'Janelas' },
 ];
@@ -148,6 +150,36 @@ function abaMedidas(): HTMLElement {
       restaurarMedidas();
       desenhar();
     }),
+  );
+  return raiz;
+}
+
+// ---------------------------------------------------------------------------
+// Aba Mouse e zoom
+// ---------------------------------------------------------------------------
+
+function abaInteracao(): HTMLElement {
+  const it = interacao();
+  const mudou = (): void => salvarPreferencias();
+  const raiz = el('div', { class: 'cfg-aba' });
+  raiz.append(
+    el('h3', {}, 'Zoom'),
+    linha(
+      'Zoom a partir do centro da imagem',
+      campoCheck(it.zoomNoCentro, (v) => ((it.zoomNoCentro = v), mudou())),
+      'Ligado: a imagem cresce a partir do centro do quadro. Desligado: a partir do ponto onde está o mouse.',
+    ),
+    el('h3', {}, 'Medidas'),
+    linha(
+      'Voltar a passar cortes depois de cada medida',
+      campoCheck(it.voltarAoScroll, (v) => ((it.voltarAoScroll = v), mudou())),
+      'Ligado: ao terminar uma medida (linha, ângulo, ROI, sonda...), o botão esquerdo volta a passar cortes (crosshairs no MPR). Desligado: a ferramenta de medida continua ativa.',
+    ),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'A ferramenta de cada botão do mouse é escolhida no menu 🖱 da barra. Clique com o botão direito, sem arrastar, abre o menu rápido.',
+    ),
   );
   return raiz;
 }
@@ -304,7 +336,13 @@ function abaJanelas(): HTMLElement {
 // ---------------------------------------------------------------------------
 
 function desenhar(): void {
-  corpo.replaceChildren(abaAtual === 'medidas' ? abaMedidas() : abaAtual === 'atalhos' ? abaAtalhos() : abaJanelas());
+  const abas: Record<Aba, () => HTMLElement> = {
+    medidas: abaMedidas,
+    interacao: abaInteracao,
+    atalhos: abaAtalhos,
+    janelas: abaJanelas,
+  };
+  corpo.replaceChildren(abas[abaAtual]());
   for (const b of caixa!.querySelectorAll<HTMLButtonElement>('.cfg-abas button')) {
     b.classList.toggle('ativa', b.dataset.aba === abaAtual);
   }

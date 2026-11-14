@@ -3,7 +3,7 @@
  * do botão esquerdo e ações sobre a imagem (inverter, girar, espelhar, presets, medidas).
  */
 
-import { Enums, type Types } from '@cornerstonejs/core';
+import { Enums, eventTarget, type Types } from '@cornerstonejs/core';
 import {
   AngleTool,
   annotation,
@@ -21,11 +21,12 @@ import {
   WindowLevelTool,
   ZoomTool,
 } from '@cornerstonejs/tools';
-import { preferencias, salvarPreferencias, type Janela } from '../state/preferencias';
+import { EVENTO_PREFERENCIAS, interacao, preferencias, salvarPreferencias, type Janela } from '../state/preferencias';
 import { estado } from '../state/store';
 import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
 import { textoAngulo, textoDistancia, textoRoi } from './estiloMedidas';
 import { DesvioLinhaMediaTool } from './desvioLinhaMedia';
+import { NOME_GIRAR_PLANO, restaurarPlanoGirado } from './girarPlano';
 import { FERRAMENTA_LOCALIZADOR_3D } from './localizador3d';
 import {
   AnguloCobbTool,
@@ -66,6 +67,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: PanTool.toolName, rotulo: 'Pan', tecla: 'h', categoria: 'navegacao' },
   { nome: ZoomTool.toolName, rotulo: 'Zoom', tecla: 'z', categoria: 'navegacao' },
   { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar', tecla: 'x', categoria: 'navegacao' },
+  { nome: NOME_GIRAR_PLANO, rotulo: '⟲ Girar plano', tecla: 'i', categoria: 'navegacao' },
   { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true, categoria: 'navegacao' },
   { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd', categoria: 'medida' },
   { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'b', categoria: 'medida' },
@@ -116,6 +118,7 @@ export const OPCOES_SECUNDARIAS: OpcaoBotao[] = [
   { nome: PanTool.toolName, rotulo: 'Pan' },
   { nome: StackScrollTool.toolName, rotulo: 'Passar cortes' },
   { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar' },
+  { nome: NOME_GIRAR_PLANO, rotulo: '⟲ Girar plano' },
 ];
 
 /** A roda só responde a cortes e zoom (testado: janela/nível e pan não reagem a ela). */
@@ -215,6 +218,34 @@ function criarGrupoFerramentas(): void {
   });
   grupoCriado = true;
   aplicarAtribuicoes();
+  aplicarPreferenciasInteracao();
+  document.addEventListener(EVENTO_PREFERENCIAS, aplicarPreferenciasInteracao);
+  eventTarget.addEventListener(EnumsTools.Events.ANNOTATION_COMPLETED, aoConcluirMedida);
+}
+
+/** Zoom a partir do centro do quadro ou do ponto do mouse, conforme as configurações. */
+function aplicarPreferenciasInteracao(): void {
+  ToolGroupManager.getToolGroup(ID_GRUPO)?.setToolConfiguration(ZoomTool.toolName, {
+    zoomToCenter: interacao().zoomNoCentro,
+  });
+}
+
+function ferramentaPadrao(): string {
+  return modoMprAtivo ? CrosshairsTool.toolName : StackScrollTool.toolName;
+}
+
+/** Medida concluída: se o usuário pediu, o botão esquerdo volta a passar cortes. */
+function aoConcluirMedida(evt: Event): void {
+  if (!interacao().voltarAoScroll) return;
+  const nome = (evt as CustomEvent<{ annotation?: { metadata?: { toolName?: string } } }>).detail?.annotation?.metadata?.toolName;
+  const atual = ferramentaPrimariaAtual();
+  // Só quando a medida veio da ferramenta do botão esquerdo (não a do botão lateral, por exemplo).
+  if (!nome || nome !== atual) return;
+  if (!FERRAMENTAS_PRIMARIAS.some((f) => f.nome === atual && f.categoria === 'medida')) return;
+  // Fora da pilha de chamadas da ferramenta, que ainda está terminando o próprio clique.
+  setTimeout(() => {
+    if (ferramentaPrimariaAtual() === atual) escolherFerramentaPrimaria(ferramentaPadrao());
+  }, 0);
 }
 
 /** Liga as linhas de referência com `origemId` como fonte, ou desliga (origemId = null). */
@@ -285,6 +316,17 @@ export function definirModoMprFerramentas(ativo: boolean): void {
     aplicarAtribuicoes();
   }
   document.dispatchEvent(new CustomEvent(EVENTO_BOTOES_MUDARAM));
+}
+
+/** Centro do crosshair do MPR (ponto comum aos três planos), ou null fora do MPR. */
+export function centroCrosshair(): Types.Point3 | null {
+  if (!modoMprAtivo) return null;
+  const inst = ToolGroupManager.getToolGroup(ID_GRUPO)?.getToolInstance(CrosshairsTool.toolName) as
+    | { toolCenter?: ArrayLike<number> }
+    | undefined;
+  const c = inst?.toolCenter;
+  if (!c || c.length < 3 || ![c[0], c[1], c[2]].every((x) => Number.isFinite(x))) return null;
+  return [c[0]!, c[1]!, c[2]!];
 }
 
 export function emModoMprFerramentas(): boolean {
@@ -386,7 +428,7 @@ export function espelhar(): Promise<void> {
   });
 }
 
-/** Volta janela, zoom, pan, rotação, espelhamento e crosshairs ao estado inicial. */
+/** Volta janela, zoom, pan, rotação, espelhamento, giro do plano e crosshairs ao estado inicial. */
 export async function restaurar(): Promise<void> {
   if (modoMprAtivo) {
     const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
@@ -396,6 +438,8 @@ export async function restaurar(): Promise<void> {
     inst?.resetCrosshairs?.();
   }
   await comViewport((v) => {
+    // Plano girado (oblíquo): primeiro volta ao plano reto.
+    restaurarPlanoGirado(v);
     v.resetProperties();
     v.resetCamera();
   }, true);
@@ -455,7 +499,7 @@ export async function cancelar(): Promise<void> {
     if (v.element instanceof HTMLDivElement) cancelActiveManipulations(v.element);
   }
   annotation.selection.deselectAnnotation();
-  escolherFerramentaPrimaria(modoMprAtivo ? CrosshairsTool.toolName : StackScrollTool.toolName);
+  escolherFerramentaPrimaria(ferramentaPadrao());
   await redesenhar();
 }
 
