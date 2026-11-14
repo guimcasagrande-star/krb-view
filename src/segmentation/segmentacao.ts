@@ -8,8 +8,10 @@
  * série (`mostrarNosViewports`) e entrega o volume de referência na criação.
  */
 
-import { cache, type Types, volumeLoader } from '@cornerstonejs/core';
+import { cache, eventTarget, type Types, volumeLoader } from '@cornerstonejs/core';
 import { Enums as EnumsTools, segmentation } from '@cornerstonejs/tools';
+import type { ScalarVolume } from '../volume/voxelStats';
+import { type LinhaVolumetria, volumetriaDosSegmentos } from './volumetria';
 
 const LABELMAP = EnumsTools.SegmentationRepresentations.Labelmap;
 
@@ -36,7 +38,34 @@ interface SegmentacaoDaPilha {
   lut: Types.ColorLUT;
   /** Solta a referência ao volume da série, guardada enquanto a segmentação existe. */
   liberar: () => void;
+  /** Volumetria (fase 9.2): última calculada, e o estado do cálculo. */
+  volumetria?: Volumetria;
+  calculando?: boolean;
+  recalcularDepois?: boolean;
+  temporizador?: ReturnType<typeof setTimeout>;
 }
+
+export interface Volumetria {
+  linhas: LinhaVolumetria[];
+  unidade: string;
+  ehPet: boolean;
+  /** Mensagem quando não foi possível calcular. */
+  erro?: string;
+}
+
+/** Valores da série (HU ou SUV) na grade da máscara; fornecido por `viewport2d`. */
+export type ResolvedorValores = (
+  pilhaId: string,
+) => Promise<{ volume: ScalarVolume; unidade: string; ehPet: boolean } | { erro: string }>;
+
+let resolvedorValores: ResolvedorValores | null = null;
+
+export function definirResolvedorValores(fn: ResolvedorValores): void {
+  resolvedorValores = fn;
+}
+
+/** Espera depois da última edição antes de recalcular (não recalcula a cada pincelada). */
+const ATRASO_VOLUMETRIA_MS = 600;
 
 /** Cores dos segmentos, na ordem em que são criados (repete depois do último). */
 const PALETA: Array<[number, number, number]> = [
@@ -146,6 +175,7 @@ export function apagarSegmentacao(pilhaId: string): void {
   const seg = porPilha.get(pilhaId);
   if (!seg) return;
   porPilha.delete(pilhaId);
+  if (seg.temporizador) clearTimeout(seg.temporizador);
   seg.liberar();
   try {
     segmentation.removeSegmentation(seg.segmentationId);
@@ -164,6 +194,76 @@ export function apagarSegmentacao(pilhaId: string): void {
 export function apagarTodasSegmentacoes(): void {
   for (const id of [...porPilha.keys()]) apagarSegmentacao(id);
 }
+
+// ---------- volumetria (fase 9.2) ----------
+
+export function volumetriaDa(pilhaId: string | null | undefined): { volumetria?: Volumetria; calculando: boolean } {
+  const seg = segmentacaoDaPilha(pilhaId);
+  return { volumetria: seg?.volumetria, calculando: !!seg?.calculando || !!seg?.temporizador };
+}
+
+function agendarVolumetria(seg: SegmentacaoDaPilha, atrasoMs = ATRASO_VOLUMETRIA_MS): void {
+  if (seg.temporizador) clearTimeout(seg.temporizador);
+  seg.temporizador = setTimeout(() => {
+    seg.temporizador = undefined;
+    void calcularVolumetria(seg);
+  }, atrasoMs);
+  avisar();
+}
+
+async function calcularVolumetria(seg: SegmentacaoDaPilha): Promise<void> {
+  if (seg.calculando) {
+    seg.recalcularDepois = true;
+    return;
+  }
+  if (!resolvedorValores || porPilha.get(seg.pilhaId) !== seg) return;
+  seg.calculando = true;
+  avisar();
+  try {
+    const valores = await resolvedorValores(seg.pilhaId);
+    if (porPilha.get(seg.pilhaId) !== seg) return;
+    if ('erro' in valores) {
+      seg.volumetria = { linhas: [], unidade: '', ehPet: false, erro: valores.erro };
+      return;
+    }
+    const rotulos = cache.getVolume(seg.labelmapId)?.voxelManager?.getCompleteScalarDataArray?.();
+    if (!rotulos) {
+      seg.volumetria = { linhas: [], unidade: valores.unidade, ehPet: valores.ehPet, erro: 'Máscara indisponível.' };
+      return;
+    }
+    const linhas = volumetriaDosSegmentos(
+      rotulos as ArrayLike<number>,
+      valores.volume,
+      seg.segmentos.map((s) => ({ indice: s.indice, nome: s.nome })),
+      valores.ehPet,
+    );
+    seg.volumetria = { linhas, unidade: valores.unidade, ehPet: valores.ehPet };
+  } catch (e) {
+    seg.volumetria = {
+      linhas: [],
+      unidade: '',
+      ehPet: false,
+      erro: e instanceof Error ? e.message : 'Falha ao calcular a volumetria.',
+    };
+  } finally {
+    seg.calculando = false;
+    if (seg.recalcularDepois) {
+      seg.recalcularDepois = false;
+      agendarVolumetria(seg, 0);
+    } else {
+      avisar();
+    }
+  }
+}
+
+// Qualquer edição da máscara (pincel, esfera, borracha, preencher, crescer região, apagar
+// segmento) dispara este evento do Cornerstone: recalcula a volumetria daquela segmentação.
+eventTarget.addEventListener(EnumsTools.Events.SEGMENTATION_DATA_MODIFIED, (e: Event) => {
+  const id = (e as CustomEvent<{ segmentationId?: string }>).detail?.segmentationId;
+  for (const seg of porPilha.values()) {
+    if (seg.segmentationId === id) agendarVolumetria(seg);
+  }
+});
 
 export function novoSegmento(pilhaId: string): Segmento | undefined {
   const seg = porPilha.get(pilhaId);
@@ -189,6 +289,7 @@ export function novoSegmento(pilhaId: string): Segmento | undefined {
     ]);
   }
   definirSegmentoAtivo(pilhaId, indice);
+  agendarVolumetria(seg);
   return novo;
 }
 
@@ -205,6 +306,7 @@ export function apagarSegmento(pilhaId: string, indice: number): void {
   if (!seg) return;
   segmentation.removeSegment(seg.segmentationId, indice, { setNextSegmentAsActive: false });
   seg.segmentos = seg.segmentos.filter((s) => s.indice !== indice);
+  agendarVolumetria(seg);
   if (seg.segmentos.length === 0) {
     // Mantém sempre um segmento para pintar.
     novoSegmento(pilhaId);
@@ -218,6 +320,8 @@ export function renomearSegmento(pilhaId: string, indice: number, nome: string):
   const s = porPilha.get(pilhaId)?.segmentos.find((x) => x.indice === indice);
   if (!s || !nome.trim()) return;
   s.nome = nome.trim();
+  const linha = porPilha.get(pilhaId)?.volumetria?.linhas.find((l) => l.indice === indice);
+  if (linha) linha.nome = s.nome;
   avisar();
 }
 

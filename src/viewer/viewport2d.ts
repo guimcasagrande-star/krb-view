@@ -54,6 +54,7 @@ import { modalidade3d } from '../render3d/predefinicoes3d';
 import {
   apagarTodasSegmentacoes,
   criarSegmentacao,
+  definirResolvedorValores,
   faixaSegmentacao,
   mostrarNosViewports,
   pintarMascara,
@@ -3509,6 +3510,20 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
   definirResolvedorVoi(volumeParaVoi);
   definirResolvedorSonda(valoresNoPonto);
   definirResolvedorCrescer(crescerRegiaoNoPonto);
+  // Volumetria: valores da série (HU ou SUV) na mesma grade da máscara.
+  definirResolvedorValores(async (pilhaId) => {
+    const slot = slots.find((s) => s.pilha?.id === pilhaId);
+    const stack = slot?.pilha;
+    const ids = registro.get(pilhaId)?.ids;
+    if (!stack || !ids) return { erro: 'A série não está aberta em nenhum quadro.' };
+    const v = await carregarVoxels(stack, ids);
+    if ('erro' in v) return v;
+    return {
+      volume: { data: v.data, grid: v.grid },
+      unidade: unidadeDaSerie(stack),
+      ehPet: stack.instances.some((x) => x.modality === 'PT'),
+    };
+  });
   // Ferramenta de segmentação escolhida (barra, painel ou tecla): cria a segmentação da série ativa.
   document.addEventListener(EVENTO_BOTOES_MUDARAM, () => {
     if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) void garantirSegmentacaoAtiva();

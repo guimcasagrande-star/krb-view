@@ -568,12 +568,17 @@ body.arrastando #area-viewports { outline: 2px dashed var(--destaque); outline-o
 .seg-linha label { display: inline-flex; align-items: center; gap: 3px; }
 .seg-valor { color: var(--texto); min-width: 40px; font-variant-numeric: tabular-nums; }
 .seg-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.seg-lista li { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
+.seg-lista li { display: flex; flex-direction: column; gap: 1px; padding: 2px 4px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
+.seg-cabeca { display: flex; align-items: center; gap: 4px; }
+.seg-medidas { color: var(--texto-fraco); font-size: 11px; font-variant-numeric: tabular-nums; padding-left: 26px; }
+.seg-medidas:empty { display: none; }
+.seg-calculo { color: var(--texto-fraco); font-size: 11px; min-height: 0; }
+.seg-calculo:empty { display: none; }
 .seg-lista li.ativo { border-color: var(--destaque); background: rgba(56, 189, 248, 0.08); }
 .seg-lista input[type="color"] { width: 22px; height: 20px; padding: 0; border: none; background: none; cursor: pointer; }
 .seg-lista .seg-nome { flex: 1; min-width: 0; font-size: 12px; }
 .seg-lista button { padding: 0 4px; font-size: 12px; background: none; border: none; cursor: pointer; }
-.seg-rodape { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.seg-rodape { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .seg-mensagem { color: var(--texto-fraco); min-height: 1em; }
 .suv-tabela { border-collapse: collapse; width: 100%; }
 .suv-tabela td { padding: 1px 0; vertical-align: top; }

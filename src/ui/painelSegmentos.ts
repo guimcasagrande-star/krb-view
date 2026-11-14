@@ -25,7 +25,9 @@ import {
   novoSegmento,
   renomearSegmento,
   segmentacaoDaPilha,
+  volumetriaDa,
 } from '../segmentation/segmentacao';
+import { csvVolumetria, type LinhaVolumetria } from '../segmentation/volumetria';
 import { estado } from '../state/store';
 import { escolherFerramentaPrimaria, EVENTO_BOTOES_MUDARAM, ferramentaPrimariaAtual, ID_GRUPO } from '../tools/grupo';
 import { EVENTO_ESTADO_VIEWPORTS, garantirSegmentacaoAtiva } from '../viewer/viewport2d';
@@ -60,6 +62,43 @@ export async function novoSegmentoAtivo(): Promise<void> {
     return;
   }
   novoSegmento(id);
+}
+
+const fmt = (n: number | undefined, casas: number): string =>
+  n === undefined || !Number.isFinite(n)
+    ? '—'
+    : n.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+
+/** Texto curto da volumetria de um segmento (abaixo do nome, no painel). */
+function textoVolumetria(l: LinhaVolumetria | undefined, unidade: string, ehPet: boolean): string {
+  if (!l) return '';
+  if (l.voxels === 0) return 'vazio';
+  if (ehPet) {
+    return (
+      `MTV ${fmt(l.volumeMl, 2)} mL · máx ${fmt(l.max, 2)} · médio ${fmt(l.media, 2)}` +
+      `${l.pico !== undefined ? ` · pico ${fmt(l.pico, 2)}` : ''} · TLG ${fmt(l.tlg, 1)}`
+    );
+  }
+  const u = unidade ? ` ${unidade}` : '';
+  return `${fmt(l.volumeMl, 2)} mL · ${fmt(l.media, 0)} ± ${fmt(l.dp, 0)}${u} · ${fmt(l.min, 0)} a ${fmt(l.max, 0)}`;
+}
+
+/** Baixa a tabela de volumes da série ativa em CSV (só números e nomes de segmentos). */
+export function exportarCsvSegmentos(): void {
+  const pilha = estado.pilhaAtiva;
+  const { volumetria } = volumetriaDa(pilha?.id);
+  if (!pilha || !volumetria || volumetria.erro || volumetria.linhas.length === 0) return;
+  const p = pilha.instances[0];
+  const serie = [p?.modality, p?.seriesDescription].filter(Boolean).join(' · ');
+  const csv = csvVolumetria(volumetria.linhas, volumetria.unidade, volumetria.ehPet, serie);
+  const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'volumetria-segmentos.csv';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 function numeroOuNulo(texto: string): number | null {
@@ -169,16 +208,21 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
 
   const rodape = document.createElement('div');
   rodape.className = 'seg-rodape';
+  const botaoCsv = botao('Exportar CSV', 'Baixar a tabela de volumes e valores dos segmentos (CSV)', exportarCsvSegmentos);
   rodape.append(
     botao('+ Novo segmento', 'Criar outro segmento (passa a ser o ativo)', () => void novoSegmentoAtivo()),
+    botaoCsv,
     botao('Apagar segmentação', 'Apagar todos os segmentos desta série', apagarSegmentacaoAtiva, 'link'),
   );
+
+  const estadoCalculo = document.createElement('div');
+  estadoCalculo.className = 'seg-calculo';
 
   const mensagem = document.createElement('div');
   mensagem.className = 'seg-mensagem';
   mensagem.setAttribute('role', 'status');
 
-  painel.append(titulo, linhaFerramentas, linhaRaio, linhaFaixa, linhaEstilo, lista, rodape, mensagem);
+  painel.append(titulo, linhaFerramentas, linhaRaio, linhaFaixa, linhaEstilo, lista, estadoCalculo, rodape, mensagem);
 
   // --- parte que muda: lista de segmentos e destaque da ferramenta ---
   function atualizar(): void {
@@ -191,6 +235,16 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
     const f = faixaSegmentacao();
     if (document.activeElement !== campoMin) campoMin.value = f.min === null ? '' : String(f.min);
     if (document.activeElement !== campoMax) campoMax.value = f.max === null ? '' : String(f.max);
+
+    const { volumetria, calculando } = volumetriaDa(pilhaId);
+    estadoCalculo.textContent = calculando
+      ? 'Calculando volumes…'
+      : volumetria?.erro
+        ? `Volumetria indisponível: ${volumetria.erro}`
+        : '';
+    botaoCsv.disabled = !volumetria || !!volumetria.erro || volumetria.linhas.every((l) => l.voxels === 0);
+    // Não refaz a lista enquanto o usuário edita um nome (perderia o foco).
+    if (lista.contains(document.activeElement) && document.activeElement instanceof HTMLInputElement) return;
 
     lista.replaceChildren(
       ...seg.segmentos.map((s) => {
@@ -224,7 +278,17 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
         const apagar = botao('🗑', 'Apagar este segmento', () => {
           if (window.confirm(`Apagar "${s.nome}"?`)) apagarSegmento(pilhaId, s.indice);
         });
-        li.append(cor, nome, ver, travar, apagar);
+        const cabeca = document.createElement('div');
+        cabeca.className = 'seg-cabeca';
+        cabeca.append(cor, nome, ver, travar, apagar);
+        const medidas = document.createElement('div');
+        medidas.className = 'seg-medidas';
+        medidas.textContent = textoVolumetria(
+          volumetria?.linhas.find((l) => l.indice === s.indice),
+          volumetria?.unidade ?? '',
+          volumetria?.ehPet ?? false,
+        );
+        li.append(cabeca, medidas);
         return li;
       }),
     );
