@@ -39,7 +39,12 @@ import { exportarImagemAtiva } from './exportarImagem';
 import { abrirBuscarPacs } from './buscarPacs';
 import { abrirServidoresPacs } from './servidoresPacs';
 import { FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
-import { apagarSegmentacaoAtiva, novoSegmentoAtivo } from './painelSegmentos';
+import {
+  abrirSegmentacaoDeArquivo,
+  apagarSegmentacaoAtiva,
+  novoSegmentoAtivo,
+  salvarSegmentacaoAtiva,
+} from './painelSegmentos';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
@@ -585,6 +590,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   menuSegmentar.painel.append(
     divisorMenu(),
     itemMenu('+ Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar),
+    itemMenu('Salvar segmentação…', undefined, () => void salvarSegmentacaoAtiva(), menuSegmentar.fechar),
+    itemMenu('Abrir segmentação…', undefined, () => void abrirSegmentacaoDeArquivo(), menuSegmentar.fechar),
     itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar),
   );
 

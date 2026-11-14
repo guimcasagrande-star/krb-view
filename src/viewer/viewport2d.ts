@@ -52,9 +52,13 @@ import {
 } from '../tools/mipRotatorio';
 import { modalidade3d } from '../render3d/predefinicoes3d';
 import {
+  apagarSegmentacao,
   apagarTodasSegmentacoes,
+  aplicarSegmentacaoSalva,
   criarSegmentacao,
   definirResolvedorValores,
+  geometriaDaSegmentacao,
+  temVoxelsPintados,
   faixaSegmentacao,
   mostrarNosViewports,
   pintarMascara,
@@ -62,6 +66,7 @@ import {
 } from '../segmentation/segmentacao';
 import { definirResolvedorCrescer, ehFerramentaSegmentacao } from '../segmentation/ferramentas';
 import { regionGrow } from '../volume/voxelStats';
+import { conferirSegmentacao, lerSegmentacao } from '../segmentation/arquivoSegmentacao';
 import {
   adicionarAoGrupo3d,
   type Controlador3d,
@@ -861,8 +866,11 @@ let criandoSegmentacao: Promise<void> | null = null;
  * (montado se preciso) e guarda uma referência a ele enquanto a segmentação existir.
  */
 export function garantirSegmentacaoAtiva(): Promise<void> {
+  return garantirSegmentacaoNoSlot(slots[ativo]);
+}
+
+function garantirSegmentacaoNoSlot(slot: Slot | undefined): Promise<void> {
   criandoSegmentacao ??= (async () => {
-    const slot = slots[ativo];
     const stack = slot?.pilha;
     if (!slot || !stack || segmentacaoDaPilha(stack.id)) return;
     if (semCortes(slot)) {
@@ -892,6 +900,41 @@ export function garantirSegmentacaoAtiva(): Promise<void> {
     criandoSegmentacao = null;
   });
   return criandoSegmentacao;
+}
+
+/**
+ * Reabre uma segmentação salva (.vseg) na série aberta de mesmo UID, conferindo a grade.
+ * Devolve uma mensagem para o usuário (sucesso ou motivo da recusa).
+ */
+export async function abrirSegmentacaoSalva(bytes: Uint8Array): Promise<string> {
+  const { cabecalho, rotulos } = await lerSegmentacao(bytes);
+  const slot =
+    (slots[ativo]?.pilha?.instances[0]?.seriesInstanceUid === cabecalho.serieUid ? slots[ativo] : undefined) ??
+    slots.find(
+      (s) =>
+        !s.celula.hidden && !semCortes(s) && s.pilha?.instances[0]?.seriesInstanceUid === cabecalho.serieUid,
+    );
+  const stack = slot?.pilha;
+  if (!slot || !stack) {
+    return `Abra a série da segmentação (${cabecalho.serie || cabecalho.serieUid}) num quadro de cortes e tente de novo.`;
+  }
+  const jaTinha = !!segmentacaoDaPilha(stack.id);
+  if (jaTinha && temVoxelsPintados(stack.id)) {
+    if (!window.confirm('Esta série já tem uma segmentação. Substituir pela do arquivo?')) return 'Nada foi alterado.';
+  }
+  if (!jaTinha) await garantirSegmentacaoNoSlot(slot);
+  const geometria = geometriaDaSegmentacao(stack.id);
+  if (!geometria) return 'Não foi possível preparar a segmentação desta série.';
+  const motivo = conferirSegmentacao(cabecalho, { serieUid: stack.instances[0]?.seriesInstanceUid, geometria });
+  if (motivo) {
+    if (!jaTinha) apagarSegmentacao(stack.id);
+    return `Segmentação não aplicada: ${motivo}`;
+  }
+  aplicarSegmentacaoSalva(stack.id, cabecalho.segmentos, cabecalho.ativo, rotulos);
+  ativarViewport(slot.indice);
+  sincronizar();
+  const n = cabecalho.segmentos.length;
+  return `Segmentação reaberta: ${n} segmento${n === 1 ? '' : 's'}.`;
 }
 
 /** Crescer região: cresce em 3D a partir do ponto, pela faixa do painel, no segmento ativo. */

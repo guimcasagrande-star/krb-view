@@ -28,9 +28,11 @@ import {
   volumetriaDa,
 } from '../segmentation/segmentacao';
 import { csvVolumetria, type LinhaVolumetria } from '../segmentation/volumetria';
+import { codificarSegmentacao, EXTENSAO_SEGMENTACAO, nomeSugerido } from '../segmentation/arquivoSegmentacao';
+import { dadosParaSalvar } from '../segmentation/segmentacao';
 import { estado } from '../state/store';
 import { escolherFerramentaPrimaria, EVENTO_BOTOES_MUDARAM, ferramentaPrimariaAtual, ID_GRUPO } from '../tools/grupo';
-import { EVENTO_ESTADO_VIEWPORTS, garantirSegmentacaoAtiva } from '../viewer/viewport2d';
+import { abrirSegmentacaoSalva, EVENTO_ESTADO_VIEWPORTS, garantirSegmentacaoAtiva } from '../viewer/viewport2d';
 
 let raioMm = RAIO_PADRAO_MM;
 
@@ -99,6 +101,105 @@ export function exportarCsvSegmentos(): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function avisoSegmentacao(texto: string): void {
+  document.dispatchEvent(new CustomEvent(EVENTO_MENSAGEM_SEGMENTACAO, { detail: texto }));
+}
+
+/** Seletor de arquivo do sistema (Chrome, Edge e o programa instalado). */
+interface JanelaComArquivos {
+  showSaveFilePicker?: (o: unknown) => Promise<{ name: string; createWritable(): Promise<{ write(d: BlobPart): Promise<void>; close(): Promise<void> }> }>;
+  showOpenFilePicker?: (o: unknown) => Promise<Array<{ getFile(): Promise<File> }>>;
+}
+
+const TIPOS_VSEG = [{ description: 'Segmentação (.vseg)', accept: { 'application/octet-stream': [EXTENSAO_SEGMENTACAO] } }];
+
+const cancelado = (e: unknown): boolean => e instanceof DOMException && e.name === 'AbortError';
+
+/**
+ * Salva a segmentação da série ativa num arquivo .vseg, na pasta que o usuário escolher.
+ * Sem o seletor do sistema, o navegador baixa o arquivo (pasta de downloads).
+ */
+export async function salvarSegmentacaoAtiva(): Promise<void> {
+  const pilha = estado.pilhaAtiva;
+  const dados = dadosParaSalvar(pilha?.id ?? '');
+  const p = pilha?.instances[0];
+  if (!pilha || !dados) {
+    avisoSegmentacao('Não há segmentação nesta série para salvar.');
+    return;
+  }
+  if (!p?.seriesInstanceUid) {
+    avisoSegmentacao('A série não tem identificador (Series Instance UID); não dá para salvar com segurança.');
+    return;
+  }
+  const serie = [p.modality, p.seriesDescription].filter(Boolean).join(' · ');
+  const bytes = await codificarSegmentacao(
+    {
+      serieUid: p.seriesInstanceUid,
+      ...(p.frameOfReferenceUid ? { referencialUid: p.frameOfReferenceUid } : {}),
+      serie,
+      geometria: dados.geometria,
+      segmentos: dados.segmentos,
+      ativo: dados.ativo,
+      salvoEm: new Date().toISOString(),
+    },
+    dados.rotulos,
+  );
+  const nome = nomeSugerido(serie);
+  const janela = window as unknown as JanelaComArquivos;
+  try {
+    if (janela.showSaveFilePicker) {
+      const arquivo = await janela.showSaveFilePicker({ suggestedName: nome, types: TIPOS_VSEG });
+      const escrita = await arquivo.createWritable();
+      await escrita.write(bytes as BlobPart);
+      await escrita.close();
+      avisoSegmentacao(`Segmentação salva em "${arquivo.name}".`);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/octet-stream' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    avisoSegmentacao(`Segmentação baixada como "${nome}".`);
+  } catch (e) {
+    if (!cancelado(e)) avisoSegmentacao(`Não foi possível salvar: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+async function escolherArquivoVseg(): Promise<File | null> {
+  const janela = window as unknown as JanelaComArquivos;
+  if (janela.showOpenFilePicker) {
+    const [h] = await janela.showOpenFilePicker({ types: TIPOS_VSEG, multiple: false });
+    return h ? h.getFile() : null;
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = EXTENSAO_SEGMENTACAO;
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
+    input.click();
+  });
+}
+
+/** Reabre uma segmentação .vseg na série aberta correspondente. */
+export async function abrirSegmentacaoDeArquivo(): Promise<void> {
+  let msg: string;
+  try {
+    const arquivo = await escolherArquivoVseg();
+    if (!arquivo) return;
+    msg = await abrirSegmentacaoSalva(new Uint8Array(await arquivo.arrayBuffer()));
+  } catch (e) {
+    if (cancelado(e)) return;
+    msg = e instanceof Error ? e.message : 'Não foi possível abrir a segmentação.';
+  }
+  avisoSegmentacao(msg);
+  // Sem o painel visível (a série não tem segmentação), a mensagem precisa aparecer de outro jeito.
+  if (document.getElementById('painel-segmentos')?.hidden) window.alert(msg);
 }
 
 function numeroOuNulo(texto: string): number | null {
@@ -211,6 +312,8 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
   const botaoCsv = botao('Exportar CSV', 'Baixar a tabela de volumes e valores dos segmentos (CSV)', exportarCsvSegmentos);
   rodape.append(
     botao('+ Novo segmento', 'Criar outro segmento (passa a ser o ativo)', () => void novoSegmentoAtivo()),
+    botao('Salvar…', 'Salvar a segmentação num arquivo .vseg, na pasta que você escolher', () => void salvarSegmentacaoAtiva()),
+    botao('Abrir…', 'Reabrir uma segmentação salva (.vseg) na série aberta', () => void abrirSegmentacaoDeArquivo()),
     botaoCsv,
     botao('Apagar segmentação', 'Apagar todos os segmentos desta série', apagarSegmentacaoAtiva, 'link'),
   );

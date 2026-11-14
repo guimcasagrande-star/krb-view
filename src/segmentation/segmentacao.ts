@@ -12,6 +12,7 @@ import { cache, eventTarget, type Types, volumeLoader } from '@cornerstonejs/cor
 import { Enums as EnumsTools, segmentation } from '@cornerstonejs/tools';
 import type { ScalarVolume } from '../volume/voxelStats';
 import { type LinhaVolumetria, volumetriaDosSegmentos } from './volumetria';
+import type { GeometriaSalva, SegmentoSalvo } from './arquivoSegmentacao';
 
 const LABELMAP = EnumsTools.SegmentationRepresentations.Labelmap;
 
@@ -398,21 +399,27 @@ export function mostrarNosViewports(lista: Array<{ idViewport: string; pilhaId: 
     for (const id of atuais) {
       if (id !== desejada) segmentation.removeSegmentationRepresentations(idViewport, { segmentationId: id });
     }
-    if (!desejada || atuais.includes(desejada)) continue;
+    if (!desejada) continue;
     const seg = segmentacaoDaPilha(pilhaId)!;
-    segmentation.addLabelmapRepresentationToViewport(idViewport, [
-      { segmentationId: desejada, config: { colorLUTOrIndex: seg.indiceLut } },
-    ]);
-    segmentation.activeSegmentation.setActiveSegmentation(idViewport, desejada);
-    for (const s of seg.segmentos) {
-      if (!s.visivel) {
-        segmentation.config.visibility.setSegmentIndexVisibility(
-          idViewport,
-          { segmentationId: desejada, type: LABELMAP },
-          s.indice,
-          false,
-        );
-      }
+    if (!atuais.includes(desejada)) {
+      segmentation.addLabelmapRepresentationToViewport(idViewport, [
+        { segmentationId: desejada, config: { colorLUTOrIndex: seg.indiceLut } },
+      ]);
+      segmentation.activeSegmentation.setActiveSegmentation(idViewport, desejada);
+    }
+    sincronizarVisibilidade(seg, idViewport);
+  }
+}
+
+/**
+ * Leva ao viewport o mostrar/esconder do painel (a fonte da verdade). Algumas operações do
+ * Cornerstone (ex.: trocar a lista de segmentos ao reabrir um arquivo) voltam todos a visíveis.
+ */
+function sincronizarVisibilidade(seg: SegmentacaoDaPilha, idViewport: string): void {
+  const espec = { segmentationId: seg.segmentationId, type: LABELMAP };
+  for (const s of seg.segmentos) {
+    if (segmentation.config.visibility.getSegmentIndexVisibility(idViewport, espec, s.indice) !== s.visivel) {
+      segmentation.config.visibility.setSegmentIndexVisibility(idViewport, espec, s.indice, s.visivel);
     }
   }
 }
@@ -444,4 +451,93 @@ export function pintarMascara(pilhaId: string, mascara: Uint8Array, nx: number, 
     segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(seg.segmentationId, [...cortes], seg.ativo);
   }
   return pintados;
+}
+
+// ---------- salvar e reabrir (fase 9.3) ----------
+
+/** Grade da máscara da pilha (a mesma do volume da série). */
+export function geometriaDaSegmentacao(pilhaId: string): GeometriaSalva | undefined {
+  const seg = porPilha.get(pilhaId);
+  const vol = seg ? cache.getVolume(seg.labelmapId) : undefined;
+  if (!vol) return undefined;
+  return {
+    dims: [vol.dimensions[0], vol.dimensions[1], vol.dimensions[2]],
+    spacing: [vol.spacing[0], vol.spacing[1], vol.spacing[2]],
+    origin: [vol.origin[0], vol.origin[1], vol.origin[2]],
+    direction: Array.from(vol.direction as ArrayLike<number>),
+  };
+}
+
+/** Segmentos, segmento ativo e uma cópia dos rótulos (1 byte por voxel) para salvar. */
+export function dadosParaSalvar(
+  pilhaId: string,
+): { segmentos: SegmentoSalvo[]; ativo: number; rotulos: Uint8Array; geometria: GeometriaSalva } | undefined {
+  const seg = porPilha.get(pilhaId);
+  const geometria = geometriaDaSegmentacao(pilhaId);
+  const dados = seg ? cache.getVolume(seg.labelmapId)?.voxelManager?.getCompleteScalarDataArray?.() : undefined;
+  if (!seg || !geometria || !dados) return undefined;
+  return {
+    segmentos: seg.segmentos.map((s) => ({ ...s, cor: [...s.cor] as [number, number, number] })),
+    ativo: seg.ativo,
+    rotulos: Uint8Array.from(dados as ArrayLike<number>),
+    geometria,
+  };
+}
+
+/** Há algum voxel pintado na segmentação da pilha? */
+export function temVoxelsPintados(pilhaId: string): boolean {
+  const seg = porPilha.get(pilhaId);
+  const dados = seg ? cache.getVolume(seg.labelmapId)?.voxelManager?.getCompleteScalarDataArray?.() : undefined;
+  if (!dados) return false;
+  for (let i = 0; i < dados.length; i++) if (dados[i] !== 0) return true;
+  return false;
+}
+
+/**
+ * Substitui a máscara e os segmentos da pilha pelos de um arquivo (a geometria já foi conferida).
+ * A segmentação da pilha precisa existir.
+ */
+export function aplicarSegmentacaoSalva(pilhaId: string, segmentos: SegmentoSalvo[], ativo: number, rotulos: Uint8Array): void {
+  const seg = porPilha.get(pilhaId);
+  const vm = seg ? cache.getVolume(seg.labelmapId)?.voxelManager : undefined;
+  if (!seg || !vm) throw new Error('Segmentação indisponível.');
+  if (vm.setCompleteScalarDataArray) {
+    vm.setCompleteScalarDataArray(rotulos);
+  } else {
+    for (let i = 0; i < rotulos.length; i++) vm.setAtIndex(i, rotulos[i]!);
+  }
+  const lista = segmentos.length
+    ? segmentos
+    : [{ indice: 1, nome: 'Segmento 1', cor: PALETA[0]!, visivel: true, bloqueado: false }];
+  seg.segmentos = lista.map((s) => ({ ...s, cor: [...s.cor] as [number, number, number] }));
+  const segmentosCs: Record<number, { segmentIndex: number; label: string; locked: boolean; cachedStats: Record<string, unknown>; active: boolean }> = {};
+  for (const s of seg.segmentos) {
+    seg.lut[s.indice] = corRgba(s.cor);
+    segmentosCs[s.indice] = { segmentIndex: s.indice, label: s.nome, locked: s.bloqueado, cachedStats: {}, active: false };
+  }
+  segmentation.updateSegmentations([{ segmentationId: seg.segmentationId, payload: { segments: segmentosCs } }]);
+  for (const s of seg.segmentos) {
+    segmentation.segmentLocking.setSegmentIndexLocked(seg.segmentationId, s.indice, s.bloqueado);
+    for (const vp of viewportsCom(seg)) {
+      segmentation.config.color.setSegmentIndexColor(vp, seg.segmentationId, s.indice, corRgba(s.cor));
+      segmentation.config.visibility.setSegmentIndexVisibility(
+        vp,
+        { segmentationId: seg.segmentationId, type: LABELMAP },
+        s.indice,
+        s.visivel,
+      );
+    }
+  }
+  const ativoValido = seg.segmentos.some((s) => s.indice === ativo) ? ativo : seg.segmentos[0]!.indice;
+  definirSegmentoAtivo(pilhaId, ativoValido);
+  const nz = cache.getVolume(seg.labelmapId)?.dimensions[2] ?? 0;
+  segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(
+    seg.segmentationId,
+    Array.from({ length: nz }, (_, k) => k),
+  );
+  // A troca da lista de segmentos pode voltar todos a visíveis logo depois: reaplica o painel.
+  setTimeout(() => {
+    for (const vp of viewportsCom(seg)) sincronizarVisibilidade(seg, vp);
+  }, 50);
+  avisar();
 }
