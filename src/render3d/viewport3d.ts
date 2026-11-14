@@ -21,6 +21,7 @@ import {
   type Preset3d,
   predefinicaoPadrao,
   predefinicoesDa,
+  PRESETS_PROPRIOS,
   VISTAS_3D,
   type Vista3d,
 } from './predefinicoes3d';
@@ -64,8 +65,8 @@ export function removerDoGrupo3d(idViewport: string): void {
   if (grupo?.getViewportIds().includes(idViewport)) grupo.removeViewports(ID_MOTOR, idViewport);
 }
 
-function presetDoCornerstone(nome: string): Preset3d | undefined {
-  return (CONSTANTS.VIEWPORT_PRESETS as Preset3d[]).find((p) => p.name === nome);
+function presetPeloNome(nome: string): Preset3d | undefined {
+  return [...PRESETS_PROPRIOS, ...(CONSTANTS.VIEWPORT_PRESETS as Preset3d[])].find((p) => p.name === nome);
 }
 
 /** Centro do volume em coordenadas do paciente (pelos limites do ator). */
@@ -134,7 +135,7 @@ export function montar3d(opcoes: Opcoes3d): Controlador3d {
   const aplicar = (): void => {
     const v = opcoes.obterViewport();
     const p = lista.find((x) => x.id === e.id);
-    const base = p ? presetDoCornerstone(p.preset) : undefined;
+    const base = p ? presetPeloNome(p.preset) : undefined;
     if (!v || !base || !p) return;
     const ator = v.getDefaultActor()?.actor;
     if (!ator) return;

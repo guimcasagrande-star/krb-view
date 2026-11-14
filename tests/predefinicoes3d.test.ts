@@ -5,6 +5,7 @@ import {
   modalidade3d,
   PREDEFINICOES_3D,
   predefinicaoPadrao,
+  PRESETS_PROPRIOS,
   type Preset3d,
   VISTAS_3D,
 } from '../src/render3d/predefinicoes3d';
@@ -23,13 +24,22 @@ const base: Preset3d = {
 };
 
 describe('predefinições 3D', () => {
-  it('toda predefinição existe no Cornerstone instalado', () => {
-    const nomes = new Set((CONSTANTS.VIEWPORT_PRESETS as Preset3d[]).map((p) => p.name));
+  it('toda predefinição existe (no Cornerstone instalado ou nas próprias)', () => {
+    const nomes = new Set([...PRESETS_PROPRIOS, ...(CONSTANTS.VIEWPORT_PRESETS as Preset3d[])].map((p) => p.name));
     for (const p of PREDEFINICOES_3D) expect(nomes.has(p.preset), p.preset).toBe(true);
   });
 
+  it('Osso próprio não mostra músculo nem órgãos (opacidade zero até 180 HU)', () => {
+    const osso = PRESETS_PROPRIOS.find((p) => p.name === 'Visualizador-Osso')!;
+    const pontos = osso.scalarOpacity.split(' ').slice(1).map(Number);
+    for (let i = 0; i < pontos.length; i += 2) {
+      if (pontos[i]! <= 180) expect(pontos[i + 1]).toBe(0);
+    }
+  });
+
   it('TC abre em Osso, RM em RM padrão, PET não tem 3D', () => {
-    expect(predefinicaoPadrao('CT').preset).toBe('CT-Bone');
+    expect(predefinicaoPadrao('CT').rotulo).toBe('Osso');
+    expect(predefinicaoPadrao('CT').preset).toBe('Visualizador-Osso');
     expect(predefinicaoPadrao('MR').preset).toBe('MR-Default');
     expect(modalidade3d('PT')).toBeNull();
     expect(modalidade3d('CT')).toBe('CT');

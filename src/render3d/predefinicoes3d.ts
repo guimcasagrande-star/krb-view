@@ -23,19 +23,40 @@ export type Modalidade3d = 'CT' | 'MR';
 export interface Predefinicao3d {
   id: string;
   rotulo: string;
-  /** Nome da predefinição em `CONSTANTS.VIEWPORT_PRESETS`. */
+  /** Nome da predefinição em `CONSTANTS.VIEWPORT_PRESETS` ou em `PRESETS_PROPRIOS`. */
   preset: string;
   modalidade: Modalidade3d;
   /** Projeção de intensidade máxima em vez de composição (opacidade acumulada). */
   mip?: true;
 }
 
+/**
+ * Predefinições que não existem prontas no Cornerstone.
+ * Osso: só o osso. A opacidade começa em 180 HU (acima de músculo, gordura e órgãos sem contraste)
+ * e chega ao máximo perto de 400 HU; cor de marfim. A "CT-Bone" do Cornerstone começa em −16 HU
+ * e por isso mostra também os músculos (aqui ela se chama "Músculos e ossos").
+ */
+export const PRESETS_PROPRIOS: Preset3d[] = [
+  {
+    name: 'Visualizador-Osso',
+    gradientOpacity: '4 0 1 255 1',
+    specularPower: '10',
+    scalarOpacity: '8 -3024 0 180 0 400 0.75 3071 0.8',
+    specular: '0.2',
+    shade: '1',
+    ambient: '0.15',
+    colorTransfer: '16 -3024 0 0 0 180 0.8 0.68 0.5 600 0.95 0.9 0.78 3071 1 1 1',
+    diffuse: '0.9',
+    interpolation: '1',
+  },
+];
+
 export const PREDEFINICOES_3D: Predefinicao3d[] = [
-  { id: 'osso', rotulo: 'Osso', preset: 'CT-Bone', modalidade: 'CT' },
+  { id: 'osso', rotulo: 'Osso', preset: 'Visualizador-Osso', modalidade: 'CT' },
+  { id: 'musculos-ossos', rotulo: 'Músculos e ossos', preset: 'CT-Bone', modalidade: 'CT' },
   { id: 'vasos', rotulo: 'Vasos com contraste', preset: 'CT-AAA', modalidade: 'CT' },
   { id: 'torax', rotulo: 'Tórax com contraste', preset: 'CT-Chest-Contrast-Enhanced', modalidade: 'CT' },
   { id: 'pulmao', rotulo: 'Pulmão', preset: 'CT-Lung', modalidade: 'CT' },
-  { id: 'partes-moles', rotulo: 'Partes moles', preset: 'CT-Soft-Tissue', modalidade: 'CT' },
   { id: 'mip', rotulo: 'MIP', preset: 'CT-MIP', modalidade: 'CT', mip: true },
   { id: 'rm-padrao', rotulo: 'RM padrão', preset: 'MR-Default', modalidade: 'MR' },
   { id: 'angio-rm', rotulo: 'Angio-RM', preset: 'MR-Angio', modalidade: 'MR' },
