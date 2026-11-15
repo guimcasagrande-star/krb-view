@@ -187,7 +187,7 @@ class Association {
           callingAeTitle: options.callingAeTitle,
           contexts,
           roles,
-          maxPduLength: options.maxPduLength ?? 65536,
+          maxPduLength: options.maxPduLength ?? 262_144,
           implementationClassUid: IMPLEMENTATION_CLASS_UID,
           implementationVersionName: IMPLEMENTATION_VERSION_NAME,
         }),
@@ -627,6 +627,8 @@ export async function retrieve(
 
     let received = 0;
     let remaining: number | undefined;
+    let pendingWrites: Promise<void>[] = [];
+    const MAX_PENDING_WRITES = 16; // Limita gravações simultâneas em disco por conexão
     try {
       for (;;) {
         const { contextId, command, dataset } = await association.nextMessage();
@@ -646,28 +648,40 @@ export async function retrieve(
             status: STATUS.success,
             affectedSopInstanceUid: sopInstanceUid,
           };
+          const part10File = buildPart10({
+            sopClassUid,
+            sopInstanceUid,
+            transferSyntaxUid: context.transferSyntax,
+            sourceAeTitle: server.aeTitle,
+            dataset,
+          });
+          let writePromise: Promise<void>;
           try {
-            await options.onInstance({
-              sopClassUid,
-              sopInstanceUid,
-              transferSyntaxUid: context.transferSyntax,
-              file: buildPart10({
+            writePromise = Promise.resolve(
+              options.onInstance({
                 sopClassUid,
                 sopInstanceUid,
                 transferSyntaxUid: context.transferSyntax,
-                sourceAeTitle: server.aeTitle,
-                dataset,
+                file: part10File,
               }),
-            });
+            );
           } catch (error) {
             // Não conseguimos guardar a imagem: avisa o servidor e interrompe.
             association.send(contextId, { ...reply, status: 0xa700 });
             throw error;
           }
+          // 1. Confirma o recebimento IMEDIATAMENTE ao PACS para ele já enviar a próxima fatia pela rede
           association.send(contextId, reply);
           received++;
           if (remaining !== undefined && remaining > 0) remaining--;
           options.onProgress?.(remaining === undefined ? { received } : { received, remaining });
+
+          // 2. Enfileira o onInstance (disco/indexação) em pipeline sem bloquear o socket TCP
+          pendingWrites.push(writePromise);
+          if (pendingWrites.length >= MAX_PENDING_WRITES) {
+            await Promise.all(pendingWrites);
+            pendingWrites = [];
+          }
           continue;
         }
 
@@ -693,6 +707,10 @@ export async function retrieve(
           command.status === STATUS.subOperationsWithFailures ||
           command.status === STATUS.cancel
         ) {
+          if (pendingWrites.length > 0) {
+            await Promise.all(pendingWrites);
+            pendingWrites = [];
+          }
           return summary;
         }
         throw new PacsError(
@@ -701,7 +719,176 @@ export async function retrieve(
         );
       }
     } finally {
+      if (pendingWrites.length > 0) {
+        await Promise.allSettled(pendingWrites);
+      }
       options.signal?.removeEventListener('abort', cancel);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// C-GET Paralelo por Série (Alta Performance)
+// ---------------------------------------------------------------------------
+
+export interface ParallelRetrieveProgress {
+  /** Total de imagens recebidas somando todas as séries. */
+  received: number;
+  /** Total estimado de imagens no estudo (se informado pelo PACS ou C-FIND). */
+  total?: number;
+  /** Séries completamente baixadas até agora. */
+  completedSeries: number;
+  /** Total de séries no estudo. */
+  totalSeries: number;
+}
+
+export interface ParallelRetrieveOptions extends Omit<RetrieveOptions, 'onProgress'> {
+  /**
+   * Número máximo de conexões (associações C-GET) simultâneas no PACS.
+   * Padrão: 4 (seguro para a maioria dos PACS hospitalares como DCM4CHEE, Orthanc, Carestream).
+   */
+  concurrency?: number;
+  /**
+   * Lista de séries já obtida via `findSeries` (evita fazer um novo C-FIND se a UI já tiver).
+   */
+  seriesList?: SeriesResult[];
+  /**
+   * Progresso global agregado de todas as conexões simultâneas.
+   */
+  onProgress?: (progress: ParallelRetrieveProgress) => void;
+  /**
+   * Chamado assim que uma série inteira termina de baixar (útil para já liberar a série na UI).
+   */
+  onSeriesComplete?: (seriesInstanceUid: string, summary: RetrieveSummary) => void;
+}
+
+/**
+ * Baixa um estudo inteiro abrindo múltiplas conexões C-GET em paralelo (uma por série).
+ */
+export async function retrieveStudyParallel(
+  server: PacsServer,
+  studyInstanceUid: string,
+  options: ClientOptions & ParallelRetrieveOptions,
+): Promise<RetrieveSummary> {
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, 8));
+
+  // 1. Descobre as séries do estudo caso ainda não tenham sido passadas
+  const series =
+    options.seriesList ??
+    (await findSeries(server, studyInstanceUid, options)).results;
+
+  // Se o PACS não retornou séries no C-FIND, faz fallback para o download único do estudo
+  if (series.length === 0) {
+    return retrieve(server, { studyInstanceUid }, {
+      ...options,
+      onProgress: options.onProgress
+        ? (p) =>
+            options.onProgress!({
+              received: p.received,
+              total: p.remaining !== undefined ? p.received + p.remaining : undefined,
+              completedSeries: 0,
+              totalSeries: 1,
+            })
+        : undefined,
+    });
+  }
+
+  const queue = [...series];
+  const totalSeries = queue.length;
+
+  // Calcula o total conhecido pelo C-FIND (se disponível em SeriesResult)
+  const knownTotalFromFind = series.reduce(
+    (acc, s) =>
+      acc +
+      (s.instanceCount ??
+        (s as { numberOfSeriesRelatedInstances?: number }).numberOfSeriesRelatedInstances ??
+        0),
+    0,
+  );
+
+  let totalReceived = 0;
+  let totalFailed = 0;
+  let totalWarning = 0;
+  let anyCancelled = false;
+  let completedSeries = 0;
+
+  // Rastreia quantas imagens faltam em cada série ativa
+  const remainingBySeries = new Map<string, number>();
+
+  const emitProgress = () => {
+    if (!options.onProgress) return;
+    let remainingSum = 0;
+    let hasRemainingInfo = false;
+    for (const rem of remainingBySeries.values()) {
+      remainingSum += rem;
+      hasRemainingInfo = true;
+    }
+    const total =
+      knownTotalFromFind > 0
+        ? Math.max(knownTotalFromFind, totalReceived)
+        : hasRemainingInfo
+          ? totalReceived + remainingSum
+          : undefined;
+
+    options.onProgress({
+      received: totalReceived,
+      total,
+      completedSeries,
+      totalSeries,
+    });
+  };
+
+  // 2. Cria os workers que consomem a fila de séries em paralelo
+  const workerCount = Math.min(concurrency, queue.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (queue.length > 0) {
+      if (options.signal?.aborted) {
+        anyCancelled = true;
+        break;
+      }
+      const currentSeries = queue.shift();
+      if (!currentSeries) break;
+
+      const seriesUid = currentSeries.seriesInstanceUid;
+      let lastSeriesReceived = 0;
+
+      const summary = await retrieve(
+        server,
+        {
+          studyInstanceUid,
+          seriesInstanceUid: seriesUid,
+        },
+        {
+          ...options,
+          onProgress: (p) => {
+            const delta = p.received - lastSeriesReceived;
+            lastSeriesReceived = p.received;
+            totalReceived += delta;
+            if (p.remaining !== undefined) {
+              remainingBySeries.set(seriesUid, p.remaining);
+            }
+            emitProgress();
+          },
+        },
+      );
+
+      remainingBySeries.delete(seriesUid);
+      completedSeries++;
+      totalFailed += summary.failed;
+      totalWarning += summary.warning;
+      if (summary.cancelled) anyCancelled = true;
+
+      emitProgress();
+      options.onSeriesComplete?.(seriesUid, summary);
+    }
+  });
+
+  await Promise.all(workers);
+
+  return {
+    received: totalReceived,
+    failed: totalFailed,
+    warning: totalWarning,
+    cancelled: anyCancelled,
+  };
 }

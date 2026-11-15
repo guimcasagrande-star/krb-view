@@ -7,6 +7,8 @@ import {
   findStudies,
   retrieve,
   retrieveContexts,
+  retrieveStudyParallel,
+  type ParallelRetrieveProgress,
   type ReceivedInstance,
   type Transport,
 } from '../src/pacs/client.ts';
@@ -39,6 +41,7 @@ import {
   decodePData,
   encodeAssociateRq,
   encodePData,
+  encodeReleaseRp,
   isValidAeTitle,
   type AssociateRequest,
 } from '../src/pacs/pdu.ts';
@@ -499,14 +502,14 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
 
     it(`C-ECHO (${label})`, async () => {
       const r = replay(session('eco'), chunk);
-      await echo(SERVER, { connect: r.connect, callingAeTitle: ME });
+      await echo(SERVER, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536 });
       expect(r.errors).toEqual([]);
       expect(r.finished()).toBe(true);
     });
 
     it(`pesquisa de estudos (${label})`, async () => {
       const r = replay(session('estudos'), chunk);
-      const found = await findStudies(SERVER, { patientName: 'paciente 07' }, { connect: r.connect, callingAeTitle: ME });
+      const found = await findStudies(SERVER, { patientName: 'paciente 07' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536 });
       expect(r.errors).toEqual([]);
       expect(r.finished()).toBe(true);
       expect(found).toEqual({
@@ -540,6 +543,7 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
         {
           connect: r.connect,
           callingAeTitle: ME,
+          maxPduLength: 65536,
           imageClasses: [PET],
           otherClasses: [],
           onInstance: (i) => void files.push(i),
@@ -568,14 +572,14 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
 
   it('nome com acento: pedido e resposta', async () => {
     const r = replay(session('acento'));
-    const found = await findStudies(SERVER, { patientName: 'conceição' }, { connect: r.connect, callingAeTitle: ME });
+    const found = await findStudies(SERVER, { patientName: 'conceição' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536 });
     expect(r.errors).toEqual([]);
     expect(found.results.map((s) => [s.patientName, s.description])).toEqual([['CONCEIÇÃO^JOÃO', 'ABDOME SUPERIOR']]);
   });
 
   it('limite de resultados: cancela e marca como truncado', async () => {
     const r = replay(session('limite'), 64);
-    const found = await findStudies(SERVER, { patientName: 'lote' }, { connect: r.connect, callingAeTitle: ME, limit: 3 });
+    const found = await findStudies(SERVER, { patientName: 'lote' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536, limit: 3 });
     expect(r.errors).toEqual([]);
     expect(found.truncated).toBe(true);
     expect(found.results).toHaveLength(3);
@@ -584,7 +588,7 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
 
   it('séries de um estudo', async () => {
     const r = replay(session('series'));
-    const found = await findSeries(SERVER, '1.2.826.0.1.3680043.8.498.99.8', { connect: r.connect, callingAeTitle: ME });
+    const found = await findSeries(SERVER, '1.2.826.0.1.3680043.8.498.99.8', { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536 });
     expect(r.errors).toEqual([]);
     expect(found.results).toEqual([
       {
@@ -600,16 +604,16 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
 
   it('estudo inexistente: termina sem imagens e sem erro', async () => {
     const r = replay(session('inexistente'));
-    const summary = await retrieve(SERVER, { studyInstanceUid: '1.2.3.4.5' }, { connect: r.connect, callingAeTitle: ME, imageClasses: [PET], otherClasses: [], onInstance: () => {} });
+    const summary = await retrieve(SERVER, { studyInstanceUid: '1.2.3.4.5' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536, imageClasses: [PET], otherClasses: [], onInstance: () => {} });
     expect(r.errors).toEqual([]);
     expect(summary.received).toBe(0);
   });
 
   it('recusas do servidor viram mensagens claras', async () => {
     const intruder = replay(session('recusado'));
-    expect(await codeOf(echo(SERVER, { connect: intruder.connect, callingAeTitle: 'INTRUSO' }))).toBe('AE_NAO_AUTORIZADO');
+    expect(await codeOf(echo(SERVER, { connect: intruder.connect, callingAeTitle: 'INTRUSO', maxPduLength: 65536 }))).toBe('AE_NAO_AUTORIZADO');
     const wrong = replay(session('servidor-errado'));
-    expect(await codeOf(echo({ ...SERVER, aeTitle: 'OUTRONOME' }, { connect: wrong.connect, callingAeTitle: ME }))).toBe('AE_DO_SERVIDOR_ERRADO');
+    expect(await codeOf(echo({ ...SERVER, aeTitle: 'OUTRONOME' }, { connect: wrong.connect, callingAeTitle: ME, maxPduLength: 65536 }))).toBe('AE_DO_SERVIDOR_ERRADO');
   });
 
   it('não abre conexão quando o pedido é inválido', async () => {
@@ -736,5 +740,203 @@ describe('cliente diante de falhas', () => {
     expect(summary.cancelled).toBe(true);
     const commands = s.sent.slice(1).flatMap((p) => (p[0] === PDU.pData ? decodePData(p.subarray(6)) : [])).filter((v) => v.isCommand).map((v) => decodeCommand(v.data).commandField);
     expect(commands).toEqual([COMMAND.cGetRq, COMMAND.cCancelRq]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('retrieveStudyParallel', () => {
+  const acceptPdu = () => new Uint8Array(Buffer.from(session('download')[1]!.b, 'base64'));
+  const storeRqFor = (sopUid: string, msgId: number) =>
+    concat([
+      ...fragmentMessage(
+        3,
+        encodeCommand({
+          affectedSopClassUid: PET,
+          commandField: COMMAND.cStoreRq,
+          messageId: msgId,
+          hasDataset: true,
+          affectedSopInstanceUid: sopUid,
+        }),
+        new Uint8Array([1, 2, 3, 4]),
+        0,
+      ),
+    ]);
+  const cGetPending = (remaining: number) =>
+    concat(
+      fragmentMessage(
+        1,
+        encodeCommand({
+          affectedSopClassUid: UID.studyRootGet,
+          commandField: COMMAND.cGetRsp,
+          messageIdBeingRespondedTo: 1,
+          hasDataset: false,
+          status: STATUS.pending,
+          remaining,
+        }),
+        undefined,
+        0,
+      ),
+    );
+  const cGetDone = (completed: number) =>
+    concat(
+      fragmentMessage(
+        1,
+        encodeCommand({
+          affectedSopClassUid: UID.studyRootGet,
+          commandField: COMMAND.cGetRsp,
+          messageIdBeingRespondedTo: 1,
+          hasDataset: false,
+          status: STATUS.success,
+          completed,
+          failed: 0,
+          warning: 0,
+          remaining: 0,
+        }),
+        undefined,
+        0,
+      ),
+    );
+
+  it('baixa múltiplas séries respeitando a concorrência e agrega progresso global', async () => {
+    let activeConnections = 0;
+    let maxActiveConnections = 0;
+    let seq = 0;
+
+    const connect = async (): Promise<Transport> => {
+      activeConnections++;
+      maxActiveConnections = Math.max(maxActiveConnections, activeConnections);
+      const connId = ++seq;
+      let writes = 0;
+      let closed = false;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            queueMicrotask(() => onData(acceptPdu()));
+          } else if (writes === 2) {
+            setTimeout(() => {
+              if (closed) return;
+              onData(
+                concat([
+                  cGetPending(2),
+                  storeRqFor(`1.2.3.${connId}.1`, 10 + connId),
+                  storeRqFor(`1.2.3.${connId}.2`, 20 + connId),
+                  cGetDone(2),
+                ]),
+              );
+            }, 15);
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          activeConnections--;
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const seriesList = [
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.1', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.2', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.3', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.4', instanceCount: 2 },
+    ];
+
+    const receivedInstances: string[] = [];
+    const progressEvents: ParallelRetrieveProgress[] = [];
+    const completedSeries: string[] = [];
+
+    const summary = await retrieveStudyParallel(SERVER, '1.2.3', {
+      connect,
+      callingAeTitle: ME,
+      concurrency: 2,
+      seriesList,
+      imageClasses: [PET],
+      otherClasses: [],
+      timeoutMs: 1000,
+      onInstance: (inst) => {
+        receivedInstances.push(inst.sopInstanceUid);
+      },
+      onProgress: (p) => {
+        progressEvents.push({ ...p });
+      },
+      onSeriesComplete: (uid) => {
+        completedSeries.push(uid);
+      },
+    });
+
+    expect(maxActiveConnections).toBe(2);
+    expect(summary).toEqual({ received: 8, failed: 0, warning: 0, cancelled: false });
+    expect(receivedInstances).toHaveLength(8);
+    expect(completedSeries).toHaveLength(4);
+    expect(progressEvents.length).toBeGreaterThanOrEqual(4);
+    expect(progressEvents.at(-1)).toEqual({
+      received: 8,
+      total: 8,
+      completedSeries: 4,
+      totalSeries: 4,
+    });
+  });
+
+  it('faz fallback para retrieve do estudo inteiro quando seriesList está vazia', async () => {
+    const connect = async (): Promise<Transport> => {
+      let writes = 0;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) queueMicrotask(() => onData(acceptPdu()));
+          else if (writes === 2) {
+            queueMicrotask(() =>
+              onData(concat([cGetPending(1), storeRqFor('1.2.3.99.1', 5), cGetDone(1)])),
+            );
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const progressEvents: ParallelRetrieveProgress[] = [];
+    const summary = await retrieveStudyParallel(SERVER, '1.2.3', {
+      connect,
+      callingAeTitle: ME,
+      seriesList: [],
+      imageClasses: [PET],
+      otherClasses: [],
+      timeoutMs: 500,
+      onInstance: () => {},
+      onProgress: (p) => progressEvents.push({ ...p }),
+    });
+
+    expect(summary).toEqual({ received: 1, failed: 0, warning: 0, cancelled: false });
+    expect(progressEvents.at(-1)).toEqual({
+      received: 1,
+      total: 1,
+      completedSeries: 0,
+      totalSeries: 1,
+    });
   });
 });

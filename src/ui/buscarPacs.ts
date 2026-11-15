@@ -6,7 +6,7 @@
  * não guarda nome de paciente nem resultados de pesquisa em disco ou log.
  */
 
-import { findSeries, findStudies, retrieve, type PacsServer } from '../pacs/client.ts';
+import { findSeries, findStudies, retrieveStudyParallel, type PacsServer } from '../pacs/client.ts';
 import { instancePath } from '../pacs/config.ts';
 import { PacsError } from '../pacs/errors.ts';
 import type { SeriesResult, StudyResult } from '../pacs/query.ts';
@@ -666,38 +666,36 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       const base = await pastaDeExames();
       await definirServidoresPermitidos(cfg().servidores);
       const estudoTotal = escolhidas.reduce((n, s) => n + (s.instanceCount ?? 0), 0);
-      for (const s of escolhidas) {
-        const resumoSerie = await retrieve(
-          r.servidor,
-          { studyInstanceUid: r.estudo.studyInstanceUid, seriesInstanceUid: s.seriesInstanceUid },
-          {
-            connect: connectTauri,
-            callingAeTitle: cfg().meuAeTitle,
-            timeoutMs: 60_000,
-            signal: controle.signal,
-            onInstance: async (inst) => {
-              // A série vem do cabeçalho do próprio arquivo recebido.
-              const lido = parseHeader(inst.file, inst.sopInstanceUid);
-              const serieUid = lido.ok ? lido.meta.seriesInstanceUid : undefined;
-              if (!serieUid) throw new PacsError('DADOS_INVALIDOS', 'Imagem recebida sem série; não gravada.');
-              await gravarExame(base, instancePath(r.estudo.studyInstanceUid, serieUid, inst.sopInstanceUid), inst.file);
-            },
-            onProgress: (p) => {
-              resumo.textContent = `Baixando… ${recebidas + p.received} imagens`;
-              if (estudoTotal > 0) {
-                progresso.max = estudoTotal;
-                progresso.value = recebidas + p.received;
-              }
-            },
-          },
-        );
-        recebidas += resumoSerie.received;
-        falhas += resumoSerie.failed;
-        if (resumoSerie.cancelled) {
-          cancelado = true;
-          break;
-        }
-      }
+      const resumoEstudo = await retrieveStudyParallel(r.servidor, r.estudo.studyInstanceUid, {
+        connect: connectTauri,
+        callingAeTitle: cfg().meuAeTitle,
+        timeoutMs: 60_000,
+        signal: controle.signal,
+        seriesList: escolhidas,
+        concurrency: 4,
+        onInstance: async (inst) => {
+          // A série vem do cabeçalho do próprio arquivo recebido.
+          const lido = parseHeader(inst.file, inst.sopInstanceUid);
+          const serieUid = lido.ok ? lido.meta.seriesInstanceUid : undefined;
+          if (!serieUid) throw new PacsError('DADOS_INVALIDOS', 'Imagem recebida sem série; não gravada.');
+          await gravarExame(base, instancePath(r.estudo.studyInstanceUid, serieUid, inst.sopInstanceUid), inst.file);
+        },
+        onProgress: (p) => {
+          recebidas = p.received;
+          const total = p.total ?? estudoTotal;
+          resumo.textContent =
+            total > 0
+              ? `Baixando… ${p.received} de ${total} imagens (série ${p.completedSeries}/${p.totalSeries})`
+              : `Baixando… ${p.received} imagens (série ${p.completedSeries}/${p.totalSeries})`;
+          if (total > 0) {
+            progresso.max = total;
+            progresso.value = p.received;
+          }
+        },
+      });
+      recebidas = resumoEstudo.received;
+      falhas = resumoEstudo.failed;
+      cancelado = resumoEstudo.cancelled;
       resumo.textContent = `${cancelado ? 'Cancelado' : 'Concluído'}: ${recebidas} imagens recebidas, ${falhas} com falha.`;
       if (recebidas > 0 && !cancelado) await abrirEstudoBaixado(base, r.estudo.studyInstanceUid);
     } catch (e) {
