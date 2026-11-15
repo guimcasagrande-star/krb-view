@@ -443,13 +443,6 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   };
   let menuPacs: ReturnType<typeof criarMenuSuspenso> | null = null;
   if (pacsDisponivel()) {
-    menuAbrir.painel.append(
-      divisorMenu(),
-      itemMenu('📥 Exames já baixados do PACS…', undefined, () => abrirExamesBaixadosPacs(), menuAbrir.fechar),
-      itemMenu('🔍 Buscar no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuAbrir.fechar),
-      itemMenu('🖧 Servidores PACS…', undefined, () => abrirServidoresPacs(), menuAbrir.fechar),
-    );
-
     menuPacs = criarMenuSuspenso({
       rotulo: 'PACS',
       svg: ICONES_BARRA.pacs,
