@@ -12,6 +12,7 @@ import { PacsError } from '../pacs/errors.ts';
 import type { SeriesResult, StudyResult } from '../pacs/query.ts';
 import { connectTauri, definirServidoresPermitidos } from '../pacs/transporteTauri.ts';
 import { parseHeader } from '../io/readHeader';
+import { formatPersonName } from '../io/organize';
 import { formatDatePtBr } from '../io/dicomTime';
 import { carregarConfigPacs, type ConfigPacs } from '../state/pacsConfig';
 import {
@@ -27,6 +28,22 @@ import { dispararAbrirCandidatos } from './abrirPasta';
 import { abrirServidoresPacs } from './servidoresPacs';
 
 let caixa: HTMLDialogElement | undefined;
+export type AbaPacs = 'buscar' | 'baixados';
+let abaAtiva: AbaPacs = 'buscar';
+let atualizarRodapePasta: (() => Promise<void>) | undefined;
+
+interface ExameBaixadoResumo {
+  pastaEstudo: string;
+  studyInstanceUid: string;
+  patientName: string;
+  patientId: string;
+  studyDate: string;
+  studyTime: string;
+  description: string;
+  modalities: string[];
+  numSeries: number;
+  arquivos: string[];
+}
 
 interface Resultado {
   estudo: StudyResult;
@@ -55,7 +72,342 @@ function formatarMb(bytes: number): string {
   return `${(bytes / 1_048_576).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`;
 }
 
+function atualizarAbasTopo(): void {
+  if (!caixa) return;
+  for (const b of caixa.querySelectorAll<HTMLButtonElement>('.pacs-abas button')) {
+    b.classList.toggle('ativa', b.dataset.aba === abaAtiva);
+  }
+}
+
+async function carregarResumoExamesBaixados(base: string): Promise<ExameBaixadoResumo[]> {
+  const todosRelativos = await listarExames(base, '');
+  if (todosRelativos.length === 0) return [];
+
+  // Agrupa por pasta de estudo (1º segmento do caminho relativo) e por série (2º segmento).
+  const porEstudo = new Map<string, { arquivos: string[]; primeiroPorSerie: Map<string, string> }>();
+  for (const rel of todosRelativos) {
+    const partes = rel.split('/');
+    const pastaEstudo = partes[0];
+    if (!pastaEstudo) continue;
+    const pastaSerie = partes.length > 2 ? partes[1]! : '_raiz';
+    let entrada = porEstudo.get(pastaEstudo);
+    if (!entrada) {
+      entrada = { arquivos: [], primeiroPorSerie: new Map() };
+      porEstudo.set(pastaEstudo, entrada);
+    }
+    entrada.arquivos.push(rel);
+    if (!entrada.primeiroPorSerie.has(pastaSerie)) {
+      entrada.primeiroPorSerie.set(pastaSerie, rel);
+    }
+  }
+
+  const resumos: ExameBaixadoResumo[] = [];
+  for (const [pastaEstudo, info] of porEstudo.entries()) {
+    let studyInstanceUid = pastaEstudo;
+    let patientName = '';
+    let patientId = '';
+    let studyDate = '';
+    let studyTime = '';
+    let description = '';
+    const mods = new Set<string>();
+
+    const amostras = [...info.primeiroPorSerie.values()];
+    for (const relAmostra of amostras) {
+      try {
+        const bytes = await lerExame(base, relAmostra);
+        const r = parseHeader(bytes, relAmostra);
+        if (!r.ok) continue;
+        const m = r.meta;
+        if (m.studyInstanceUid) studyInstanceUid = m.studyInstanceUid;
+        if (!patientName && m.patientName) patientName = formatPersonName(m.patientName);
+        if (!patientId && m.patientId) patientId = m.patientId;
+        if (!studyDate && m.studyDate) studyDate = m.studyDate;
+        if (!studyTime && m.studyTime) studyTime = m.studyTime;
+        if (!description && (m.studyDescription || m.seriesDescription)) {
+          description = m.studyDescription ?? m.seriesDescription ?? '';
+        }
+        if (m.modality) mods.add(m.modality);
+      } catch {
+        /* ignora arquivo ilegível */
+      }
+    }
+
+    resumos.push({
+      pastaEstudo,
+      studyInstanceUid,
+      patientName: patientName || '(sem nome)',
+      patientId: patientId || '—',
+      studyDate,
+      studyTime,
+      description: description || '—',
+      modalities: [...mods].sort(),
+      numSeries: Math.max(1, info.primeiroPorSerie.size),
+      arquivos: info.arquivos,
+    });
+  }
+
+  resumos.sort((a, b) =>
+    `${b.studyDate}${b.studyTime}`.localeCompare(`${a.studyDate}${a.studyTime}`) ||
+    a.patientName.localeCompare(b.patientName, 'pt-BR'),
+  );
+  return resumos;
+}
+
 function desenhar(): void {
+  atualizarAbasTopo();
+  if (abaAtiva === 'baixados') {
+    void desenharBaixados();
+  } else {
+    desenharBusca();
+  }
+}
+
+async function desenharBaixados(): Promise<void> {
+  const corpo = caixa!.querySelector<HTMLElement>('.busca-corpo')!;
+  corpo.replaceChildren(el('p', { class: 'cfg-dica' }, 'Lendo exames salvos neste computador…'));
+
+  let base: string;
+  let exames: ExameBaixadoResumo[];
+  try {
+    base = await pastaDeExames();
+    exames = await carregarResumoExamesBaixados(base);
+  } catch (e) {
+    corpo.replaceChildren(el('p', { class: 'cfg-aviso' }, `Erro ao listar exames baixados: ${mensagemDe(e)}`));
+    return;
+  }
+
+  const btnAbaBaixados = caixa?.querySelector<HTMLButtonElement>('.pacs-abas button[data-aba="baixados"]');
+  if (btnAbaBaixados) {
+    btnAbaBaixados.textContent = `📥 Exames já baixados (${exames.length})`;
+  }
+
+  corpo.replaceChildren();
+  if (exames.length === 0) {
+    const irParaBusca = el('button', {
+      type: 'button',
+      class: 'primario',
+      textContent: '🔍 Buscar exames no PACS',
+    });
+    irParaBusca.addEventListener('click', () => {
+      abaAtiva = 'buscar';
+      desenhar();
+    });
+    corpo.append(
+      el('p', { class: 'cfg-dica' }, 'Nenhum exame baixado do PACS encontrado na pasta atual.'),
+      irParaBusca,
+    );
+    return;
+  }
+
+  const selecionados = new Set<string>();
+  const campoFiltro = el('input', {
+    type: 'text',
+    placeholder: 'Filtrar por paciente, ID, modalidade, data ou descrição…',
+    class: 'busca-filtro-baixados',
+  });
+
+  const btnAbrirSel = el('button', {
+    type: 'button',
+    class: 'primario',
+    textContent: '📂 Abrir selecionados (0)',
+    disabled: true,
+  });
+  const btnApagarSel = el('button', {
+    type: 'button',
+    textContent: '🗑 Apagar selecionados (0)',
+    disabled: true,
+  });
+  const btnAtualizar = el('button', {
+    type: 'button',
+    textContent: '🔄 Atualizar',
+  });
+
+  const atualizarBotoesLote = (): void => {
+    const n = selecionados.size;
+    btnAbrirSel.textContent = `📂 Abrir selecionados (${n})`;
+    btnAbrirSel.disabled = n === 0;
+    btnApagarSel.textContent = `🗑 Apagar selecionados (${n})`;
+    btnApagarSel.disabled = n === 0;
+  };
+
+  btnAtualizar.addEventListener('click', () => void desenharBaixados());
+
+  btnAbrirSel.addEventListener('click', () => {
+    const escolhidos = exames.filter((x) => selecionados.has(x.pastaEstudo));
+    if (escolhidos.length === 0) return;
+    const todosArquivos = escolhidos.flatMap((x) => x.arquivos);
+    dispararAbrirCandidatos(
+      todosArquivos.map((rel) => ({
+        path: rel,
+        obter: async () => new File([(await lerExame(base, rel)) as BlobPart], rel.split('/').pop() ?? rel),
+      })),
+    );
+    caixa?.close();
+  });
+
+  btnApagarSel.addEventListener('click', async () => {
+    const escolhidos = exames.filter((x) => selecionados.has(x.pastaEstudo));
+    if (escolhidos.length === 0) return;
+    const nomes = escolhidos
+      .slice(0, 6)
+      .map((x) => `• ${formatDatePtBr(x.studyDate) || 'sem data'} — ${x.patientName} (${x.modalities.join(', ') || 'DICOM'})`)
+      .join('\n');
+    const mais = escolhidos.length > 6 ? `\n… e mais ${escolhidos.length - 6} exame(s)` : '';
+    if (
+      !window.confirm(
+        `Apagar ${escolhidos.length} exame(s) selecionado(s) deste computador?\n\n${nomes}${mais}\n\n(Isso não afeta o servidor PACS.)`,
+      )
+    ) {
+      return;
+    }
+    for (const ex of escolhidos) {
+      await apagarExames(base, ex.pastaEstudo);
+    }
+    await atualizarRodapePasta?.();
+    await desenharBaixados();
+  });
+
+  const barraAcoes = el(
+    'div',
+    { class: 'busca-acoes-baixados' },
+    campoFiltro,
+    btnAbrirSel,
+    btnApagarSel,
+    btnAtualizar,
+  );
+
+  const contentorTabela = el('div', { class: 'busca-resultados' });
+
+  const renderizarTabela = (): void => {
+    contentorTabela.replaceChildren();
+    const termo = campoFiltro.value.trim().toLowerCase();
+    const visiveis = termo
+      ? exames.filter((x) => {
+          const alvo = `${formatDatePtBr(x.studyDate)} ${x.studyDate} ${x.patientName} ${x.patientId} ${x.modalities.join(' ')} ${x.description}`.toLowerCase();
+          return alvo.includes(termo);
+        })
+      : exames;
+
+    if (visiveis.length === 0) {
+      contentorTabela.append(el('p', { class: 'cfg-dica' }, 'Nenhum exame corresponde ao filtro digitado.'));
+      return;
+    }
+
+    const chkTodos = el('input', { type: 'checkbox' });
+    chkTodos.title = 'Selecionar ou desmarcar todos os exames visíveis';
+    chkTodos.checked = visiveis.length > 0 && visiveis.every((x) => selecionados.has(x.pastaEstudo));
+
+    const tabela = el('table', { class: 'cfg-tabela busca-tabela' });
+    const thCheck = el('th', {}, chkTodos);
+    tabela.append(
+      el(
+        'tr',
+        {},
+        thCheck,
+        ...['Data', 'Paciente', 'ID', 'Modalidades', 'Descrição', 'Volume', 'Ações'].map((t) => el('th', {}, t)),
+      ),
+    );
+
+    const checkboxesLinhas: Array<{ ex: ExameBaixadoResumo; chk: HTMLInputElement; tr: HTMLTableRowElement }> = [];
+
+    chkTodos.addEventListener('change', () => {
+      for (const { ex, chk, tr } of checkboxesLinhas) {
+        chk.checked = chkTodos.checked;
+        if (chkTodos.checked) selecionados.add(ex.pastaEstudo);
+        else selecionados.delete(ex.pastaEstudo);
+        tr.classList.toggle('selecionada', chk.checked);
+      }
+      atualizarBotoesLote();
+    });
+
+    for (const ex of visiveis) {
+      const chk = el('input', { type: 'checkbox', checked: selecionados.has(ex.pastaEstudo) });
+      const btnAbrirUm = el('button', {
+        type: 'button',
+        class: 'primario',
+        textContent: '📂 Abrir',
+        title: 'Abrir este exame no visualizador',
+      });
+      const btnApagarUm = el('button', {
+        type: 'button',
+        textContent: '🗑 Apagar',
+        title: 'Apagar apenas este exame do computador',
+      });
+
+      btnAbrirUm.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        dispararAbrirCandidatos(
+          ex.arquivos.map((rel) => ({
+            path: rel,
+            obter: async () => new File([(await lerExame(base, rel)) as BlobPart], rel.split('/').pop() ?? rel),
+          })),
+        );
+        caixa?.close();
+      });
+
+      btnApagarUm.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (
+          !window.confirm(
+            `Apagar o exame de ${ex.patientName} (${formatDatePtBr(ex.studyDate) || 'sem data'} · ${ex.modalities.join(', ')}) deste computador?\n\n(Isso não afeta o servidor PACS.)`,
+          )
+        ) {
+          return;
+        }
+        await apagarExames(base, ex.pastaEstudo);
+        selecionados.delete(ex.pastaEstudo);
+        await atualizarRodapePasta?.();
+        await desenharBaixados();
+      });
+
+      const tr = el(
+        'tr',
+        { class: `busca-linha${selecionados.has(ex.pastaEstudo) ? ' selecionada' : ''}` },
+        el('td', {}, chk),
+        el('td', {}, formatDatePtBr(ex.studyDate) || '—'),
+        el('td', {}, ex.patientName),
+        el('td', {}, ex.patientId),
+        el('td', {}, ex.modalities.join(', ') || '—'),
+        el('td', {}, ex.description),
+        el('td', {}, `${ex.numSeries} ${ex.numSeries === 1 ? 'série' : 'séries'} · ${ex.arquivos.length} imgs`),
+        el('td', { class: 'pacs-acoes' }, btnAbrirUm, btnApagarUm),
+      );
+
+      const alternarSelecaoLinha = (marcado: boolean): void => {
+        chk.checked = marcado;
+        if (marcado) selecionados.add(ex.pastaEstudo);
+        else selecionados.delete(ex.pastaEstudo);
+        tr.classList.toggle('selecionada', marcado);
+        chkTodos.checked = visiveis.length > 0 && visiveis.every((v) => selecionados.has(v.pastaEstudo));
+        atualizarBotoesLote();
+      };
+
+      chk.addEventListener('click', (ev) => ev.stopPropagation());
+      chk.addEventListener('change', () => alternarSelecaoLinha(chk.checked));
+      tr.addEventListener('click', () => alternarSelecaoLinha(!chk.checked));
+      tr.addEventListener('dblclick', () => btnAbrirUm.click());
+
+      checkboxesLinhas.push({ ex, chk, tr });
+      tabela.append(tr);
+    }
+
+    contentorTabela.append(tabela);
+  };
+
+  campoFiltro.addEventListener('input', renderizarTabela);
+  renderizarTabela();
+  corpo.append(
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Marque os exames que deseja abrir juntos (ex.: comparação) ou apagar individualmente. Dê 2 cliques numa linha para abrir direto.',
+    ),
+    barraAcoes,
+    contentorTabela,
+  );
+}
+
+function desenharBusca(): void {
   const corpo = caixa!.querySelector<HTMLElement>('.busca-corpo')!;
   corpo.replaceChildren();
   const config = carregarConfigPacs();
@@ -378,36 +730,65 @@ function criarCaixa(): HTMLDialogElement {
   const fechar = el('button', { type: 'button', textContent: 'Fechar', class: 'cfg-fechar' });
   fechar.addEventListener('click', () => d.close());
 
+  const abas = el('div', { class: 'cfg-abas pacs-abas' });
+  const btnAbaBuscar = el('button', {
+    type: 'button',
+    textContent: '🔍 Buscar no servidor PACS',
+  });
+  btnAbaBuscar.dataset.aba = 'buscar';
+  btnAbaBuscar.addEventListener('click', () => {
+    abaAtiva = 'buscar';
+    desenhar();
+  });
+
+  const btnAbaBaixados = el('button', {
+    type: 'button',
+    textContent: '📥 Exames já baixados',
+  });
+  btnAbaBaixados.dataset.aba = 'baixados';
+  btnAbaBaixados.addEventListener('click', () => {
+    abaAtiva = 'baixados';
+    desenhar();
+  });
+  abas.append(btnAbaBuscar, btnAbaBaixados);
+
   // Configuração da pasta de exames baixados e limpeza.
   const pasta = el('input', { type: 'text', class: 'busca-pasta' });
   pasta.title = 'Pasta onde os exames baixados são gravados (caminho completo)';
   const espaco = el('span', { class: 'cfg-dica' });
-  const apagar = el('button', { type: 'button', textContent: 'Apagar exames baixados' });
+  const apagar = el('button', { type: 'button', textContent: 'Apagar todos' });
   const carregar = async (): Promise<void> => {
     try {
       const base = await pastaDeExames();
       pasta.value = base;
       espaco.textContent = formatarMb(await tamanhoDosExames(base));
+      const todos = await listarExames(base, '');
+      const pastasEstudo = new Set(todos.map((r) => r.split('/')[0]).filter(Boolean));
+      btnAbaBaixados.textContent = `📥 Exames já baixados (${pastasEstudo.size})`;
     } catch {
       /* fora do Tauri */
     }
   };
+  atualizarRodapePasta = carregar;
   pasta.addEventListener('change', () => {
     definirPastaDeExames(pasta.value);
     void carregar();
+    if (abaAtiva === 'baixados') void desenharBaixados();
   });
   apagar.addEventListener('click', async () => {
     const base = await pastaDeExames();
     if (!window.confirm(`Apagar TODOS os exames baixados em\n${base}\n(isso não afeta o PACS)?`)) return;
     await apagarExames(base, '');
     await carregar();
+    if (abaAtiva === 'baixados') void desenharBaixados();
   });
   d.addEventListener('toggle', () => {
     if (d.open) void carregar();
   });
 
   d.append(
-    el('h2', {}, 'Buscar no PACS'),
+    el('h2', {}, 'PACS — Busca e Exames Baixados'),
+    abas,
     el('div', { class: 'busca-corpo' }),
     el('div', { class: 'cfg-linha busca-pastarow' }, el('span', {}, 'Pasta de exames'), pasta, espaco, apagar),
     el('p', { class: 'cfg-aviso' }, 'Sem VPN ou DICOM TLS, os dados trafegam abertos.'),
@@ -423,8 +804,13 @@ function criarCaixa(): HTMLDialogElement {
   return d;
 }
 
-export function abrirBuscarPacs(): void {
+export function abrirBuscarPacs(aba: AbaPacs = 'buscar'): void {
   caixa ??= criarCaixa();
+  abaAtiva = aba;
   desenhar();
   if (!caixa.open) caixa.showModal();
+}
+
+export function abrirExamesBaixadosPacs(): void {
+  abrirBuscarPacs('baixados');
 }

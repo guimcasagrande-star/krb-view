@@ -780,7 +780,9 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
 .busca-periodo { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .busca-tabela tr.busca-linha { cursor: pointer; }
 .busca-tabela tr.busca-linha:hover, .busca-tabela tr.selecionada { background: #1f3a57; }
-.busca-resultados { max-height: 220px; overflow: auto; margin-top: 8px; }
+.busca-resultados { max-height: 300px; overflow: auto; margin-top: 8px; }
+.busca-acoes-baixados { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.busca-filtro-baixados { flex: 1; min-width: 240px; }
 .busca-series { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 180px; overflow: auto; }
 .busca-pastarow { margin-top: 10px; gap: 8px; }
 .busca-pasta { flex: 1; min-width: 200px; }

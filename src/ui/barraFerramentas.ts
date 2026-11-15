@@ -49,7 +49,7 @@ import {
   segundaJanelaDisponivel,
 } from '../viewer/segundaJanela';
 import { exportarImagemAtiva } from './exportarImagem';
-import { abrirBuscarPacs } from './buscarPacs';
+import { abrirBuscarPacs, abrirExamesBaixadosPacs } from './buscarPacs';
 import { abrirServidoresPacs } from './servidoresPacs';
 import { FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
 import {
@@ -109,6 +109,9 @@ const ICONES_BARRA = {
   lateral: svgBarra('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>'),
   abrir: svgBarra(
     '<path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/>',
+  ),
+  pacs: svgBarra(
+    '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/><path d="M12 7h6M12 17h6"/>',
   ),
   grade: svgBarra('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18M3 12h18"/>'),
   petct: svgBarra(
@@ -438,11 +441,26 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     const erro = await exportarImagemAtiva(formato);
     if (erro) window.alert(erro);
   };
+  let menuPacs: ReturnType<typeof criarMenuSuspenso> | null = null;
   if (pacsDisponivel()) {
     menuAbrir.painel.append(
       divisorMenu(),
-      itemMenu('Buscar no PACS…', undefined, () => abrirBuscarPacs(), menuAbrir.fechar),
-      itemMenu('Servidores PACS…', undefined, () => abrirServidoresPacs(), menuAbrir.fechar),
+      itemMenu('📥 Exames já baixados do PACS…', undefined, () => abrirExamesBaixadosPacs(), menuAbrir.fechar),
+      itemMenu('🔍 Buscar no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuAbrir.fechar),
+      itemMenu('🖧 Servidores PACS…', undefined, () => abrirServidoresPacs(), menuAbrir.fechar),
+    );
+
+    menuPacs = criarMenuSuspenso({
+      rotulo: 'PACS',
+      svg: ICONES_BARRA.pacs,
+      dica: 'Abrir lista de exames já baixados do PACS ou buscar novos exames no servidor PACS',
+      acaoPrincipal: () => abrirExamesBaixadosPacs(),
+    });
+    menuPacs.painel.append(
+      itemMenu('📥 Exames já baixados (abrir ou apagar)…', undefined, () => abrirExamesBaixadosPacs(), menuPacs.fechar),
+      itemMenu('🔍 Buscar novos exames no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuPacs.fechar),
+      divisorMenu(),
+      itemMenu('🖧 Configurar servidores PACS…', undefined, () => abrirServidoresPacs(), menuPacs.fechar),
     );
   }
   menuAbrir.painel.append(
@@ -848,6 +866,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const elementosTela: HTMLElement[] = [
     ...(!secundaria ? [menuAbrir.contentor] : []),
+    ...(!secundaria && menuPacs ? [menuPacs.contentor] : []),
     menuLayout.contentor,
     menuPetCt.contentor,
     botaoLinhasRef,
