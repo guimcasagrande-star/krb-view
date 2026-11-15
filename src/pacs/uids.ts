@@ -56,15 +56,25 @@ export const OTHER_STORAGE_CLASSES: readonly string[] = [
   '1.2.840.10008.5.1.4.1.1.11.1', // Presentation State
 ];
 
-/** Cada grupo vira um contexto de apresentação separado, para o PACS poder enviar sem recomprimir. */
+/** Sintaxes de transferência sem compressão. */
+export const UNCOMPRESSED_TRANSFER_SYNTAXES: readonly string[] = [
+  TS.explicitVrLittleEndian,
+  TS.implicitVrLittleEndian,
+];
+
+/**
+ * Cada grupo vira um contexto de apresentação separado, para o PACS poder enviar sem recomprimir.
+ * Compressões sem perdas vêm primeiro para que PACS que priorizam o primeiro contexto aceito
+ * evitem descomprimir antes de enviar; sem compressão fica por último como fallback.
+ */
 export const IMAGE_TRANSFER_SYNTAX_GROUPS: readonly (readonly string[])[] = [
-  [TS.explicitVrLittleEndian, TS.implicitVrLittleEndian],
   [TS.jpegLosslessSv1],
-  [TS.jpeg2000Lossless],
-  [TS.jpeg2000],
   [TS.jpegLsLossless],
-  [TS.jpegBaseline],
+  [TS.jpeg2000Lossless],
   [TS.rleLossless],
+  [TS.jpeg2000],
+  [TS.jpegBaseline],
+  UNCOMPRESSED_TRANSFER_SYNTAXES,
 ];
 
 const UID_PATTERN = /^[0-9]+(\.[0-9]+)*$/;

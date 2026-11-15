@@ -55,6 +55,7 @@ import {
   OTHER_STORAGE_CLASSES,
   TS,
   UID,
+  UNCOMPRESSED_TRANSFER_SYNTAXES,
   isValidUid,
 } from './uids.ts';
 
@@ -542,6 +543,8 @@ export interface RetrieveOptions {
   /** Classes SOP a aceitar. Padrão: as de imagem e as demais de `uids.ts`. */
   imageClasses?: readonly string[];
   otherClasses?: readonly string[];
+  /** Grupos de sintaxe de transferência por classe de imagem. Padrão: `IMAGE_TRANSFER_SYNTAX_GROUPS`. */
+  transferSyntaxGroups?: readonly (readonly string[])[];
 }
 
 export interface RetrieveSummary {
@@ -556,6 +559,7 @@ export interface RetrieveSummary {
 export function retrieveContexts(
   imageClasses: readonly string[] = IMAGE_STORAGE_CLASSES,
   otherClasses: readonly string[] = OTHER_STORAGE_CLASSES,
+  transferSyntaxGroups: readonly (readonly string[])[] = IMAGE_TRANSFER_SYNTAX_GROUPS,
 ): { contexts: PresentationContextRequest[]; roles: RoleSelection[] } {
   const contexts: PresentationContextRequest[] = [
     { id: 1, abstractSyntax: UID.studyRootGet, transferSyntaxes: [TS.implicitVrLittleEndian] },
@@ -566,9 +570,9 @@ export function retrieveContexts(
     id += 2;
   };
   for (const sopClass of imageClasses) {
-    for (const group of IMAGE_TRANSFER_SYNTAX_GROUPS) add(sopClass, group);
+    for (const group of transferSyntaxGroups) add(sopClass, group);
   }
-  for (const sopClass of otherClasses) add(sopClass, IMAGE_TRANSFER_SYNTAX_GROUPS[0]!);
+  for (const sopClass of otherClasses) add(sopClass, UNCOMPRESSED_TRANSFER_SYNTAXES);
   if (contexts.length > 128) {
     throw new PacsError(
       'CONTEXTOS_DEMAIS',
@@ -591,7 +595,11 @@ export async function retrieve(
   options: ClientOptions & RetrieveOptions,
 ): Promise<RetrieveSummary> {
   const identifier = buildRetrieveIdentifier(request.studyInstanceUid, request.seriesInstanceUid);
-  const { contexts, roles } = retrieveContexts(options.imageClasses, options.otherClasses);
+  const { contexts, roles } = retrieveContexts(
+    options.imageClasses,
+    options.otherClasses,
+    options.transferSyntaxGroups,
+  );
 
   return withAssociation(server, options, contexts, roles, async (association) => {
     const getContext = association.contextFor(UID.studyRootGet, 'download por C-GET');

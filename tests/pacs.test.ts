@@ -496,6 +496,16 @@ describe('arquivo Part 10 e configuração', () => {
 
 // ---------------------------------------------------------------------------
 describe('cliente contra trocas gravadas com um servidor real', () => {
+  // Ordem original dos grupos usada quando as sessões de replay foram gravadas.
+  const RECORDED_TS_GROUPS: readonly (readonly string[])[] = [
+    [TS.explicitVrLittleEndian, TS.implicitVrLittleEndian],
+    [TS.jpegLosslessSv1],
+    [TS.jpeg2000Lossless],
+    [TS.jpeg2000],
+    [TS.jpegLsLossless],
+    [TS.jpegBaseline],
+    [TS.rleLossless],
+  ];
   // Cada sessão é repetida com as respostas inteiras e picadas byte a byte.
   for (const chunk of [Number.MAX_SAFE_INTEGER, 1, 13]) {
     const label = chunk === Number.MAX_SAFE_INTEGER ? 'respostas inteiras' : `pedaços de ${chunk} byte(s)`;
@@ -544,6 +554,7 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
           connect: r.connect,
           callingAeTitle: ME,
           maxPduLength: 65536,
+          transferSyntaxGroups: RECORDED_TS_GROUPS,
           imageClasses: [PET],
           otherClasses: [],
           onInstance: (i) => void files.push(i),
@@ -604,7 +615,7 @@ describe('cliente contra trocas gravadas com um servidor real', () => {
 
   it('estudo inexistente: termina sem imagens e sem erro', async () => {
     const r = replay(session('inexistente'));
-    const summary = await retrieve(SERVER, { studyInstanceUid: '1.2.3.4.5' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536, imageClasses: [PET], otherClasses: [], onInstance: () => {} });
+    const summary = await retrieve(SERVER, { studyInstanceUid: '1.2.3.4.5' }, { connect: r.connect, callingAeTitle: ME, maxPduLength: 65536, transferSyntaxGroups: RECORDED_TS_GROUPS, imageClasses: [PET], otherClasses: [], onInstance: () => {} });
     expect(r.errors).toEqual([]);
     expect(summary.received).toBe(0);
   });
