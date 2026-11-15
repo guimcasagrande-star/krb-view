@@ -3337,6 +3337,18 @@ export async function abrirCurvaPerfusaoAtiva(): Promise<void> {
     pilhaAtiva: slot.pilha,
     indiceCorteAtual: indiceCorte,
     pontoMiraMundo: slot.pontoMiraMundo,
+    obterImageIdDoQuadro: (pilhaAlvo, idxCorte) => {
+      const arquivosAtuais = estado.resultado?.arquivos;
+      if (!arquivosAtuais) return null;
+      const existente = registro.get(pilhaAlvo.id);
+      if (existente) return existente.ids[idxCorte] ?? null;
+      try {
+        const ids = adquirirIds(pilhaAlvo, arquivosAtuais);
+        return ids[idxCorte] ?? null;
+      } catch {
+        return null;
+      }
+    },
     aoSelecionarQuadro: (pilhaAlvo, idxCorte) => {
       const s = slots[ativo] ?? slots[0];
       if (!s) return;

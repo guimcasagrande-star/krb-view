@@ -17,8 +17,9 @@ import {
   PlanarFreehandROITool,
   utilities as utilitariosTools,
 } from '@cornerstonejs/tools';
+import { pilhasExibicaoDaSerie } from '../compare/segundaJanelaLogica';
 import { parseTM } from '../io/dicomTime';
-import type { StackNode } from '../io/organize';
+import type { SeriesNode, StackNode } from '../io/organize';
 import type { InstanceMeta } from '../io/types';
 import { estado } from '../state/store';
 
@@ -27,7 +28,7 @@ type AnotacaoCornerstone = ReturnType<typeof annotation.state.getAnnotations>[nu
 type Ponto2 = [number, number];
 type Ponto3 = [number, number, number];
 
-export type ModoCurvaPerfusao = 'serie-ativa' | 'fases-estudo';
+export type ModoCurvaPerfusao = 'serie-ativa' | 'fases-estudo' | 'cortes-pilha';
 
 export interface PontoCurva {
   indice: number;
@@ -60,8 +61,12 @@ interface RoiEmPixels {
   nome: string;
   cor: string;
   tipo: 'elipse' | 'poligono';
-  /** Referência à anotação Cornerstone na imagem (quando desenhada pelo usuário). */
+  /** Referência à anotação Cornerstone mestre na imagem. */
   anotacaoRef?: AnotacaoCornerstone;
+  /** Réplicas criadas automaticamente nas outras fases da perfusão. */
+  replicasRef?: AnotacaoCornerstone[];
+  /** Pontos 3D do mundo (4 alças na elipse ou vértices da polilinha). */
+  pontosMundo: Ponto3[];
   /** Centro e semi-eixos em coordenadas normalizadas [0..1] da imagem de referência. */
   centroNorm: Ponto2;
   eixoANorm: Ponto2;
@@ -93,9 +98,49 @@ function aplicarEstiloRoiNoViewport(
   });
 }
 
+type DadosReplicaRoi = {
+  label?: string;
+  replicaDeRoiUid?: string;
+  assinaturaSincronizada?: string;
+  cachedStats?: Record<string, unknown>;
+  handles?: {
+    points?: Ponto3[];
+    activeHandleIndex?: number | null;
+    textBox?: Record<string, unknown>;
+  };
+  contour?: {
+    polyline?: Ponto3[];
+    closed?: boolean;
+  };
+};
+
+function idsDosViewportsAtivos(fallbackId?: string): string[] {
+  const ids = Array.from(document.querySelectorAll<HTMLElement>('[data-viewport-uid]'))
+    .map((e) => e.getAttribute('data-viewport-uid'))
+    .filter((v): v is string => !!v);
+  if (fallbackId && !ids.includes(fallbackId)) ids.push(fallbackId);
+  return ids;
+}
+
 const cacheImageIdsTemporarios = new Map<string, string>();
 
-function obterImageIdParaInstancia(inst: InstanceMeta, arquivos: Map<string, File>): string | null {
+export type ObterImageIdDoQuadroFn = (
+  pilha: StackNode,
+  indiceCorte: number,
+  instancia: InstanceMeta,
+) => string | null;
+
+function obterImageIdParaQuadro(
+  pilha: StackNode,
+  indiceCorte: number,
+  inst: InstanceMeta,
+  arquivos: Map<string, File>,
+  obterImageIdDoQuadro?: ObterImageIdDoQuadroFn,
+): string | null {
+  if (obterImageIdDoQuadro) {
+    const idSlot = obterImageIdDoQuadro(pilha, indiceCorte, inst);
+    if (idSlot) return idSlot;
+  }
   const jaRegistrado = cacheImageIdsTemporarios.get(inst.fileId);
   if (jaRegistrado) return jaRegistrado;
   const arq = arquivos.get(inst.fileId);
@@ -103,6 +148,48 @@ function obterImageIdParaInstancia(inst: InstanceMeta, arquivos: Map<string, Fil
   const id = wadouri.fileManager.add(arq);
   cacheImageIdsTemporarios.set(inst.fileId, id);
   return id;
+}
+
+function normalUnitariaDaInstancia(inst: InstanceMeta | undefined): Ponto3 | null {
+  const iop = inst?.imageOrientationPatient;
+  if (!iop || iop.length < 6) return null;
+  const nx = iop[1]! * iop[5]! - iop[2]! * iop[4]!;
+  const ny = iop[2]! * iop[3]! - iop[0]! * iop[5]!;
+  const nz = iop[0]! * iop[4]! - iop[1]! * iop[3]!;
+  const len = Math.hypot(nx, ny, nz);
+  if (len < 1e-6) return null;
+  return [nx / len, ny / len, nz / len];
+}
+
+function coordenadaNormalDoPonto(ponto: Ponto3, instRef: InstanceMeta | undefined): number | undefined {
+  const n = normalUnitariaDaInstancia(instRef);
+  if (n) {
+    return ponto[0] * n[0] + ponto[1] * n[1] + ponto[2] * n[2];
+  }
+  return ponto[2];
+}
+
+/**
+ * Projeta um ponto 3D do mundo `(x, y, z)` sobre o plano da fatia `instAlvo`, preservando
+ * exatamente a posição anatômica no plano quando há pequeno deslocamento axial entre fases.
+ */
+function projetarPontoNoPlanoDaInstancia(ponto: Ponto3, instAlvo: InstanceMeta | undefined): Ponto3 {
+  const pos = instAlvo?.imagePositionPatient;
+  const n = normalUnitariaDaInstancia(instAlvo);
+  if (!pos || !n) return [ponto[0], ponto[1], ponto[2]];
+  const dist = (ponto[0] - pos[0]) * n[0] + (ponto[1] - pos[1]) * n[1] + (ponto[2] - pos[2]) * n[2];
+  return [ponto[0] - dist * n[0], ponto[1] - dist * n[1], ponto[2] - dist * n[2]];
+}
+
+function assinaturaPontosMundo(pontos: Ponto3[] | undefined): string {
+  if (!pontos || pontos.length === 0) return '';
+  const passo = Math.max(1, Math.floor(pontos.length / 8));
+  const partes: string[] = [`n=${pontos.length}`];
+  for (let i = 0; i < pontos.length; i += passo) {
+    const p = pontos[i]!;
+    partes.push(`${p[0].toFixed(2)},${p[1].toFixed(2)},${p[2].toFixed(2)}`);
+  }
+  return partes.join(';');
 }
 
 /**
@@ -141,9 +228,100 @@ function mundoParaNormalizadoNaFatia(
   return [c[0] / w, c[1] / h];
 }
 
+function normalizadoParaMundoNaFatia(
+  uNorm: number,
+  vNorm: number,
+  instRef: InstanceMeta | undefined,
+  viewport: Types.IStackViewport | Types.IVolumeViewport,
+): Ponto3 {
+  if (
+    instRef?.imagePositionPatient &&
+    instRef.imageOrientationPatient &&
+    instRef.imageOrientationPatient.length >= 6 &&
+    instRef.pixelSpacing &&
+    instRef.columns &&
+    instRef.rows
+  ) {
+    const pos = instRef.imagePositionPatient;
+    const iop = instRef.imageOrientationPatient;
+    const [rowSpacing, colSpacing] = instRef.pixelSpacing;
+    const colMm = uNorm * instRef.columns * (colSpacing || 1);
+    const rowMm = vNorm * instRef.rows * (rowSpacing || 1);
+    return [
+      pos[0] + colMm * iop[0]! + rowMm * iop[3]!,
+      pos[1] + colMm * iop[1]! + rowMm * iop[4]!,
+      pos[2] + colMm * iop[2]! + rowMm * iop[5]!,
+    ];
+  }
+  const el = viewport.element;
+  const w = Math.max(1, el.clientWidth);
+  const h = Math.max(1, el.clientHeight);
+  const m = viewport.canvasToWorld([uNorm * w, vNorm * h]);
+  return [m[0], m[1], m[2]];
+}
+
 /**
- * Extrai todas as ROIs desenhadas (`EllipticalROI` e `PlanarFreehandROI`) no elemento do viewport ativo.
- * Se não houver nenhuma, cria uma ROI circular padrão no ponto `pontoPadraoMundo` (ou no centro da fatia).
+ * Se o usuário moveu ou redimensionou uma réplica da ROI em outra fase (na imagem atualmente
+ * aberta no viewport), copia a nova posição de volta para a ROI mestre antes de extrair/recalcular.
+ * Também remove réplicas órfãs caso a ROI mestre tenha sido apagada.
+ */
+function sincronizarEdicoesDeReplicasParaMestre(
+  elemento: HTMLDivElement,
+  viewport: Types.IStackViewport | Types.IVolumeViewport,
+): void {
+  const imageIdAtual =
+    'getCurrentImageId' in viewport && typeof viewport.getCurrentImageId === 'function'
+      ? viewport.getCurrentImageId()
+      : undefined;
+
+  for (const toolName of [EllipticalROITool.toolName, PlanarFreehandROITool.toolName]) {
+    const todas = [...(annotation.state.getAnnotations(toolName, elemento) ?? [])];
+    const mestresPorUid = new Map<string, AnotacaoCornerstone>();
+    for (const ann of todas) {
+      const dados = ann.data as DadosReplicaRoi | undefined;
+      if (!dados?.replicaDeRoiUid && ann.annotationUID) {
+        mestresPorUid.set(ann.annotationUID, ann);
+      }
+    }
+
+    for (const ann of todas) {
+      const dados = ann.data as DadosReplicaRoi | undefined;
+      const idMestre = dados?.replicaDeRoiUid;
+      if (!idMestre) continue;
+      const mestre = mestresPorUid.get(idMestre);
+      if (!mestre) {
+        if (ann.annotationUID) annotation.state.removeAnnotation(ann.annotationUID);
+        continue;
+      }
+
+      if (imageIdAtual && ann.metadata?.referencedImageId === imageIdAtual) {
+        const ptsRep =
+          toolName === EllipticalROITool.toolName
+            ? dados.handles?.points
+            : (dados.contour?.polyline ?? dados.handles?.points);
+        const assAtual = assinaturaPontosMundo(ptsRep);
+        if (assAtual && dados.assinaturaSincronizada && assAtual !== dados.assinaturaSincronizada) {
+          const dadosMestre = mestre.data as DadosReplicaRoi | undefined;
+          if (dadosMestre && ptsRep) {
+            if (toolName === EllipticalROITool.toolName && dadosMestre.handles) {
+              dadosMestre.handles.points = ptsRep.map((p) => [...p] as Ponto3);
+            } else if (dadosMestre.contour) {
+              dadosMestre.contour.polyline = ptsRep.map((p) => [...p] as Ponto3);
+            }
+            mestre.invalidated = true;
+            dadosMestre.cachedStats = {};
+          }
+          dados.assinaturaSincronizada = assAtual;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Extrai as ROIs desenhadas (`EllipticalROI` e `PlanarFreehandROI`) no nível anatômico atual.
+ * Ignora réplicas automáticas das outras fases, ROIs de outros níveis de corte e cliques degenerados.
+ * Se não houver nenhuma ROI no nível atual, cria uma ROI circular no ponto `pontoPadraoMundo` (ou centro).
  */
 function extrairRoisNormalizadas(
   elemento: HTMLDivElement,
@@ -151,13 +329,35 @@ function extrairRoisNormalizadas(
   instRef: InstanceMeta | undefined,
   pontoPadraoMundo?: Ponto3 | null,
 ): { rois: RoiEmPixels[]; usouRoiAutomatica: boolean } {
+  sincronizarEdicoesDeReplicasParaMestre(elemento, viewport);
+
   const rois: RoiEmPixels[] = [];
   let idxCor = 0;
+  const imageIdAtual =
+    'getCurrentImageId' in viewport && typeof viewport.getCurrentImageId === 'function'
+      ? viewport.getCurrentImageId()
+      : undefined;
+  const coordRef = instRef ? coordenadaNormalDaInstancia(instRef) : undefined;
+  const espessuraRef = instRef?.sliceThickness ?? instRef?.spacingBetweenSlices ?? 1.5;
+  const toleranciaNivelMm = Math.max(2.5, espessuraRef * 1.25);
+  const colsRef = instRef?.columns ?? 512;
+  const rowsRef = instRef?.rows ?? 512;
 
-  const annsElipse = annotation.state.getAnnotations(EllipticalROITool.toolName, elemento) ?? [];
+  const annsElipse = [...(annotation.state.getAnnotations(EllipticalROITool.toolName, elemento) ?? [])];
   for (const ann of annsElipse) {
-    const pts = ann.data?.handles?.points as Ponto3[] | undefined;
+    const dados = ann.data as DadosReplicaRoi | undefined;
+    if (dados?.replicaDeRoiUid) continue;
+    const pts = dados?.handles?.points;
     if (!pts || pts.length < 4) continue;
+
+    // Filtra ROIs desenhadas em outros cortes anatômicos do exame:
+    if (coordRef !== undefined && ann.metadata?.referencedImageId !== imageIdAtual) {
+      const coordAnn = coordenadaNormalDoPonto(pts[0]!, instRef);
+      if (coordAnn !== undefined && Math.abs(coordAnn - coordRef) > toleranciaNivelMm) {
+        continue;
+      }
+    }
+
     const n0 = mundoParaNormalizadoNaFatia(pts[0]!, instRef, viewport);
     const n1 = mundoParaNormalizadoNaFatia(pts[1]!, instRef, viewport);
     const n2 = mundoParaNormalizadoNaFatia(pts[2]!, instRef, viewport);
@@ -168,15 +368,34 @@ function extrairRoisNormalizadas(
     ];
     const eixoANorm: Ponto2 = [(n1[0] - n0[0]) / 2, (n1[1] - n0[1]) / 2];
     const eixoBNorm: Ponto2 = [(n3[0] - n2[0]) / 2, (n3[1] - n2[1]) / 2];
-    if (Math.hypot(eixoANorm[0], eixoANorm[1]) < 1e-4 || Math.hypot(eixoBNorm[0], eixoBNorm[1]) < 1e-4) {
+
+    // Descarta cliques acidentais minúsculos (< 1.5 px de raio):
+    const raioAPx = Math.hypot(eixoANorm[0] * colsRef, eixoANorm[1] * rowsRef);
+    const raioBPx = Math.hypot(eixoBNorm[0] * colsRef, eixoBNorm[1] * rowsRef);
+    if (raioAPx < 1.5 || raioBPx < 1.5) {
+      if (ann.annotationUID) annotation.state.removeAnnotation(ann.annotationUID);
       continue;
     }
+
+    // Se já houver uma ROI praticamente idêntica na mesma posição (ex.: desenhada em outra fase),
+    // converte-a em réplica da primeira para não duplicar a curva:
+    const duplicada = rois.find(
+      (r) =>
+        r.tipo === 'elipse' &&
+        Math.hypot(r.centroNorm[0] - centroNorm[0], r.centroNorm[1] - centroNorm[1]) < 0.015 &&
+        Math.hypot(r.eixoANorm[0] - eixoANorm[0], r.eixoANorm[1] - eixoANorm[1]) < 0.015,
+    );
+    if (duplicada && dados) {
+      dados.replicaDeRoiUid = duplicada.id;
+      continue;
+    }
+
     const cor = CORES_ROIS[idxCor % CORES_ROIS.length]!;
     idxCor++;
-    const labelAtual = typeof ann.data?.label === 'string' ? ann.data.label.trim() : '';
+    const labelAtual = typeof dados?.label === 'string' ? dados.label.trim() : '';
     const nome = labelAtual || `ROI ${idxCor}`;
-    if (!labelAtual && ann.data) {
-      ann.data.label = nome;
+    if (!labelAtual && dados) {
+      dados.label = nome;
     }
     aplicarEstiloRoiNoViewport(ann, cor, false);
     rois.push({
@@ -185,6 +404,8 @@ function extrairRoisNormalizadas(
       cor,
       tipo: 'elipse',
       anotacaoRef: ann,
+      replicasRef: [],
+      pontosMundo: pts.slice(0, 4).map((p) => [...p] as Ponto3),
       centroNorm,
       eixoANorm,
       eixoBNorm,
@@ -192,12 +413,20 @@ function extrairRoisNormalizadas(
     });
   }
 
-  const annsFreehand = annotation.state.getAnnotations(PlanarFreehandROITool.toolName, elemento) ?? [];
+  const annsFreehand = [...(annotation.state.getAnnotations(PlanarFreehandROITool.toolName, elemento) ?? [])];
   for (const ann of annsFreehand) {
-    const polyline =
-      (ann.data as { contour?: { polyline?: Ponto3[] } })?.contour?.polyline ??
-      (ann.data?.handles?.points as Ponto3[] | undefined);
+    const dados = ann.data as DadosReplicaRoi | undefined;
+    if (dados?.replicaDeRoiUid) continue;
+    const polyline = dados?.contour?.polyline ?? dados?.handles?.points;
     if (!polyline || polyline.length < 3) continue;
+
+    if (coordRef !== undefined && ann.metadata?.referencedImageId !== imageIdAtual) {
+      const coordAnn = coordenadaNormalDoPonto(polyline[0]!, instRef);
+      if (coordAnn !== undefined && Math.abs(coordAnn - coordRef) > toleranciaNivelMm) {
+        continue;
+      }
+    }
+
     // Subamostra se tiver muitos vértices para acelerar o teste ponto-no-polígono
     const passo = Math.max(1, Math.floor(polyline.length / 80));
     const poligonoNorm: Ponto2[] = [];
@@ -207,10 +436,10 @@ function extrairRoisNormalizadas(
     if (poligonoNorm.length < 3) continue;
     const cor = CORES_ROIS[idxCor % CORES_ROIS.length]!;
     idxCor++;
-    const labelAtual = typeof ann.data?.label === 'string' ? ann.data.label.trim() : '';
+    const labelAtual = typeof dados?.label === 'string' ? dados.label.trim() : '';
     const nome = labelAtual || `ROI ${idxCor}`;
-    if (!labelAtual && ann.data) {
-      ann.data.label = nome;
+    if (!labelAtual && dados) {
+      dados.label = nome;
     }
     aplicarEstiloRoiNoViewport(ann, cor, false);
     rois.push({
@@ -219,6 +448,8 @@ function extrairRoisNormalizadas(
       cor,
       tipo: 'poligono',
       anotacaoRef: ann,
+      replicasRef: [],
+      pontosMundo: polyline.map((p) => [...p] as Ponto3),
       centroNorm: [0.5, 0.5],
       eixoANorm: [0.05, 0],
       eixoBNorm: [0, 0.05],
@@ -226,15 +457,12 @@ function extrairRoisNormalizadas(
     });
   }
 
-  if (rois.length > 0 && viewport.id) {
-    utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
-  }
-
   if (rois.length > 0) {
+    utilitariosTools.triggerAnnotationRenderForViewportIds(idsDosViewportsAtivos(viewport.id));
     return { rois, usouRoiAutomatica: false };
   }
 
-  // Fallback: cria uma ROI circular padrão (~5% da largura da imagem) no ponto do localizador `┼` ou no centro
+  // Fallback: cria uma ROI circular real no viewport (e nas demais fases) no ponto do localizador `┼` ou no centro
   let centroNorm: Ponto2 = [0.5, 0.5];
   if (pontoPadraoMundo) {
     const n = mundoParaNormalizadoNaFatia(pontoPadraoMundo, instRef, viewport);
@@ -242,16 +470,69 @@ function extrairRoisNormalizadas(
       centroNorm = n;
     }
   }
+  const raioNorm = 0.045;
+  const pBottom = normalizadoParaMundoNaFatia(centroNorm[0], centroNorm[1] - raioNorm, instRef, viewport);
+  const pTop = normalizadoParaMundoNaFatia(centroNorm[0], centroNorm[1] + raioNorm, instRef, viewport);
+  const pLeft = normalizadoParaMundoNaFatia(centroNorm[0] - raioNorm, centroNorm[1], instRef, viewport);
+  const pRight = normalizadoParaMundoNaFatia(centroNorm[0] + raioNorm, centroNorm[1], instRef, viewport);
+  const pontosMundoAuto: Ponto3[] = [pBottom, pTop, pLeft, pRight];
+
+  let anotacaoAuto: AnotacaoCornerstone | undefined;
+  if (imageIdAtual) {
+    const viewRef =
+      'getViewReference' in viewport && typeof viewport.getViewReference === 'function'
+        ? (viewport.getViewReference() as Record<string, unknown> | undefined)
+        : {};
+    const uidAuto = `roi-auto-${Date.now()}`;
+    const novaAnn = {
+      annotationUID: uidAuto,
+      highlighted: false,
+      invalidated: true,
+      isLocked: false,
+      isVisible: true,
+      metadata: {
+        ...(viewRef ?? {}),
+        toolName: EllipticalROITool.toolName,
+        referencedImageId: imageIdAtual,
+      },
+      data: {
+        label: 'ROI 1',
+        cachedStats: {},
+        handles: {
+          points: pontosMundoAuto.map((p) => [...p] as Ponto3),
+          activeHandleIndex: null,
+          textBox: {
+            hasMoved: false,
+            worldPosition: [0, 0, 0] as Ponto3,
+            worldBoundingBox: {
+              topLeft: [0, 0, 0] as Ponto3,
+              topRight: [0, 0, 0] as Ponto3,
+              bottomLeft: [0, 0, 0] as Ponto3,
+              bottomRight: [0, 0, 0] as Ponto3,
+            },
+          },
+        },
+      },
+    };
+    annotation.state.addAnnotation(novaAnn as never, elemento);
+    anotacaoAuto = novaAnn as unknown as AnotacaoCornerstone;
+    aplicarEstiloRoiNoViewport(anotacaoAuto, CORES_ROIS[0]!, false);
+    utilitariosTools.triggerAnnotationRenderForViewportIds(idsDosViewportsAtivos(viewport.id));
+  }
+
   return {
     rois: [
       {
-        id: 'roi-padrao',
-        nome: pontoPadraoMundo ? 'ROI no ponto ┼ (automática)' : 'ROI central (automática)',
+        id: anotacaoAuto?.annotationUID ?? 'roi-padrao',
+        nome: 'ROI 1',
         cor: CORES_ROIS[0]!,
         tipo: 'elipse',
+        ...(anotacaoAuto ? { anotacaoRef: anotacaoAuto } : {}),
+        replicasRef: [],
+        pontosMundo: pontosMundoAuto,
         centroNorm,
-        eixoANorm: [0.045, 0],
-        eixoBNorm: [0, 0.045],
+        eixoANorm: [0, raioNorm],
+        eixoBNorm: [raioNorm, 0],
         poligonoNorm: [],
       },
     ],
@@ -273,10 +554,13 @@ function pontoDentroDoPoligono(x: number, y: number, poligono: Ponto2[]): boolea
 }
 
 /**
- * Mede Média, DP, Mín e Máx dos pixels dentro de `roi` numa imagem já carregada pelo Cornerstone.
+ * Mede Média, DP, Mín e Máx dos pixels dentro de `roi` numa imagem já carregada pelo Cornerstone,
+ * projetando as coordenadas 3D da ROI diretamente sobre a geometria da fatia `instanciaAlvo`.
  */
 function medirRoiNaImagem(
   roi: RoiEmPixels,
+  instanciaAlvo: InstanceMeta | undefined,
+  viewport: Types.IStackViewport | Types.IVolumeViewport | undefined,
   pixels: ArrayLike<number>,
   largura: number,
   altura: number,
@@ -293,12 +577,25 @@ function medirRoiNaImagem(
   const indicesDentro: number[] = [];
 
   if (roi.tipo === 'elipse') {
-    const cx = roi.centroNorm[0] * largura;
-    const cy = roi.centroNorm[1] * altura;
-    const ax = roi.eixoANorm[0] * largura;
-    const ay = roi.eixoANorm[1] * altura;
-    const bx = roi.eixoBNorm[0] * largura;
-    const by = roi.eixoBNorm[1] * altura;
+    let centroNorm = roi.centroNorm;
+    let eixoANorm = roi.eixoANorm;
+    let eixoBNorm = roi.eixoBNorm;
+    if (roi.pontosMundo.length >= 4 && instanciaAlvo && viewport) {
+      const n0 = mundoParaNormalizadoNaFatia(roi.pontosMundo[0]!, instanciaAlvo, viewport);
+      const n1 = mundoParaNormalizadoNaFatia(roi.pontosMundo[1]!, instanciaAlvo, viewport);
+      const n2 = mundoParaNormalizadoNaFatia(roi.pontosMundo[2]!, instanciaAlvo, viewport);
+      const n3 = mundoParaNormalizadoNaFatia(roi.pontosMundo[3]!, instanciaAlvo, viewport);
+      centroNorm = [(n0[0] + n1[0] + n2[0] + n3[0]) / 4, (n0[1] + n1[1] + n2[1] + n3[1]) / 4];
+      eixoANorm = [(n1[0] - n0[0]) / 2, (n1[1] - n0[1]) / 2];
+      eixoBNorm = [(n3[0] - n2[0]) / 2, (n3[1] - n2[1]) / 2];
+    }
+
+    const cx = centroNorm[0] * largura;
+    const cy = centroNorm[1] * altura;
+    const ax = eixoANorm[0] * largura;
+    const ay = eixoANorm[1] * altura;
+    const bx = eixoBNorm[0] * largura;
+    const by = eixoBNorm[1] * altura;
     const normA2 = ax * ax + ay * ay;
     const normB2 = bx * bx + by * by;
     if (normA2 < 1e-6 || normB2 < 1e-6) return null;
@@ -321,7 +618,15 @@ function medirRoiNaImagem(
       }
     }
   } else {
-    const polyPx: Ponto2[] = roi.poligonoNorm.map((p) => [p[0] * largura, p[1] * altura]);
+    let poligonoNorm = roi.poligonoNorm;
+    if (roi.pontosMundo.length >= 3 && instanciaAlvo && viewport) {
+      const passo = Math.max(1, Math.floor(roi.pontosMundo.length / 80));
+      poligonoNorm = [];
+      for (let i = 0; i < roi.pontosMundo.length; i += passo) {
+        poligonoNorm.push(mundoParaNormalizadoNaFatia(roi.pontosMundo[i]!, instanciaAlvo, viewport));
+      }
+    }
+    const polyPx: Ponto2[] = poligonoNorm.map((p) => [p[0] * largura, p[1] * altura]);
     let pMinX = Infinity;
     let pMaxX = -Infinity;
     let pMinY = Infinity;
@@ -372,15 +677,28 @@ function medirRoiNaImagem(
 
 function coordenadaNormalDaInstancia(inst: InstanceMeta): number | undefined {
   const pos = inst.imagePositionPatient;
-  const iop = inst.imageOrientationPatient;
-  if (pos && iop && iop.length >= 6) {
-    const nx = iop[1]! * iop[5]! - iop[2]! * iop[4]!;
-    const ny = iop[2]! * iop[3]! - iop[0]! * iop[5]!;
-    const nz = iop[0]! * iop[4]! - iop[1]! * iop[3]!;
-    return pos[0] * nx + pos[1] * ny + pos[2] * nz;
+  const n = normalUnitariaDaInstancia(inst);
+  if (pos && n) {
+    return pos[0] * n[0] + pos[1] * n[1] + pos[2] * n[2];
   }
   if (pos) return pos[2];
   return inst.sliceLocation;
+}
+
+function mesmaOrientacaoDeFatia(a: InstanceMeta | undefined, b: InstanceMeta | undefined): boolean {
+  const iopA = a?.imageOrientationPatient;
+  const iopB = b?.imageOrientationPatient;
+  if (!iopA || !iopB || iopA.length < 6 || iopB.length < 6) return true;
+  const dotRow = iopA[0]! * iopB[0]! + iopA[1]! * iopB[1]! + iopA[2]! * iopB[2]!;
+  const dotCol = iopA[3]! * iopB[3]! + iopA[4]! * iopB[4]! + iopA[5]! * iopB[5]!;
+  return dotRow >= 0.94 && dotCol >= 0.94;
+}
+
+function ehSerieNaoPerfusao(serie: SeriesNode, inst: InstanceMeta): boolean {
+  const desc = `${serie.description ?? ''} ${(inst.imageType ?? []).join(' ')}`;
+  return /\b(sub|subtr|subtracao|subtraç|mip|minip|proj|projection|adc|dwi|diff|difus|trace|t2|stir|flair|localizer|scout|survey|calibr)\b/i.test(
+    desc,
+  );
 }
 
 function segundosDoHorarioDicom(inst: InstanceMeta): number | undefined {
@@ -394,14 +712,263 @@ interface QuadroAlvo {
   pilha: StackNode;
   indiceNaPilha: number;
   tempoSegundos?: number;
+  ordemFase?: number;
+  ordemSerie?: number;
   rotuloCurto: string;
+}
+
+function ordenarQuadrosCronologicamente(quadros: QuadroAlvo[]): QuadroAlvo[] {
+  return [...quadros].sort((a, b) => {
+    const tpA = a.instancia.temporalPositionIdentifier;
+    const tpB = b.instancia.temporalPositionIdentifier;
+    if (tpA !== undefined && tpB !== undefined && tpA !== tpB) return tpA - tpB;
+
+    if (
+      a.tempoSegundos !== undefined &&
+      b.tempoSegundos !== undefined &&
+      Math.abs(a.tempoSegundos - b.tempoSegundos) > 0.2
+    ) {
+      return a.tempoSegundos - b.tempoSegundos;
+    }
+
+    if (a.ordemSerie !== undefined && b.ordemSerie !== undefined && a.ordemSerie !== b.ordemSerie) {
+      return a.ordemSerie - b.ordemSerie;
+    }
+
+    const acqA = a.instancia.acquisitionNumber;
+    const acqB = b.instancia.acquisitionNumber;
+    if (acqA !== undefined && acqB !== undefined && acqA !== acqB) return acqA - acqB;
+
+    if (a.ordemFase !== undefined && b.ordemFase !== undefined && a.ordemFase !== b.ordemFase) {
+      return a.ordemFase - b.ordemFase;
+    }
+
+    return (a.instancia.instanceNumber ?? a.indiceNaPilha) - (b.instancia.instanceNumber ?? b.indiceNaPilha);
+  });
+}
+
+function encontrarSerieDaInstancia(instRef: InstanceMeta): SeriesNode | undefined {
+  const index = estado.resultado?.index;
+  if (!index) return undefined;
+  for (const p of index.patients) {
+    for (const est of p.studies) {
+      if (est.studyInstanceUid !== instRef.studyInstanceUid) continue;
+      for (const s of est.series) {
+        if (s.seriesInstanceUid === instRef.seriesInstanceUid) return s;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Coleta as fases na mesma posição anatômica `coordRef` dentro da própria `serieAtiva`
+ * (ex.: série dinâmica com 4 fases divididas em `serieAtiva.stacks` e unificadas em `pilhaAtiva`).
+ * Garante exatamente 1 corte por fase (nunca cortes vizinhos da mesma fase).
+ */
+function coletarFasesDaMesmaSerie(
+  pilhaAtiva: StackNode,
+  instRef: InstanceMeta,
+  coordRef: number,
+): QuadroAlvo[] {
+  const serieAtiva = encontrarSerieDaInstancia(instRef);
+  const espessura = instRef.sliceThickness ?? instRef.spacingBetweenSlices ?? 1.5;
+  const limiarMesmoNivelMm = Math.max(2.0, espessura * 1.3);
+
+  // 1) Se `splitIntoStacks` dividiu a série em subpilhas por fase (ex.: fase 1..4), pega 1 corte por subpilha:
+  if (serieAtiva && serieAtiva.stacks.length >= 2) {
+    const porSubPilha: QuadroAlvo[] = [];
+    serieAtiva.stacks.forEach((subPilha, idxSub) => {
+      let melhorIdxSub = -1;
+      let menorDist = Infinity;
+      for (let i = 0; i < subPilha.instances.length; i++) {
+        const cand = subPilha.instances[i]!;
+        if (!mesmaOrientacaoDeFatia(cand, instRef)) continue;
+        const c = coordenadaNormalDaInstancia(cand);
+        if (c === undefined) continue;
+        const d = Math.abs(c - coordRef);
+        if (d < menorDist) {
+          menorDist = d;
+          melhorIdxSub = i;
+        }
+      }
+      if (melhorIdxSub >= 0 && menorDist <= limiarMesmoNivelMm) {
+        const inst = subPilha.instances[melhorIdxSub]!;
+        const idxNaPilhaAtiva = pilhaAtiva.instances.findIndex((x) => x.fileId === inst.fileId);
+        porSubPilha.push({
+          instancia: inst,
+          pilha: idxNaPilhaAtiva >= 0 ? pilhaAtiva : subPilha,
+          indiceNaPilha: idxNaPilhaAtiva >= 0 ? idxNaPilhaAtiva : melhorIdxSub,
+          tempoSegundos: segundosDoHorarioDicom(inst),
+          ordemFase: idxSub,
+          ordemSerie: serieAtiva.seriesNumber ?? 0,
+          rotuloCurto: subPilha.label ?? `Fase ${porSubPilha.length + 1}`,
+        });
+      }
+    });
+    if (porSubPilha.length >= 2) {
+      const ordenados = ordenarQuadrosCronologicamente(porSubPilha);
+      return ordenados.map((q, idx) => ({
+        ...q,
+        rotuloCurto: q.rotuloCurto.startsWith('#') ? `Fase ${idx + 1}` : q.rotuloCurto,
+      }));
+    }
+  }
+
+  // 2) Se todas as fases estão em `pilhaAtiva.instances` na MESMA coordenada espacial exata:
+  const coords = pilhaAtiva.instances
+    .map((inst) => coordenadaNormalDaInstancia(inst))
+    .filter((c): c is number => c !== undefined)
+    .sort((a, b) => a - b);
+  let menorPassoPositivo = Infinity;
+  for (let i = 1; i < coords.length; i++) {
+    const diff = Math.abs(coords[i]! - coords[i - 1]!);
+    if (diff > 0.25 && diff < menorPassoPositivo) {
+      menorPassoPositivo = diff;
+    }
+  }
+  const toleranciaExataMm = Number.isFinite(menorPassoPositivo)
+    ? Math.min(0.25, menorPassoPositivo * 0.35)
+    : 0.15;
+
+  const noMesmoCorteExato: QuadroAlvo[] = [];
+  let emOutroNivel = 0;
+  pilhaAtiva.instances.forEach((inst, idx) => {
+    if (!mesmaOrientacaoDeFatia(inst, instRef)) return;
+    const c = coordenadaNormalDaInstancia(inst);
+    if (c !== undefined && Math.abs(c - coordRef) <= toleranciaExataMm) {
+      noMesmoCorteExato.push({
+        instancia: inst,
+        pilha: pilhaAtiva,
+        indiceNaPilha: idx,
+        tempoSegundos: segundosDoHorarioDicom(inst),
+        ordemFase: idx,
+        rotuloCurto: `Fase ${noMesmoCorteExato.length + 1}`,
+      });
+    } else if (c !== undefined) {
+      emOutroNivel++;
+    }
+  });
+
+  if (noMesmoCorteExato.length >= 2 && emOutroNivel >= 1) {
+    const ordenados = ordenarQuadrosCronologicamente(noMesmoCorteExato);
+    return ordenados.map((q, idx) => ({
+      ...q,
+      rotuloCurto: `Fase ${idx + 1}`,
+    }));
+  }
+
+  return [];
+}
+
+/**
+ * Procura em todas as séries compatíveis do estudo atual o corte único na mesma posição
+ * anatômica `coordRef` (1 corte por fase/série).
+ * Quando `apenasMesmaSequencia === true`, exige mesma matriz (`rows`×`columns`), `echoTime`
+ * compatível e exclui séries de subtração, MIP, T2, DWI e ADC.
+ */
+function coletarFasesCompativeisNoEstudo(
+  instRef: InstanceMeta,
+  coordRef: number,
+  apenasMesmaSequencia: boolean,
+): QuadroAlvo[] {
+  const index = estado.resultado?.index;
+  if (!index) return [];
+  const serieRef = encontrarSerieDaInstancia(instRef);
+  const refEhEspecial = serieRef ? ehSerieNaoPerfusao(serieRef, instRef) : false;
+  const espessura = instRef.sliceThickness ?? instRef.spacingBetweenSlices ?? 1.5;
+  const limiarMm = Math.max(2.5, espessura * 1.5);
+
+  const candidatos: QuadroAlvo[] = [];
+  for (const p of index.patients) {
+    for (const est of p.studies) {
+      if (est.studyInstanceUid !== instRef.studyInstanceUid) continue;
+      for (const serie of est.series) {
+        if (serie.kind !== 'imagem' || serie.modality !== instRef.modality) continue;
+        const primeiraInst = serie.stacks[0]?.instances[0];
+        if (!primeiraInst) continue;
+        if (!refEhEspecial && ehSerieNaoPerfusao(serie, primeiraInst)) continue;
+
+        if (apenasMesmaSequencia) {
+          if (
+            instRef.rows !== undefined &&
+            primeiraInst.rows !== undefined &&
+            instRef.rows !== primeiraInst.rows
+          ) {
+            continue;
+          }
+          if (
+            instRef.columns !== undefined &&
+            primeiraInst.columns !== undefined &&
+            instRef.columns !== primeiraInst.columns
+          ) {
+            continue;
+          }
+          if (
+            instRef.echoTime !== undefined &&
+            primeiraInst.echoTime !== undefined &&
+            Math.abs(instRef.echoTime - primeiraInst.echoTime) > 1.5
+          ) {
+            continue;
+          }
+        }
+
+        const pilhasExibicao = pilhasExibicaoDaSerie(serie);
+        const subPilhasBusca = serie.stacks.length >= 2 ? serie.stacks : pilhasExibicao;
+
+        subPilhasBusca.forEach((subPilha, idxSub) => {
+          let melhorIdx = -1;
+          let menorDist = Infinity;
+          for (let i = 0; i < subPilha.instances.length; i++) {
+            const cand = subPilha.instances[i]!;
+            if (!mesmaOrientacaoDeFatia(cand, instRef)) continue;
+            const c = coordenadaNormalDaInstancia(cand);
+            if (c === undefined) continue;
+            const d = Math.abs(c - coordRef);
+            if (d < menorDist) {
+              menorDist = d;
+              melhorIdx = i;
+            }
+          }
+          if (melhorIdx >= 0 && menorDist <= limiarMm) {
+            const inst = subPilha.instances[melhorIdx]!;
+            const pilhaAlvo =
+              pilhasExibicao.find((pe) => pe.instances.some((x) => x.fileId === inst.fileId)) ?? subPilha;
+            const idxNaPilhaAlvo = pilhaAlvo.instances.findIndex((x) => x.fileId === inst.fileId);
+            const rotuloBase = serie.description
+              ? serie.description.slice(0, 14)
+              : `Série ${serie.seriesNumber ?? candidatos.length + 1}`;
+            candidatos.push({
+              instancia: inst,
+              pilha: pilhaAlvo,
+              indiceNaPilha: idxNaPilhaAlvo >= 0 ? idxNaPilhaAlvo : melhorIdx,
+              tempoSegundos: segundosDoHorarioDicom(inst),
+              ordemSerie: serie.seriesNumber ?? 0,
+              ordemFase: idxSub,
+              rotuloCurto: subPilhasBusca.length > 1 && subPilha.label ? `${rotuloBase} (${subPilha.label})` : rotuloBase,
+            });
+          }
+        });
+      }
+    }
+  }
+
+  const ordenados = ordenarQuadrosCronologicamente(candidatos);
+  if (apenasMesmaSequencia && ordenados.length >= 2) {
+    return ordenados.map((q, idx) => ({
+      ...q,
+      rotuloCurto: `Fase ${idx + 1}`,
+    }));
+  }
+  return ordenados;
 }
 
 /**
  * Monta a lista de quadros a medir conforme o modo escolhido:
- * - `'serie-ativa'`: todos os cortes/quadros da pilha atual.
- * - `'fases-estudo'`: todas as pilhas do mesmo estudo que tenham uma fatia na mesma
- *   posição anatômica (dentro de 6 mm da fatia atual), ordenadas por horário/série.
+ * - `'serie-ativa'`: fases temporais da sequência ativa na mesma posição anatômica (1 corte por fase);
+ *   se a sequência tiver 1 série por fase no estudo, reúne automaticamente as fases irmãs da sequência.
+ * - `'fases-estudo'`: todas as séries/fases compatíveis do estudo neste nível anatômico.
+ * - `'cortes-pilha'`: todos os cortes espaciais da pilha ativa.
  */
 function coletarQuadrosAlvo(
   pilhaAtiva: StackNode,
@@ -411,31 +978,7 @@ function coletarQuadrosAlvo(
   const instRef = pilhaAtiva.instances[indiceCorteAtual] ?? pilhaAtiva.instances[0];
   if (!instRef) return [];
 
-  if (modo === 'serie-ativa') {
-    const coordRefAtiva = coordenadaNormalDaInstancia(instRef);
-    if (coordRefAtiva !== undefined && pilhaAtiva.instances.length >= 4) {
-      const noMesmoNivel: QuadroAlvo[] = [];
-      let emOutroNivel = 0;
-      pilhaAtiva.instances.forEach((inst, idx) => {
-        const c = coordenadaNormalDaInstancia(inst);
-        if (c !== undefined && Math.abs(c - coordRefAtiva) <= 2.0) {
-          noMesmoNivel.push({
-            instancia: inst,
-            pilha: pilhaAtiva,
-            indiceNaPilha: idx,
-            tempoSegundos: segundosDoHorarioDicom(inst),
-            rotuloCurto: `#${noMesmoNivel.length + 1}`,
-          });
-        } else if (c !== undefined) {
-          emOutroNivel++;
-        }
-      });
-      // Se a pilha unificada tem várias fases na mesma posição anatômica atual (ex.: perfusão 4D),
-      // mede a evolução temporal apenas nos cortes da mesma posição espacial da fatia ativa.
-      if (noMesmoNivel.length >= 2 && emOutroNivel >= 1) {
-        return noMesmoNivel;
-      }
-    }
+  if (modo === 'cortes-pilha') {
     return pilhaAtiva.instances.map((inst, idx) => ({
       instancia: inst,
       pilha: pilhaAtiva,
@@ -445,91 +988,180 @@ function coletarQuadrosAlvo(
     }));
   }
 
-  // Modo 'fases-estudo': procura em todo o estudo atual (ou em todos os estudos do mesmo paciente)
   const coordRef = coordenadaNormalDaInstancia(instRef);
-  const index = estado.resultado?.index;
-  if (!index || coordRef === undefined) {
-    return coletarQuadrosAlvo(pilhaAtiva, indiceCorteAtual, 'serie-ativa');
-  }
+  if (coordRef !== undefined) {
+    if (modo === 'serie-ativa') {
+      const fasesSerie = coletarFasesDaMesmaSerie(pilhaAtiva, instRef, coordRef);
+      if (fasesSerie.length >= 2) return fasesSerie;
 
-  const candidatos: Array<QuadroAlvo & { ordemSerie: number }> = [];
-  for (const p of index.patients) {
-    for (const est of p.studies) {
-      if (est.studyInstanceUid !== instRef.studyInstanceUid) continue;
-      for (const serie of est.series) {
-        for (const stack of serie.stacks) {
-          // Procura a fatia mais próxima de coordRef nesta pilha:
-          let melhorIdx = -1;
-          let menorDist = Infinity;
-          for (let i = 0; i < stack.instances.length; i++) {
-            const c = coordenadaNormalDaInstancia(stack.instances[i]!);
-            if (c === undefined) continue;
-            const d = Math.abs(c - coordRef);
-            if (d < menorDist) {
-              menorDist = d;
-              melhorIdx = i;
-            }
-          }
-          if (melhorIdx >= 0 && menorDist <= 6.0) {
-            const inst = stack.instances[melhorIdx]!;
-            candidatos.push({
-              instancia: inst,
-              pilha: stack,
-              indiceNaPilha: melhorIdx,
-              tempoSegundos: segundosDoHorarioDicom(inst),
-              ordemSerie: serie.seriesNumber ?? 0,
-              rotuloCurto: serie.description
-                ? `${serie.description.slice(0, 14)}`
-                : `Série ${serie.seriesNumber ?? candidatos.length + 1}`,
-            });
-          }
-        }
-      }
+      const fasesIrmas = coletarFasesCompativeisNoEstudo(instRef, coordRef, true);
+      if (fasesIrmas.length >= 2) return fasesIrmas;
+    } else if (modo === 'fases-estudo') {
+      const fasesEstudo = coletarFasesCompativeisNoEstudo(instRef, coordRef, false);
+      if (fasesEstudo.length >= 2) return fasesEstudo;
     }
   }
 
-  if (candidatos.length <= 1) {
-    return coletarQuadrosAlvo(pilhaAtiva, indiceCorteAtual, 'serie-ativa');
-  }
+  return pilhaAtiva.instances.map((inst, idx) => ({
+    instancia: inst,
+    pilha: pilhaAtiva,
+    indiceNaPilha: idx,
+    tempoSegundos: segundosDoHorarioDicom(inst),
+    rotuloCurto: `#${idx + 1}`,
+  }));
+}
 
-  candidatos.sort((a, b) => {
-    if (a.tempoSegundos !== undefined && b.tempoSegundos !== undefined && a.tempoSegundos !== b.tempoSegundos) {
-      return a.tempoSegundos - b.tempoSegundos;
-    }
-    return a.ordemSerie - b.ordemSerie;
-  });
-
-  return candidatos;
+function quantasFasesDaSequenciaAtiva(pilhaAtiva: StackNode, indiceCorteAtual: number): number {
+  const instRef = pilhaAtiva.instances[indiceCorteAtual] ?? pilhaAtiva.instances[0];
+  if (!instRef) return pilhaAtiva.instances.length;
+  const coordRef = coordenadaNormalDaInstancia(instRef);
+  if (coordRef === undefined) return pilhaAtiva.instances.length;
+  const daSerie = coletarFasesDaMesmaSerie(pilhaAtiva, instRef, coordRef);
+  if (daSerie.length >= 2) return daSerie.length;
+  const irmas = coletarFasesCompativeisNoEstudo(instRef, coordRef, true);
+  if (irmas.length >= 2) return irmas.length;
+  return pilhaAtiva.instances.length;
 }
 
 function quantasFasesNoEstudoNesteNivel(pilhaAtiva: StackNode, indiceCorteAtual: number): number {
   const instRef = pilhaAtiva.instances[indiceCorteAtual] ?? pilhaAtiva.instances[0];
   if (!instRef) return 1;
   const coordRef = coordenadaNormalDaInstancia(instRef);
-  const index = estado.resultado?.index;
-  if (!index || coordRef === undefined) return 1;
-  let total = 0;
-  for (const p of index.patients) {
-    for (const est of p.studies) {
-      if (est.studyInstanceUid !== instRef.studyInstanceUid) continue;
-      for (const serie of est.series) {
-        for (const stack of serie.stacks) {
-          const temPerto = stack.instances.some((inst) => {
-            const c = coordenadaNormalDaInstancia(inst);
-            return c !== undefined && Math.abs(c - coordRef) <= 6.0;
-          });
-          if (temPerto) total++;
-        }
+  if (coordRef === undefined) return 1;
+  return Math.max(1, coletarFasesCompativeisNoEstudo(instRef, coordRef, false).length);
+}
+
+/**
+ * Replica/sincroniza visualmente cada ROI mestre em todas as demais fases (`quadros`) na
+ * mesma posição 3D do paciente, permitindo ao usuário rolar ou clicar nas fases do gráfico
+ * e ver exatamente onde a ROI caiu e seus valores em cada fase.
+ */
+function sincronizarReplicasRoisNasFases(
+  elemento: HTMLDivElement,
+  viewport: Types.IStackViewport | Types.IVolumeViewport,
+  rois: RoiEmPixels[],
+  quadros: QuadroAlvo[],
+  arquivos: Map<string, File>,
+  obterImageIdDoQuadro: ObterImageIdDoQuadroFn | undefined,
+  roiDestaqueId: string | null,
+): void {
+  const imageIdsQuadros: Array<{ quadro: QuadroAlvo; imageId: string }> = [];
+  const conjuntoImageIds = new Set<string>();
+  for (const q of quadros) {
+    const id = obterImageIdParaQuadro(q.pilha, q.indiceNaPilha, q.instancia, arquivos, obterImageIdDoQuadro);
+    if (id && !conjuntoImageIds.has(id)) {
+      conjuntoImageIds.add(id);
+      imageIdsQuadros.push({ quadro: q, imageId: id });
+    }
+  }
+
+  const idsRoisAtivas = new Set(rois.map((r) => r.id));
+
+  // Remove réplicas antigas de ROIs removidas ou de quadros que não pertencem mais ao modo ativo:
+  for (const toolName of [EllipticalROITool.toolName, PlanarFreehandROITool.toolName]) {
+    const todas = [...(annotation.state.getAnnotations(toolName, elemento) ?? [])];
+    for (const ann of todas) {
+      const dados = ann.data as DadosReplicaRoi | undefined;
+      const idMestre = dados?.replicaDeRoiUid;
+      if (!idMestre) continue;
+      const refId = ann.metadata?.referencedImageId;
+      if (!idsRoisAtivas.has(idMestre) || !refId || !conjuntoImageIds.has(refId)) {
+        if (ann.annotationUID) annotation.state.removeAnnotation(ann.annotationUID);
       }
     }
   }
-  return total;
+
+  for (const roi of rois) {
+    roi.replicasRef = [];
+    if (!roi.anotacaoRef || roi.pontosMundo.length === 0) continue;
+    const toolName = roi.tipo === 'elipse' ? EllipticalROITool.toolName : PlanarFreehandROITool.toolName;
+    const imgIdMestre = roi.anotacaoRef.metadata?.referencedImageId;
+    const existentes = annotation.state.getAnnotations(toolName, elemento) ?? [];
+
+    for (const { quadro, imageId } of imageIdsQuadros) {
+      if (imageId === imgIdMestre) continue;
+
+      const pontosProj = roi.pontosMundo.map((pt) => projetarPontoNoPlanoDaInstancia(pt, quadro.instancia));
+      const assProj = assinaturaPontosMundo(pontosProj);
+
+      let replica = existentes.find((a) => {
+        const d = a.data as DadosReplicaRoi | undefined;
+        return d?.replicaDeRoiUid === roi.id && a.metadata?.referencedImageId === imageId;
+      });
+
+      if (replica) {
+        const d = replica.data as DadosReplicaRoi;
+        d.label = roi.nome;
+        d.assinaturaSincronizada = assProj;
+        d.cachedStats = {};
+        if (roi.tipo === 'elipse' && d.handles) {
+          d.handles.points = pontosProj.map((p) => [...p] as Ponto3);
+        } else if (d.contour) {
+          d.contour.polyline = pontosProj.map((p) => [...p] as Ponto3);
+        }
+        replica.invalidated = true;
+      } else {
+        const metaBase = { ...(roi.anotacaoRef.metadata ?? {}) } as Record<string, unknown>;
+        delete metaBase.referencedImageURI;
+        delete metaBase.sliceIndex;
+        const novaReplica = {
+          annotationUID: `replica-${roi.id}-${imageId}`,
+          highlighted: false,
+          invalidated: true,
+          isLocked: false,
+          isVisible: true,
+          metadata: {
+            ...metaBase,
+            toolName,
+            referencedImageId: imageId,
+          },
+          data: {
+            label: roi.nome,
+            replicaDeRoiUid: roi.id,
+            assinaturaSincronizada: assProj,
+            cachedStats: {},
+            handles: {
+              points: roi.tipo === 'elipse' ? pontosProj.map((p) => [...p] as Ponto3) : [],
+              activeHandleIndex: null,
+              textBox: {
+                hasMoved: false,
+                worldPosition: [0, 0, 0] as Ponto3,
+                worldBoundingBox: {
+                  topLeft: [0, 0, 0] as Ponto3,
+                  topRight: [0, 0, 0] as Ponto3,
+                  bottomLeft: [0, 0, 0] as Ponto3,
+                  bottomRight: [0, 0, 0] as Ponto3,
+                },
+              },
+            },
+            ...(roi.tipo === 'poligono'
+              ? {
+                  contour: {
+                    polyline: pontosProj.map((p) => [...p] as Ponto3),
+                    closed: true,
+                  },
+                }
+              : {}),
+          },
+        };
+        annotation.state.addAnnotation(novaReplica as never, elemento);
+        replica = novaReplica as unknown as AnotacaoCornerstone;
+      }
+
+      aplicarEstiloRoiNoViewport(replica, roi.cor, roiDestaqueId !== null && roiDestaqueId === roi.id);
+      roi.replicasRef.push(replica);
+    }
+  }
+
+  utilitariosTools.triggerAnnotationRenderForViewportIds(idsDosViewportsAtivos(viewport.id));
 }
 
 async function calcularCurvasRoi(
   rois: RoiEmPixels[],
   quadros: QuadroAlvo[],
   arquivos: Map<string, File>,
+  viewport?: Types.IStackViewport | Types.IVolumeViewport,
+  obterImageIdDoQuadro?: ObterImageIdDoQuadroFn,
   aoProgredir?: (feitos: number, total: number) => void,
 ): Promise<SerieCurvaRoi[]> {
   // Verifica se todos os quadros têm timestamps crescentes distintos para usar segundos no eixo X:
@@ -542,7 +1174,13 @@ async function calcularCurvasRoi(
 
   for (let i = 0; i < quadros.length; i++) {
     const q = quadros[i]!;
-    const imageId = obterImageIdParaInstancia(q.instancia, arquivos);
+    const imageId = obterImageIdParaQuadro(
+      q.pilha,
+      q.indiceNaPilha,
+      q.instancia,
+      arquivos,
+      obterImageIdDoQuadro,
+    );
     if (!imageId) continue;
 
     try {
@@ -550,15 +1188,27 @@ async function calcularCurvasRoi(
       const pixels = img.getPixelData();
       const largura = img.columns ?? img.width ?? q.instancia.columns ?? 0;
       const altura = img.rows ?? img.height ?? q.instancia.rows ?? 0;
-      const slope = img.slope ?? q.instancia.rescaleSlope ?? 1;
-      const intercept = img.intercept ?? q.instancia.rescaleIntercept ?? 0;
+      // Quando `img.preScale?.scaled === true`, o `@cornerstonejs/dicom-image-loader` já aplicou
+      // `rescaleSlope` e `rescaleIntercept` sobre `getPixelData()`. Não reaplicar para não distorcer fases!
+      const jaEscalado = Boolean((img as { preScale?: { scaled?: boolean } }).preScale?.scaled);
+      const slope = jaEscalado ? 1 : (img.slope ?? q.instancia.rescaleSlope ?? 1);
+      const intercept = jaEscalado ? 0 : (img.intercept ?? q.instancia.rescaleIntercept ?? 0);
 
-      const valorX = temVariacaoTempo ? Number(((q.tempoSegundos! - t0)).toFixed(1)) : i + 1;
+      const valorX = temVariacaoTempo ? Number((q.tempoSegundos! - t0).toFixed(1)) : i + 1;
       const unidadeX: 'quadro' | 's' = temVariacaoTempo ? 's' : 'quadro';
       const rotuloX = temVariacaoTempo ? `${valorX.toFixed(1)} s (${q.rotuloCurto})` : `${q.rotuloCurto}`;
 
       for (let rIdx = 0; rIdx < rois.length; rIdx++) {
-        const med = medirRoiNaImagem(rois[rIdx]!, pixels, largura, altura, slope, intercept);
+        const med = medirRoiNaImagem(
+          rois[rIdx]!,
+          q.instancia,
+          viewport,
+          pixels,
+          largura,
+          altura,
+          slope,
+          intercept,
+        );
         if (!med) continue;
         pontosPorRoi[rIdx]!.push({
           indice: i,
@@ -824,6 +1474,7 @@ function exportarCsv(series: SerieCurvaRoi[], unidadeY: string): void {
 let dialogoCurva: HTMLDialogElement | null = null;
 let posicaoSalvaDialogo: { left: number; top: number } | null = null;
 let limparArrastoAtivo: (() => void) | null = null;
+let limparEscutaViewportAtiva: (() => void) | null = null;
 let resizeObserverAtivo: ResizeObserver | null = null;
 
 function habilitarArrastoDialogo(cabecalho: HTMLElement, dialogo: HTMLDialogElement): void {
@@ -881,8 +1532,16 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   indiceCorteAtual: number;
   pontoMiraMundo?: Ponto3 | null;
   aoSelecionarQuadro?: (pilha: StackNode, indiceCorte: number) => void;
+  obterImageIdDoQuadro?: ObterImageIdDoQuadroFn;
 }): Promise<void> {
-  const { elementoViewport, pilhaAtiva, indiceCorteAtual, pontoMiraMundo, aoSelecionarQuadro } = opcoes;
+  const {
+    elementoViewport,
+    pilhaAtiva,
+    indiceCorteAtual,
+    pontoMiraMundo,
+    aoSelecionarQuadro,
+    obterImageIdDoQuadro,
+  } = opcoes;
   const arquivos = estado.resultado?.arquivos;
   if (!elementoViewport || !pilhaAtiva || !arquivos) return;
 
@@ -898,6 +1557,7 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     pontoMiraMundo,
   );
 
+  const qtdFasesSeq = quantasFasesDaSequenciaAtiva(pilhaAtiva, indiceCorteAtual);
   const qtdFasesEstudo = quantasFasesNoEstudoNesteNivel(pilhaAtiva, indiceCorteAtual);
   let modoAtual: ModoCurvaPerfusao = 'serie-ativa';
   const unidadeY = instRef?.modality === 'CT' ? 'HU' : instRef?.modality === 'PT' ? 'Bq/mL' : 'Intensidade';
@@ -910,6 +1570,8 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   }
 
   const d = dialogoCurva;
+  limparEscutaViewportAtiva?.();
+  limparEscutaViewportAtiva = null;
   resizeObserverAtivo?.disconnect();
   resizeObserverAtivo = null;
   d.replaceChildren();
@@ -927,11 +1589,14 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   seletorModo.setAttribute('aria-label', 'Modo de amostragem da curva');
   const opSerie = document.createElement('option');
   opSerie.value = 'serie-ativa';
-  opSerie.textContent = `Série ativa (${pilhaAtiva.instances.length})`;
+  opSerie.textContent = `Fases da sequência (${qtdFasesSeq})`;
   const opFases = document.createElement('option');
   opFases.value = 'fases-estudo';
   opFases.textContent = `Fases do estudo (${qtdFasesEstudo})`;
-  seletorModo.append(opSerie, opFases);
+  const opCortes = document.createElement('option');
+  opCortes.value = 'cortes-pilha';
+  opCortes.textContent = `Todos os cortes (${pilhaAtiva.instances.length})`;
+  seletorModo.append(opSerie, opFases, opCortes);
   seletorModo.value = modoAtual;
 
   const btnAtualizar = document.createElement('button');
@@ -956,8 +1621,8 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   avisoRoi.className = 'dica-curva';
   const atualizarTextoAviso = () => {
     avisoRoi.textContent = usouRoiAutomatica
-      ? 'Nenhuma ROI desenhada: medindo ROI automática. Desenhe ROIs (E ou M), arraste esta janela para o lado e clique em "Atualizar ROIs".'
-      : `Medindo ${rois.length} ${rois.length === 1 ? 'ROI' : 'ROIs'} com cores/nomes sincronizados com a imagem. Passe o mouse numa linha da tabela para destacar a ROI; clique para editar o nome.`;
+      ? 'ROI 1 criada e replicada nas fases. Você pode arrastá-la na imagem ou desenhar novas ROIs (E ou M).'
+      : `Medindo ${rois.length} ${rois.length === 1 ? 'ROI replicada' : 'ROIs replicadas'} em todas as fases. Passe o mouse na tabela para destacar; clique no ponto para ir à fase.`;
   };
   atualizarTextoAviso();
 
@@ -995,18 +1660,30 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     });
     let atualizouVp = false;
     for (const r of rois) {
+      const emDestaque = roiId !== null && r.id === roiId;
       if (r.anotacaoRef) {
-        aplicarEstiloRoiNoViewport(r.anotacaoRef, r.cor, roiId !== null && r.id === roiId);
+        aplicarEstiloRoiNoViewport(r.anotacaoRef, r.cor, emDestaque);
         atualizouVp = true;
       }
+      if (r.replicasRef) {
+        for (const rep of r.replicasRef) {
+          aplicarEstiloRoiNoViewport(rep, r.cor, emDestaque);
+          atualizouVp = true;
+        }
+      }
     }
-    if (atualizouVp && viewport.id) {
-      utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
+    if (atualizouVp) {
+      const vpIds = idsDosViewportsAtivos(viewport.id);
+      if (vpIds.length > 0) {
+        utilitariosTools.triggerAnnotationRenderForViewportIds(vpIds);
+      }
     }
     desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
   }
 
   btnFechar.addEventListener('click', () => {
+    limparEscutaViewportAtiva?.();
+    limparEscutaViewportAtiva = null;
     destacarRoi(null);
     d.close();
   });
@@ -1042,7 +1719,6 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
       inputNome.className = 'roi-nome-input';
       inputNome.value = s.nome;
       inputNome.setAttribute('aria-label', `Nome de ${s.nome}`);
-      inputNome.readOnly = usouRoiAutomatica;
       inputNome.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Enter') inputNome.blur();
@@ -1055,9 +1731,15 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
           roiAlvo.nome = novoNome;
           if (roiAlvo.anotacaoRef?.data) {
             roiAlvo.anotacaoRef.data.label = novoNome;
-            if (viewport.id) {
-              utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
+          }
+          if (roiAlvo.replicasRef) {
+            for (const rep of roiAlvo.replicasRef) {
+              if (rep.data) rep.data.label = novoNome;
             }
+          }
+          const vpIds = idsDosViewportsAtivos(viewport.id);
+          if (vpIds.length > 0) {
+            utilitariosTools.triggerAnnotationRenderForViewportIds(vpIds);
           }
         }
         desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
@@ -1082,18 +1764,49 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     tabelaResumo.append(thead, tbody);
   }
 
+  let calculandoAgora = false;
   async function atualizarCalculo(): Promise<void> {
-    statusHover.textContent = 'Lendo quadros e calculando densidades no ROI…';
-    const quadros = coletarQuadrosAlvo(pilhaAtiva!, indiceCorteAtual, modoAtual);
-    seriesAtuais = await calcularCurvasRoi(rois, quadros, arquivos!, (feitos, total) => {
-      statusHover.textContent = `Medindo ROI: quadro ${feitos} de ${total}…`;
-    });
-    indiceHover = null;
-    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
-    renderizarResumo();
-    statusHover.textContent =
-      'Passe o mouse sobre o gráfico para inspecionar · Clique num ponto para ir ao corte.';
+    if (calculandoAgora) return;
+    calculandoAgora = true;
+    try {
+      statusHover.textContent = 'Lendo quadros e calculando densidades no ROI…';
+      const quadros = coletarQuadrosAlvo(pilhaAtiva!, indiceCorteAtual, modoAtual);
+      sincronizarReplicasRoisNasFases(
+        elementoViewport!,
+        viewport,
+        rois,
+        quadros,
+        arquivos!,
+        obterImageIdDoQuadro,
+        roiHoverId,
+      );
+      seriesAtuais = await calcularCurvasRoi(
+        rois,
+        quadros,
+        arquivos!,
+        viewport,
+        obterImageIdDoQuadro,
+        (feitos, total) => {
+          statusHover.textContent = `Medindo ROI: quadro ${feitos} de ${total}…`;
+        },
+      );
+      indiceHover = null;
+      desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
+      renderizarResumo();
+      statusHover.textContent =
+        'Passe o mouse sobre o gráfico para inspecionar · Clique num ponto para ir à fase.';
+    } finally {
+      calculandoAgora = false;
+    }
   }
+
+  const recarregarRoisEAtualizar = () => {
+    const extracao = extrairRoisNormalizadas(elementoViewport, viewport, instRef, pontoMiraMundo);
+    rois = extracao.rois;
+    usouRoiAutomatica = extracao.usouRoiAutomatica;
+    atualizarTextoAviso();
+    void atualizarCalculo();
+  };
 
   seletorModo.addEventListener('change', () => {
     modoAtual = seletorModo.value as ModoCurvaPerfusao;
@@ -1101,13 +1814,24 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   });
 
   btnAtualizar.addEventListener('click', () => {
-    const extracao = extrairRoisNormalizadas(elementoViewport, viewport, instRef, pontoMiraMundo);
-    rois = extracao.rois;
-    usouRoiAutomatica = extracao.usouRoiAutomatica;
     roiHoverId = null;
-    atualizarTextoAviso();
-    void atualizarCalculo();
+    recarregarRoisEAtualizar();
   });
+
+  let timerAutoRecalculo: ReturnType<typeof setTimeout> | null = null;
+  const aoTerminarInteracaoViewport = (ev: MouseEvent) => {
+    if (ev.button !== 0 || !d.open) return;
+    if (timerAutoRecalculo) clearTimeout(timerAutoRecalculo);
+    timerAutoRecalculo = setTimeout(() => {
+      if (!d.open) return;
+      recarregarRoisEAtualizar();
+    }, 180);
+  };
+  elementoViewport.addEventListener('mouseup', aoTerminarInteracaoViewport);
+  limparEscutaViewportAtiva = () => {
+    if (timerAutoRecalculo) clearTimeout(timerAutoRecalculo);
+    elementoViewport.removeEventListener('mouseup', aoTerminarInteracaoViewport);
+  };
 
   btnCsv.addEventListener('click', () => {
     if (seriesAtuais.length > 0) exportarCsv(seriesAtuais, unidadeY);
