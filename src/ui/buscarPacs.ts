@@ -30,6 +30,7 @@ import { abrirServidoresPacs } from './servidoresPacs';
 let caixa: HTMLDialogElement | undefined;
 export type AbaPacs = 'buscar' | 'baixados';
 let abaAtiva: AbaPacs = 'buscar';
+let geracaoDesenho = 0;
 let atualizarRodapePasta: (() => Promise<void>) | undefined;
 
 interface ExameBaixadoResumo {
@@ -161,15 +162,17 @@ async function carregarResumoExamesBaixados(base: string): Promise<ExameBaixadoR
 }
 
 function desenhar(): void {
+  const geracao = ++geracaoDesenho;
   atualizarAbasTopo();
   if (abaAtiva === 'baixados') {
-    void desenharBaixados();
+    void desenharBaixados(geracao);
   } else {
     desenharBusca();
   }
 }
 
-async function desenharBaixados(): Promise<void> {
+async function desenharBaixados(geracao: number): Promise<void> {
+  const stale = (): boolean => geracao !== geracaoDesenho || abaAtiva !== 'baixados';
   const corpo = caixa!.querySelector<HTMLElement>('.busca-corpo')!;
   corpo.replaceChildren(el('p', { class: 'cfg-dica' }, 'Lendo exames salvos neste computador…'));
 
@@ -177,11 +180,14 @@ async function desenharBaixados(): Promise<void> {
   let exames: ExameBaixadoResumo[];
   try {
     base = await pastaDeExames();
+    if (stale()) return;
     exames = await carregarResumoExamesBaixados(base);
   } catch (e) {
+    if (stale()) return;
     corpo.replaceChildren(el('p', { class: 'cfg-aviso' }, `Erro ao listar exames baixados: ${mensagemDe(e)}`));
     return;
   }
+  if (stale()) return;
 
   const btnAbaBaixados = caixa?.querySelector<HTMLButtonElement>('.pacs-abas button[data-aba="baixados"]');
   if (btnAbaBaixados) {
@@ -237,7 +243,7 @@ async function desenharBaixados(): Promise<void> {
     btnApagarSel.disabled = n === 0;
   };
 
-  btnAtualizar.addEventListener('click', () => void desenharBaixados());
+  btnAtualizar.addEventListener('click', () => desenhar());
 
   btnAbrirSel.addEventListener('click', () => {
     const escolhidos = exames.filter((x) => selecionados.has(x.pastaEstudo));
@@ -271,7 +277,7 @@ async function desenharBaixados(): Promise<void> {
       await apagarExames(base, ex.pastaEstudo);
     }
     await atualizarRodapePasta?.();
-    await desenharBaixados();
+    if (abaAtiva === 'baixados') desenhar();
   });
 
   const barraAcoes = el(
@@ -364,7 +370,7 @@ async function desenharBaixados(): Promise<void> {
         await apagarExames(base, ex.pastaEstudo);
         selecionados.delete(ex.pastaEstudo);
         await atualizarRodapePasta?.();
-        await desenharBaixados();
+        if (abaAtiva === 'baixados') desenhar();
       });
 
       const tr = el(
@@ -794,6 +800,7 @@ function criarCaixa(): HTMLDialogElement {
   });
   btnAbaBuscar.dataset.aba = 'buscar';
   btnAbaBuscar.addEventListener('click', () => {
+    if (abaAtiva === 'buscar') return;
     abaAtiva = 'buscar';
     desenhar();
   });
@@ -830,14 +837,17 @@ function criarCaixa(): HTMLDialogElement {
   pasta.addEventListener('change', () => {
     definirPastaDeExames(pasta.value);
     void carregar();
-    if (abaAtiva === 'baixados') void desenharBaixados();
+    if (abaAtiva === 'baixados') desenhar();
   });
   apagar.addEventListener('click', async () => {
     const base = await pastaDeExames();
     if (!window.confirm(`Apagar TODOS os exames baixados em\n${base}\n(isso não afeta o PACS)?`)) return;
     await apagarExames(base, '');
     await carregar();
-    if (abaAtiva === 'baixados') void desenharBaixados();
+    if (abaAtiva === 'baixados') desenhar();
+  });
+  d.addEventListener('close', () => {
+    ++geracaoDesenho;
   });
   d.addEventListener('toggle', () => {
     if (d.open) void carregar();
