@@ -11,11 +11,18 @@
 
 import { getEnabledElement, imageLoader, type Types } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
-import { annotation, EllipticalROITool, PlanarFreehandROITool } from '@cornerstonejs/tools';
+import {
+  annotation,
+  EllipticalROITool,
+  PlanarFreehandROITool,
+  utilities as utilitariosTools,
+} from '@cornerstonejs/tools';
 import { parseTM } from '../io/dicomTime';
 import type { StackNode } from '../io/organize';
 import type { InstanceMeta } from '../io/types';
 import { estado } from '../state/store';
+
+type AnotacaoCornerstone = ReturnType<typeof annotation.state.getAnnotations>[number];
 
 type Ponto2 = [number, number];
 type Ponto3 = [number, number, number];
@@ -53,6 +60,8 @@ interface RoiEmPixels {
   nome: string;
   cor: string;
   tipo: 'elipse' | 'poligono';
+  /** Referência à anotação Cornerstone na imagem (quando desenhada pelo usuário). */
+  anotacaoRef?: AnotacaoCornerstone;
   /** Centro e semi-eixos em coordenadas normalizadas [0..1] da imagem de referência. */
   centroNorm: Ponto2;
   eixoANorm: Ponto2;
@@ -62,6 +71,27 @@ interface RoiEmPixels {
 }
 
 const CORES_ROIS = ['#38bdf8', '#f87171', '#4ade80', '#fbbf24', '#c084fc', '#fb923c'];
+
+function aplicarEstiloRoiNoViewport(
+  anotacao: AnotacaoCornerstone | undefined,
+  cor: string,
+  destacada: boolean,
+): void {
+  const uid = anotacao?.annotationUID;
+  if (!uid) return;
+  annotation.config.style.setAnnotationStyles(uid, {
+    color: cor,
+    colorHighlighted: '#ffffff',
+    colorSelected: cor,
+    textBoxColor: cor,
+    textBoxColorHighlighted: '#ffffff',
+    textBoxColorSelected: cor,
+    textBoxLinkLineColor: cor,
+    textBoxLinkLineColorHighlighted: '#ffffff',
+    textBoxLinkLineColorSelected: cor,
+    lineWidth: destacada ? '4' : '1.8',
+  });
+}
 
 const cacheImageIdsTemporarios = new Map<string, string>();
 
@@ -143,11 +173,18 @@ function extrairRoisNormalizadas(
     }
     const cor = CORES_ROIS[idxCor % CORES_ROIS.length]!;
     idxCor++;
+    const labelAtual = typeof ann.data?.label === 'string' ? ann.data.label.trim() : '';
+    const nome = labelAtual || `ROI ${idxCor}`;
+    if (!labelAtual && ann.data) {
+      ann.data.label = nome;
+    }
+    aplicarEstiloRoiNoViewport(ann, cor, false);
     rois.push({
       id: ann.annotationUID ?? `roi-${idxCor}`,
-      nome: `ROI ${idxCor} (Elipse)`,
+      nome,
       cor,
       tipo: 'elipse',
+      anotacaoRef: ann,
       centroNorm,
       eixoANorm,
       eixoBNorm,
@@ -170,16 +207,27 @@ function extrairRoisNormalizadas(
     if (poligonoNorm.length < 3) continue;
     const cor = CORES_ROIS[idxCor % CORES_ROIS.length]!;
     idxCor++;
+    const labelAtual = typeof ann.data?.label === 'string' ? ann.data.label.trim() : '';
+    const nome = labelAtual || `ROI ${idxCor}`;
+    if (!labelAtual && ann.data) {
+      ann.data.label = nome;
+    }
+    aplicarEstiloRoiNoViewport(ann, cor, false);
     rois.push({
       id: ann.annotationUID ?? `roi-${idxCor}`,
-      nome: `ROI ${idxCor} (Mão livre)`,
+      nome,
       cor,
       tipo: 'poligono',
+      anotacaoRef: ann,
       centroNorm: [0.5, 0.5],
       eixoANorm: [0.05, 0],
       eixoBNorm: [0, 0.05],
       poligonoNorm,
     });
+  }
+
+  if (rois.length > 0 && viewport.id) {
+    utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
   }
 
   if (rois.length > 0) {
@@ -567,15 +615,19 @@ async function calcularCurvasRoi(
   });
 }
 
+const PAD_ESQ_GRAFICO = 58;
+const PAD_DIR_GRAFICO = 68;
+
 function desenharGraficoCurvas(
   canvas: HTMLCanvasElement,
   series: SerieCurvaRoi[],
   indiceHover: number | null,
   unidadeY: string,
+  roiDestaqueId: string | null = null,
 ): void {
   const rect = canvas.getBoundingClientRect();
-  const largura = Math.max(480, Math.round(rect.width || 640));
-  const altura = Math.max(240, Math.round(rect.height || 280));
+  const largura = Math.max(300, Math.round(rect.width || 520));
+  const altura = Math.max(200, Math.round(rect.height || 230));
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(largura * dpr) || canvas.height !== Math.round(altura * dpr)) {
     canvas.width = Math.round(largura * dpr);
@@ -586,8 +638,8 @@ function desenharGraficoCurvas(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
 
-  const padEsq = 58;
-  const padDir = 20;
+  const padEsq = PAD_ESQ_GRAFICO;
+  const padDir = PAD_DIR_GRAFICO;
   const padTopo = 20;
   const padBase = 36;
   const wUtil = Math.max(10, largura - padEsq - padDir);
@@ -659,13 +711,16 @@ function desenharGraficoCurvas(
     ctx.fillText(p.unidadeX === 's' ? `${p.valorX}s` : `#${p.indice + 1}`, px, padTopo + hUtil + 8);
   }
 
-  // Desenha cada série (faixa ±1 DP + curva + pontos)
+  // Desenha cada série (faixa ±1 DP + curva + pontos + rótulo na extremidade)
   for (const s of series) {
     if (s.pontos.length === 0) continue;
+    const destacada = roiDestaqueId !== null && s.id === roiDestaqueId;
+    const atenuada = roiDestaqueId !== null && !destacada;
 
     // Faixa sombreada de ±1 DP
     if (s.pontos.length >= 2) {
       ctx.save();
+      ctx.globalAlpha = atenuada ? 0.25 : 1;
       ctx.fillStyle = s.cor + '22';
       ctx.beginPath();
       for (let i = 0; i < s.pontos.length; i++) {
@@ -688,8 +743,9 @@ function desenharGraficoCurvas(
 
     // Linha principal
     ctx.save();
+    ctx.globalAlpha = atenuada ? 0.25 : 1;
     ctx.strokeStyle = s.cor;
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = destacada ? 3.5 : 2.2;
     ctx.beginPath();
     for (let i = 0; i < s.pontos.length; i++) {
       const p = s.pontos[i]!;
@@ -706,9 +762,19 @@ function desenharGraficoCurvas(
       const py = yParaPx(p.media);
       ctx.fillStyle = p.indice === s.indicePico ? '#ffffff' : s.cor;
       ctx.beginPath();
-      ctx.arc(px, py, p.indice === indiceHover ? 4.5 : 2.8, 0, Math.PI * 2);
+      ctx.arc(px, py, p.indice === indiceHover ? 4.5 : destacada ? 3.4 : 2.8, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // Rótulo curto na ponta direita da curva para identificação imediata
+    const ultimo = s.pontos[s.pontos.length - 1]!;
+    const lx = Math.min(largura - 4, xParaPx(ultimo.indice) + 6);
+    const ly = yParaPx(ultimo.media);
+    ctx.font = destacada ? 'bold 11px system-ui, sans-serif' : '11px system-ui, sans-serif';
+    ctx.textAlign = lx > padEsq + wUtil ? 'left' : 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = s.cor;
+    ctx.fillText(s.nome.slice(0, 10), lx, ly);
     ctx.restore();
   }
 
@@ -756,9 +822,58 @@ function exportarCsv(series: SerieCurvaRoi[], unidadeY: string): void {
 }
 
 let dialogoCurva: HTMLDialogElement | null = null;
+let posicaoSalvaDialogo: { left: number; top: number } | null = null;
+let limparArrastoAtivo: (() => void) | null = null;
+let resizeObserverAtivo: ResizeObserver | null = null;
+
+function habilitarArrastoDialogo(cabecalho: HTMLElement, dialogo: HTMLDialogElement): void {
+  limparArrastoAtivo?.();
+  let emArrasto = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const aoMover = (ev: MouseEvent) => {
+    if (!emArrasto) return;
+    const maxLeft = Math.max(8, window.innerWidth - 120);
+    const maxTop = Math.max(8, window.innerHeight - 60);
+    const left = Math.round(Math.max(8, Math.min(maxLeft, ev.clientX - offsetX)));
+    const top = Math.round(Math.max(8, Math.min(maxTop, ev.clientY - offsetY)));
+    dialogo.style.left = `${left}px`;
+    dialogo.style.top = `${top}px`;
+    dialogo.style.right = 'auto';
+    dialogo.style.bottom = 'auto';
+    posicaoSalvaDialogo = { left, top };
+  };
+
+  const aoSoltar = () => {
+    emArrasto = false;
+  };
+
+  const aoPressionar = (ev: MouseEvent) => {
+    if (ev.button !== 0) return;
+    const alvo = ev.target as HTMLElement | null;
+    if (alvo?.closest('button, select, input, a')) return;
+    ev.preventDefault();
+    const rect = dialogo.getBoundingClientRect();
+    emArrasto = true;
+    offsetX = ev.clientX - rect.left;
+    offsetY = ev.clientY - rect.top;
+  };
+
+  cabecalho.addEventListener('mousedown', aoPressionar);
+  window.addEventListener('mousemove', aoMover);
+  window.addEventListener('mouseup', aoSoltar);
+
+  limparArrastoAtivo = () => {
+    cabecalho.removeEventListener('mousedown', aoPressionar);
+    window.removeEventListener('mousemove', aoMover);
+    window.removeEventListener('mouseup', aoSoltar);
+    emArrasto = false;
+  };
+}
 
 /**
- * Abre a janela de **Curva Tempo-Intensidade (Perfusão)** para o viewport ativo.
+ * Abre a janela flutuante (não-modal e arrastável) de **Curva Tempo-Intensidade (Perfusão)** para o viewport ativo.
  */
 export async function abrirDialogoCurvaPerfusao(opcoes: {
   elementoViewport: HTMLDivElement | undefined;
@@ -776,7 +891,7 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   const viewport = enabled.viewport as Types.IStackViewport | Types.IVolumeViewport;
   const instRef = pilhaAtiva.instances[indiceCorteAtual] ?? pilhaAtiva.instances[0];
 
-  const { rois, usouRoiAutomatica } = extrairRoisNormalizadas(
+  let { rois, usouRoiAutomatica } = extrairRoisNormalizadas(
     elementoViewport,
     viewport,
     instRef,
@@ -784,7 +899,7 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   );
 
   const qtdFasesEstudo = quantasFasesNoEstudoNesteNivel(pilhaAtiva, indiceCorteAtual);
-  let modoAtual: ModoCurvaPerfusao = qtdFasesEstudo >= 3 ? 'fases-estudo' : 'serie-ativa';
+  let modoAtual: ModoCurvaPerfusao = 'serie-ativa';
   const unidadeY = instRef?.modality === 'CT' ? 'HU' : instRef?.modality === 'PT' ? 'Bq/mL' : 'Intensidade';
 
   if (!dialogoCurva) {
@@ -792,18 +907,18 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     dialogoCurva.id = 'dialogo-curva-perfusao';
     dialogoCurva.setAttribute('aria-label', 'Curva Tempo-Intensidade (Perfusão)');
     document.body.append(dialogoCurva);
-    dialogoCurva.addEventListener('click', (e) => {
-      if (e.target === dialogoCurva) dialogoCurva?.close();
-    });
   }
 
   const d = dialogoCurva;
+  resizeObserverAtivo?.disconnect();
+  resizeObserverAtivo = null;
   d.replaceChildren();
 
   const cabecalho = document.createElement('div');
   cabecalho.className = 'cabecalho-curva';
+  cabecalho.title = 'Arraste para mover esta janela para o lado da imagem';
   const titulo = document.createElement('h2');
-  titulo.textContent = 'Curva Tempo-Intensidade / Densidade por ROI';
+  titulo.textContent = 'Curva Tempo-Intensidade · Perfusão';
 
   const controlesTopo = document.createElement('div');
   controlesTopo.className = 'controles-curva';
@@ -812,30 +927,39 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   seletorModo.setAttribute('aria-label', 'Modo de amostragem da curva');
   const opSerie = document.createElement('option');
   opSerie.value = 'serie-ativa';
-  opSerie.textContent = `Quadros/cortes da série ativa (${pilhaAtiva.instances.length})`;
+  opSerie.textContent = `Série ativa (${pilhaAtiva.instances.length})`;
   const opFases = document.createElement('option');
   opFases.value = 'fases-estudo';
-  opFases.textContent = `Fases/séries do estudo neste nível (${qtdFasesEstudo})`;
+  opFases.textContent = `Fases do estudo (${qtdFasesEstudo})`;
   seletorModo.append(opSerie, opFases);
   seletorModo.value = modoAtual;
 
+  const btnAtualizar = document.createElement('button');
+  btnAtualizar.type = 'button';
+  btnAtualizar.textContent = '↻ Atualizar ROIs';
+  btnAtualizar.title = 'Recalcula após desenhar, mover ou apagar ROIs na imagem';
+
   const btnCsv = document.createElement('button');
   btnCsv.type = 'button';
-  btnCsv.textContent = 'Exportar CSV';
+  btnCsv.textContent = 'CSV';
+  btnCsv.title = 'Exportar tabela da curva para CSV';
 
   const btnFechar = document.createElement('button');
   btnFechar.type = 'button';
   btnFechar.textContent = 'Fechar';
-  btnFechar.addEventListener('click', () => d.close());
 
-  controlesTopo.append(seletorModo, btnCsv, btnFechar);
+  controlesTopo.append(seletorModo, btnAtualizar, btnCsv, btnFechar);
   cabecalho.append(titulo, controlesTopo);
+  habilitarArrastoDialogo(cabecalho, d);
 
   const avisoRoi = document.createElement('div');
   avisoRoi.className = 'dica-curva';
-  avisoRoi.textContent = usouRoiAutomatica
-    ? 'Dica: nenhuma ROI desenhada encontrada no corte; medindo uma ROI circular automática. Você pode desenhar uma ou mais ROIs (teclas E ou M) para comparar curvas (ex.: Artéria × Lesão).'
-    : `Medindo ${rois.length} ${rois.length === 1 ? 'ROI desenhada' : 'ROIs desenhadas'} na mesma posição em todos os quadros. Clique num ponto do gráfico para ir ao corte correspondente.`;
+  const atualizarTextoAviso = () => {
+    avisoRoi.textContent = usouRoiAutomatica
+      ? 'Nenhuma ROI desenhada: medindo ROI automática. Desenhe ROIs (E ou M), arraste esta janela para o lado e clique em "Atualizar ROIs".'
+      : `Medindo ${rois.length} ${rois.length === 1 ? 'ROI' : 'ROIs'} com cores/nomes sincronizados com a imagem. Passe o mouse numa linha da tabela para destacar a ROI; clique para editar o nome.`;
+  };
+  atualizarTextoAviso();
 
   const canvas = document.createElement('canvas');
   canvas.className = 'canvas-curva-perfusao';
@@ -848,16 +972,50 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
   tabelaResumo.className = 'tabela-resumo-curva';
 
   d.append(cabecalho, avisoRoi, canvas, statusHover, tabelaResumo);
-  if (!d.open) d.showModal();
+  if (posicaoSalvaDialogo) {
+    const maxLeft = Math.max(8, window.innerWidth - 120);
+    const maxTop = Math.max(8, window.innerHeight - 60);
+    d.style.left = `${Math.max(8, Math.min(maxLeft, posicaoSalvaDialogo.left))}px`;
+    d.style.top = `${Math.max(8, Math.min(maxTop, posicaoSalvaDialogo.top))}px`;
+    d.style.right = 'auto';
+    d.style.bottom = 'auto';
+  }
+  if (!d.open) d.show();
 
   let seriesAtuais: SerieCurvaRoi[] = [];
   let indiceHover: number | null = null;
+  let roiHoverId: string | null = null;
+
+  function destacarRoi(roiId: string | null): void {
+    roiHoverId = roiId;
+    const linhas = tabelaResumo.querySelectorAll('tbody tr');
+    linhas.forEach((tr) => {
+      const idLinha = (tr as HTMLElement).dataset.roiId ?? null;
+      tr.classList.toggle('destacada', roiId !== null && idLinha === roiId);
+    });
+    let atualizouVp = false;
+    for (const r of rois) {
+      if (r.anotacaoRef) {
+        aplicarEstiloRoiNoViewport(r.anotacaoRef, r.cor, roiId !== null && r.id === roiId);
+        atualizouVp = true;
+      }
+    }
+    if (atualizouVp && viewport.id) {
+      utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
+    }
+    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
+  }
+
+  btnFechar.addEventListener('click', () => {
+    destacarRoi(null);
+    d.close();
+  });
 
   function renderizarResumo(): void {
     tabelaResumo.replaceChildren();
     const thead = document.createElement('thead');
     const trH = document.createElement('tr');
-    for (const col of ['ROI', 'Amostras', `Pico (${unidadeY})`, 'No quadro / tempo (TTP)', `Amplitude Δ (${unidadeY})`]) {
+    for (const col of ['ROI (clique p/ renomear)', 'Pts', `Pico (${unidadeY})`, 'TTP', `Δ (${unidadeY})`]) {
       const th = document.createElement('th');
       th.textContent = col;
       trH.append(th);
@@ -866,11 +1024,45 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     const tbody = document.createElement('tbody');
     for (const s of seriesAtuais) {
       const tr = document.createElement('tr');
+      tr.dataset.roiId = s.id;
+      if (roiHoverId === s.id) tr.classList.add('destacada');
+      tr.addEventListener('mouseenter', () => destacarRoi(s.id));
+      tr.addEventListener('mouseleave', () => {
+        if (roiHoverId === s.id) destacarRoi(null);
+      });
+
       const tdNome = document.createElement('td');
+      tdNome.className = 'celula-nome-roi';
       const bolinha = document.createElement('span');
       bolinha.className = 'cor-roi-curva';
       bolinha.style.background = s.cor;
-      tdNome.append(bolinha, document.createTextNode(s.nome));
+
+      const inputNome = document.createElement('input');
+      inputNome.type = 'text';
+      inputNome.className = 'roi-nome-input';
+      inputNome.value = s.nome;
+      inputNome.setAttribute('aria-label', `Nome de ${s.nome}`);
+      inputNome.readOnly = usouRoiAutomatica;
+      inputNome.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') inputNome.blur();
+      });
+      inputNome.addEventListener('input', () => {
+        const novoNome = inputNome.value.trim() || 'ROI';
+        s.nome = novoNome;
+        const roiAlvo = rois.find((r) => r.id === s.id);
+        if (roiAlvo) {
+          roiAlvo.nome = novoNome;
+          if (roiAlvo.anotacaoRef?.data) {
+            roiAlvo.anotacaoRef.data.label = novoNome;
+            if (viewport.id) {
+              utilitariosTools.triggerAnnotationRenderForViewportIds([viewport.id]);
+            }
+          }
+        }
+        desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
+      });
+      tdNome.append(bolinha, inputNome);
 
       const tdN = document.createElement('td');
       tdN.textContent = String(s.pontos.length);
@@ -897,14 +1089,23 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
       statusHover.textContent = `Medindo ROI: quadro ${feitos} de ${total}…`;
     });
     indiceHover = null;
-    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY);
+    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
     renderizarResumo();
     statusHover.textContent =
-      'Passe o mouse sobre o gráfico para inspecionar os valores · Clique num ponto para ir ao corte.';
+      'Passe o mouse sobre o gráfico para inspecionar · Clique num ponto para ir ao corte.';
   }
 
   seletorModo.addEventListener('change', () => {
     modoAtual = seletorModo.value as ModoCurvaPerfusao;
+    void atualizarCalculo();
+  });
+
+  btnAtualizar.addEventListener('click', () => {
+    const extracao = extrairRoisNormalizadas(elementoViewport, viewport, instRef, pontoMiraMundo);
+    rois = extracao.rois;
+    usouRoiAutomatica = extracao.usouRoiAutomatica;
+    roiHoverId = null;
+    atualizarTextoAviso();
     void atualizarCalculo();
   });
 
@@ -916,10 +1117,8 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     const pts = seriesAtuais[0]?.pontos;
     if (!pts || pts.length === 0) return null;
     const rect = canvas.getBoundingClientRect();
-    const padEsq = 58;
-    const padDir = 20;
-    const wUtil = Math.max(10, rect.width - padEsq - padDir);
-    const xRel = ev.clientX - rect.left - padEsq;
+    const wUtil = Math.max(10, rect.width - PAD_ESQ_GRAFICO - PAD_DIR_GRAFICO);
+    const xRel = ev.clientX - rect.left - PAD_ESQ_GRAFICO;
     const maxIndice = Math.max(...pts.map((p) => p.indice));
     if (maxIndice <= 0) return 0;
     const idx = Math.round(Math.max(0, Math.min(1, xRel / wUtil)) * maxIndice);
@@ -930,7 +1129,7 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
     const idx = obterIndiceQuadroPorMouse(ev);
     if (idx === null) return;
     indiceHover = idx;
-    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY);
+    desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
     const partes: string[] = [];
     for (const s of seriesAtuais) {
       const p = s.pontos.find((pt) => pt.indice === idx);
@@ -947,7 +1146,7 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
 
   canvas.addEventListener('mouseleave', () => {
     indiceHover = null;
-    desenharGraficoCurvas(canvas, seriesAtuais, null, unidadeY);
+    desenharGraficoCurvas(canvas, seriesAtuais, null, unidadeY, roiHoverId);
   });
 
   canvas.addEventListener('click', (ev) => {
@@ -958,6 +1157,15 @@ export async function abrirDialogoCurvaPerfusao(opcoes: {
       aoSelecionarQuadro(p.pilha, p.indiceNaPilha);
     }
   });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserverAtivo = new ResizeObserver(() => {
+      if (seriesAtuais.length > 0) {
+        desenharGraficoCurvas(canvas, seriesAtuais, indiceHover, unidadeY, roiHoverId);
+      }
+    });
+    resizeObserverAtivo.observe(canvas);
+  }
 
   await atualizarCalculo();
 }

@@ -501,34 +501,50 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   font: inherit;
 }
 
-/* Modal Curva Tempo-Intensidade / Perfusão */
+/* Janela flutuante Curva Tempo-Intensidade / Perfusão */
 #dialogo-curva-perfusao {
+  position: fixed;
+  top: 58px;
+  right: 16px;
+  left: auto;
+  bottom: auto;
+  margin: 0;
+  z-index: 120;
   background: var(--painel);
   color: var(--texto);
   border: 1px solid var(--borda);
   border-radius: 8px;
-  padding: 16px 20px;
-  width: min(760px, 94vw);
-  max-height: 90vh;
+  padding: 12px 14px;
+  width: min(560px, 46vw);
+  min-width: 380px;
+  max-width: 94vw;
+  max-height: calc(100vh - 76px);
+  overflow: auto;
+  resize: both;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.68);
 }
-#dialogo-curva-perfusao::backdrop { background: rgba(0, 0, 0, 0.65); }
 
 .cabecalho-curva {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--borda);
+  cursor: move;
+  user-select: none;
 }
 .cabecalho-curva h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 .controles-curva {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .controles-curva select,
 .controles-curva button {
@@ -555,7 +571,7 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
 
 .canvas-curva-perfusao {
   width: 100%;
-  height: 280px;
+  height: 230px;
   background: #0d1014;
   border: 1px solid var(--borda);
   border-radius: 6px;
@@ -587,13 +603,44 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   color: var(--texto-fraco);
   font-weight: 600;
 }
+.tabela-resumo-curva tbody tr {
+  transition: background 0.12s;
+}
+.tabela-resumo-curva tbody tr:hover,
+.tabela-resumo-curva tbody tr.destacada {
+  background: rgba(56, 189, 248, 0.14);
+}
+.celula-nome-roi {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .cor-roi-curva {
   display: inline-block;
+  flex-shrink: 0;
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  margin-right: 6px;
   vertical-align: middle;
+}
+.roi-nome-input {
+  background: transparent;
+  color: var(--texto);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font: inherit;
+  font-size: 12px;
+  width: 110px;
+  min-width: 72px;
+}
+.roi-nome-input:hover:not([readonly]) {
+  border-color: var(--borda);
+}
+.roi-nome-input:focus:not([readonly]) {
+  outline: none;
+  background: var(--fundo);
+  border-color: var(--destaque);
 }
 
 /* Configurações */

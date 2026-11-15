@@ -21,7 +21,7 @@ import {
 } from './formatoMedidas';
 
 type Ponto2 = CoreTypes.Point2;
-type DadosAnotacao = { cachedStats?: Record<string, unknown> };
+type DadosAnotacao = { label?: string; cachedStats?: Record<string, unknown> };
 
 /** Cor da medida selecionada: fixa e distinta de qualquer cor escolhida pelo usuário. */
 const COR_SELECIONADA = '#ffffff';
@@ -88,7 +88,10 @@ export function textoAngulo(data: DadosAnotacao, alvo: string): string[] | undef
 }
 
 export function textoRoi(data: DadosAnotacao, alvo: string): string[] | undefined {
-  return linhasRoi(estatisticas(data, alvo) as EstatisticasRoi | undefined, medidas());
+  const linhas = linhasRoi(estatisticas(data, alvo) as EstatisticasRoi | undefined, medidas());
+  const rotulo = data.label?.trim();
+  if (!linhas) return rotulo ? [rotulo] : undefined;
+  return rotulo ? [rotulo, ...linhas] : linhas;
 }
 
 // ---------------------------------------------------------------------------
