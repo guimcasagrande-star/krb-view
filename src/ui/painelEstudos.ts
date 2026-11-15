@@ -6,9 +6,57 @@
 import { formatDatePtBr } from '../io/dicomTime';
 import type { DicomIndex, SeriesNode, StackNode, StudyNode } from '../io/organize';
 import { criarObservadorMiniaturas, type ObservadorMiniaturas } from './miniaturas';
+import { abrirMenuFlutuante } from './menuFlutuante';
+import {
+  ehJanelaSecundaria,
+  enviarPilhaParaOutraJanela,
+  segundaJanelaDisponivel,
+} from '../viewer/segundaJanela';
 
 export const EVENTO_ABRIR_PILHA = 'abrirPilha';
 export type AbrirPilhaEvento = CustomEvent<StackNode>;
+
+export const MIME_ARRASTAR_PILHA = 'application/x-visualizador-pilha';
+export const PREFIXO_TEXTO_PILHA = 'visualizador-pilha:';
+
+export interface DadosPilhaArrastada {
+  pilhaId: string;
+  seriesInstanceUid: string;
+  studyInstanceUid?: string;
+  sopInicial?: string;
+}
+
+export function temPilhaEmArraste(dt: DataTransfer | null): boolean {
+  if (!dt) return false;
+  const tipos = Array.from(dt.types ?? []);
+  if (tipos.includes(MIME_ARRASTAR_PILHA)) return true;
+  if (tipos.includes('Files')) return false;
+  return tipos.includes('text/plain');
+}
+
+export function extrairDadosPilhaArrastada(dt: DataTransfer | null): DadosPilhaArrastada | null {
+  if (!dt) return null;
+  let bruto = dt.getData(MIME_ARRASTAR_PILHA);
+  if (!bruto) {
+    const txt = dt.getData('text/plain');
+    if (txt && txt.startsWith(PREFIXO_TEXTO_PILHA)) {
+      bruto = txt.slice(PREFIXO_TEXTO_PILHA.length);
+    }
+  }
+  if (!bruto) return null;
+  try {
+    const parsed = JSON.parse(bruto) as Partial<DadosPilhaArrastada>;
+    if (typeof parsed.pilhaId !== 'string') return null;
+    return {
+      pilhaId: parsed.pilhaId,
+      seriesInstanceUid: typeof parsed.seriesInstanceUid === 'string' ? parsed.seriesInstanceUid : '',
+      ...(typeof parsed.studyInstanceUid === 'string' ? { studyInstanceUid: parsed.studyInstanceUid } : {}),
+      ...(typeof parsed.sopInicial === 'string' ? { sopInicial: parsed.sopInicial } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -62,7 +110,54 @@ function criarLinha(
   const aviso = iconeAviso(pilha);
   if (aviso) linha.append(aviso);
   linha.append(el('span', 'quant', plural(quantidade, 'img', 'imgs')));
+  const podeEnviarOutraJanela = segundaJanelaDisponivel() && !ehJanelaSecundaria();
+  if (podeEnviarOutraJanela) {
+    const enviar = el('span', 'enviar-outra-janela', '↗');
+    enviar.setAttribute('role', 'button');
+    enviar.tabIndex = 0;
+    enviar.title = 'Enviar para a outra janela';
+    enviar.setAttribute('aria-label', 'Enviar para a outra janela');
+    enviar.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      void enviarPilhaParaOutraJanela(pilha);
+    });
+    enviar.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        void enviarPilhaParaOutraJanela(pilha);
+      }
+    });
+    linha.append(enviar);
+    botao.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      abrirMenuFlutuante(ev.clientX, ev.clientY, [
+        { rotulo: 'Enviar para a outra janela', acao: () => void enviarPilhaParaOutraJanela(pilha) },
+      ]);
+    });
+  }
   botao.append(linha);
+  botao.draggable = true;
+  botao.title = 'Clique para abrir no quadro selecionado ou arraste para qualquer quadro da grade';
+  botao.addEventListener('dragstart', (ev) => {
+    if (!ev.dataTransfer) return;
+    const primeira = pilha.instances[0];
+    const carga = JSON.stringify({
+      pilhaId: pilha.id,
+      seriesInstanceUid: primeira?.seriesInstanceUid ?? '',
+      studyInstanceUid: primeira?.studyInstanceUid ?? '',
+      ...(primeira?.sopInstanceUid ? { sopInicial: primeira.sopInstanceUid } : {}),
+    } satisfies DadosPilhaArrastada);
+    ev.dataTransfer.effectAllowed = 'copy';
+    ev.dataTransfer.setData(MIME_ARRASTAR_PILHA, carga);
+    ev.dataTransfer.setData('text/plain', `${PREFIXO_TEXTO_PILHA}${carga}`);
+    botao.classList.add('arrastando-serie');
+  });
+  botao.addEventListener('dragend', () => {
+    botao.classList.remove('arrastando-serie');
+  });
   botao.addEventListener('click', () => aoEscolher(botao, pilha));
   return botao;
 }

@@ -52,6 +52,7 @@ const LINHAS_AJUDA: Array<[string, string]> = [
   ['Home / End', 'Primeiro / último corte'],
   ['Espaço', 'Toca ou pausa o cine (ou a rotação do MIP 3D, que abre parado em AP)'],
   ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2 (outras grades: menu ⊞)'],
+  ['🖥 Abrir no outro monitor', 'Abre a 2ª janela (para outro monitor, na escala dele) com lista de séries e sincronia de rolagem, linhas de referência, janela/nível e cruzinha (┼)'],
   ['F / 2 cliques', 'Maximiza o viewport (tela cheia da grade) e volta; com medida ativa, Shift+2 cliques'],
   ['1 a 9', 'Janelas predefinidas, na ordem da lista (editável em ⚙ Configurações)'],
   ['⚙', 'Configurações: aparência das medidas, mouse e zoom, atalhos e janelas'],

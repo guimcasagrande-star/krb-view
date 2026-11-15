@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissões da janela principal: eventos da ponte de PACS.",
-  "windows": ["main"],
+  "description": "Permissões das janelas do aplicativo (principal e secundária).",
+  "windows": ["main", "secundaria"],
   "permissions": ["core:default"]
 }

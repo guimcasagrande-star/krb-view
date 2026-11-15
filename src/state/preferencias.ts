@@ -53,9 +53,39 @@ export interface PrefsInteracao {
   voltarAoScroll: boolean;
 }
 
+export type ModoTelaJanela = 'normal' | 'maximizada' | 'tela-cheia';
+
+export interface PresetVisualizacao {
+  id: string;
+  rotulo: string;
+  gradePrincipal: string;
+  usarSegundaJanela: boolean;
+  gradeSecundaria: string;
+}
+
+export interface PrefsTelas {
+  /** Grade padrão ao iniciar na janela principal (ex.: '1x1', '1x2', '2x2'). */
+  gradePrincipal: string;
+  /** Grade padrão ao iniciar na 2ª janela (ex.: '1x2', '2x2', '1x1'). */
+  gradeSecundaria: string;
+  /** Como a janela principal abre ('maximizada' = ocupando a tela toda, 'tela-cheia' = sem bordas/F11, 'normal'). */
+  modoTelaPrincipal: ModoTelaJanela;
+  /** Como a 2ª janela abre ('maximizada' = ocupando a tela toda, 'tela-cheia' = sem bordas/F11, 'normal'). */
+  modoTelaSecundaria: ModoTelaJanela;
+  /** ID do monitor padrão para a janela principal ('auto' = monitor padrão do sistema). */
+  monitorPrincipal: string;
+  /** ID do monitor padrão para a 2ª janela ('auto' = sempre no segundo monitor automaticamente). */
+  monitorSecundaria: string;
+  /** Se verdadeiro, abre a 2ª janela automaticamente ao iniciar quando houver 2º monitor. */
+  abrirSecundariaAoIniciar: boolean;
+  /** Combinações de visualização salvas pelo usuário (1 ou 2 monitores). */
+  presets: PresetVisualizacao[];
+}
+
 export interface PrefsGerais {
   medidas: PrefsMedidas;
   interacao: PrefsInteracao;
+  telas: PrefsTelas;
   /** nome da ferramenta (ou id da ação) -> tecla (minúscula). Só o que difere do padrão. */
   atalhos: Record<string, string>;
   /** Janelas predefinidas, nas teclas 1 a 9 pela ordem. */
@@ -80,6 +110,48 @@ export const MEDIDAS_PADRAO: PrefsMedidas = {
 
 export const INTERACAO_PADRAO: PrefsInteracao = { zoomNoCentro: true, voltarAoScroll: true };
 
+export const PRESETS_VISUALIZACAO_PADRAO: PresetVisualizacao[] = [
+  {
+    id: '2m-2x2-1x2',
+    rotulo: '2 monitores: 2x2 principal + 1x2 na 2ª janela',
+    gradePrincipal: '2x2',
+    usarSegundaJanela: true,
+    gradeSecundaria: '1x2',
+  },
+  {
+    id: '2m-1x2-1x2',
+    rotulo: '2 monitores: 1x2 principal + 1x2 na 2ª janela',
+    gradePrincipal: '1x2',
+    usarSegundaJanela: true,
+    gradeSecundaria: '1x2',
+  },
+  {
+    id: '2m-1x1-2x2',
+    rotulo: '2 monitores: 1x1 principal + 2x2 na 2ª janela',
+    gradePrincipal: '1x1',
+    usarSegundaJanela: true,
+    gradeSecundaria: '2x2',
+  },
+  {
+    id: '1m-2x2',
+    rotulo: '1 monitor: Grade 2x2',
+    gradePrincipal: '2x2',
+    usarSegundaJanela: false,
+    gradeSecundaria: '1x2',
+  },
+];
+
+export const TELAS_PADRAO: PrefsTelas = {
+  gradePrincipal: '1x1',
+  gradeSecundaria: '1x2',
+  modoTelaPrincipal: 'maximizada',
+  modoTelaSecundaria: 'maximizada',
+  monitorPrincipal: 'auto',
+  monitorSecundaria: 'auto',
+  abrirSecundariaAoIniciar: false,
+  presets: PRESETS_VISUALIZACAO_PADRAO.map((p) => ({ ...p })),
+};
+
 export const JANELAS_PADRAO: Janela[] = [
   { rotulo: 'Partes moles', centro: 40, largura: 400 },
   { rotulo: 'Pulmão', centro: -600, largura: 1500 },
@@ -94,10 +166,24 @@ export const MAX_JANELAS = 9;
 const CHAVE = 'visualizador.preferencias.v1';
 export const EVENTO_PREFERENCIAS = 'preferenciasMudaram';
 
+function gradeValida(v: unknown, padrao: string): string {
+  if (typeof v !== 'string') return padrao;
+  const m = /^([1-5])x([1-5])$/.exec(v.trim());
+  return m ? `${m[1]}x${m[2]}` : padrao;
+}
+
+function modoTelaValido(v: unknown, padrao: ModoTelaJanela): ModoTelaJanela {
+  return v === 'normal' || v === 'maximizada' || v === 'tela-cheia' ? v : padrao;
+}
+
 function copiaPadrao(): PrefsGerais {
   return {
     medidas: { ...MEDIDAS_PADRAO, roi: { ...MEDIDAS_PADRAO.roi } },
     interacao: { ...INTERACAO_PADRAO },
+    telas: {
+      ...TELAS_PADRAO,
+      presets: PRESETS_VISUALIZACAO_PADRAO.map((p) => ({ ...p })),
+    },
     atalhos: {},
     janelas: JANELAS_PADRAO.map((j) => ({ ...j })),
     mouse: {},
@@ -138,6 +224,44 @@ export function sanear(bruto: unknown): PrefsGerais {
   const it = (b.interacao ?? {}) as Record<string, unknown>;
   if (typeof it.zoomNoCentro === 'boolean') p.interacao.zoomNoCentro = it.zoomNoCentro;
   if (typeof it.voltarAoScroll === 'boolean') p.interacao.voltarAoScroll = it.voltarAoScroll;
+
+  const tl = (b.telas ?? {}) as Record<string, unknown>;
+  p.telas.gradePrincipal = gradeValida(tl.gradePrincipal, p.telas.gradePrincipal);
+  p.telas.gradeSecundaria = gradeValida(tl.gradeSecundaria, p.telas.gradeSecundaria);
+  p.telas.modoTelaPrincipal = modoTelaValido(tl.modoTelaPrincipal, p.telas.modoTelaPrincipal);
+  p.telas.modoTelaSecundaria = modoTelaValido(tl.modoTelaSecundaria, p.telas.modoTelaSecundaria);
+  if (typeof tl.monitorPrincipal === 'string' && tl.monitorPrincipal.trim()) {
+    p.telas.monitorPrincipal = tl.monitorPrincipal.trim().slice(0, 120);
+  }
+  if (typeof tl.monitorSecundaria === 'string' && tl.monitorSecundaria.trim()) {
+    p.telas.monitorSecundaria = tl.monitorSecundaria.trim().slice(0, 120);
+  }
+  if (typeof tl.abrirSecundariaAoIniciar === 'boolean') {
+    p.telas.abrirSecundariaAoIniciar = tl.abrirSecundariaAoIniciar;
+  }
+  if (Array.isArray(tl.presets)) {
+    const listaPresets: PresetVisualizacao[] = [];
+    for (const item of tl.presets as Array<Record<string, unknown>>) {
+      if (!item || typeof item !== 'object') continue;
+      const rotulo =
+        typeof item.rotulo === 'string' && item.rotulo.trim()
+          ? item.rotulo.trim().slice(0, 60)
+          : 'Visualização';
+      const id =
+        typeof item.id === 'string' && item.id.trim()
+          ? item.id.trim().slice(0, 60)
+          : `preset-${listaPresets.length + 1}`;
+      listaPresets.push({
+        id,
+        rotulo,
+        gradePrincipal: gradeValida(item.gradePrincipal, '2x2'),
+        usarSegundaJanela: Boolean(item.usarSegundaJanela),
+        gradeSecundaria: gradeValida(item.gradeSecundaria, '1x2'),
+      });
+      if (listaPresets.length >= 12) break;
+    }
+    if (listaPresets.length > 0) p.telas.presets = listaPresets;
+  }
 
   if (b.atalhos && typeof b.atalhos === 'object') {
     for (const [nome, tecla] of Object.entries(b.atalhos as Record<string, unknown>)) {
@@ -185,8 +309,23 @@ export function interacao(): PrefsInteracao {
   return atuais.interacao;
 }
 
+export function telas(): PrefsTelas {
+  return atuais.telas;
+}
+
 export function medidas(): PrefsMedidas {
   return atuais.medidas;
+}
+
+/** Reler do localStorage (útil quando a outra janela salvou preferências). */
+export function recarregarPreferenciasDoDisco(): void {
+  try {
+    const texto = localStorage.getItem(CHAVE);
+    if (texto) atuais = sanear(JSON.parse(texto));
+  } catch {
+    /* mantém atuais */
+  }
+  document.dispatchEvent(new CustomEvent(EVENTO_PREFERENCIAS));
 }
 
 /** Grava e avisa quem escuta (estilo das medidas, atalhos, menus). */
@@ -211,5 +350,10 @@ export function restaurarJanelas(): void {
 
 export function restaurarAtalhos(): void {
   atuais.atalhos = {};
+  salvarPreferencias();
+}
+
+export function restaurarTelas(): void {
+  atuais.telas = copiaPadrao().telas;
   salvarPreferencias();
 }

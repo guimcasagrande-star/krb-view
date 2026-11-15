@@ -30,11 +30,23 @@ import {
   restaurar,
   teclaDaFerramenta,
 } from '../tools/grupo';
-import { EVENTO_PREFERENCIAS } from '../state/preferencias';
+import { EVENTO_PREFERENCIAS, salvarPreferencias, telas } from '../state/preferencias';
 import { abrirConfiguracoes } from './configuracoes';
 import { alternarAjuda } from '../tools/atalhos';
 import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
 import { pacsDisponivel } from '../pacs/transporteTauri.ts';
+import {
+  abrirSegundaJanela,
+  alternarOpcaoSincroniaJanelas,
+  alternarTelaCheiaJanelaAtual,
+  aplicarExibicaoJanelaAtual,
+  aplicarPresetVisualizacao,
+  ehJanelaSecundaria,
+  EVENTO_SINCRONIA_JANELAS,
+  notificarPreferenciasParaOutraJanela,
+  obterOpcoesSincroniaJanelas,
+  segundaJanelaDisponivel,
+} from '../viewer/segundaJanela';
 import { exportarImagemAtiva } from './exportarImagem';
 import { abrirBuscarPacs } from './buscarPacs';
 import { abrirServidoresPacs } from './servidoresPacs';
@@ -76,6 +88,7 @@ import {
   GRADE_MAXIMA,
   geometriaLayout,
   idLayout,
+  obterLayoutAtual,
   alternarMaximizado,
   alternarSincroniaEstudo,
   alternarLinhasReferencia,
@@ -338,10 +351,61 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     'Linhas de referência: mostra nos outros viewports onde o corte do viewport ativo cruza (quando há planos diferentes)',
     () => alternarLinhasReferencia(),
   );
+  const blocoPresetsGrade = document.createElement('div');
+  const itemFixarGradeAtual = itemMenu(
+    '💾 Fixar grade atual como padrão desta janela',
+    undefined,
+    () => {
+      const atual = obterLayoutAtual();
+      const tl = telas();
+      if (ehJanelaSecundaria()) {
+        tl.gradeSecundaria = atual;
+      } else {
+        tl.gradePrincipal = atual;
+      }
+      salvarPreferencias();
+      notificarPreferenciasParaOutraJanela();
+    },
+    menuLayout.fechar,
+  );
+  const atualizarMenuPresetsGrade = (): void => {
+    blocoPresetsGrade.replaceChildren();
+    const tl = telas();
+    const sec = ehJanelaSecundaria();
+    const padraoDesta = sec ? tl.gradeSecundaria : tl.gradePrincipal;
+    const spanFixar = itemFixarGradeAtual.querySelector('span');
+    if (spanFixar) {
+      spanFixar.textContent = `💾 Fixar grade atual como padrão desta janela (atual: ${padraoDesta})`;
+    }
+    for (const p of tl.presets) {
+      if (p.usarSegundaJanela && !segundaJanelaDisponivel()) continue;
+      const icone = p.usarSegundaJanela ? '🖥 ' : '⊞ ';
+      blocoPresetsGrade.append(
+        itemMenu(
+          `${icone}${p.rotulo}`,
+          undefined,
+          () => void aplicarPresetVisualizacao(p),
+          menuLayout.fechar,
+        ),
+      );
+    }
+  };
+  atualizarMenuPresetsGrade();
+  document.addEventListener(EVENTO_PREFERENCIAS, atualizarMenuPresetsGrade);
+
   menuLayout.painel.append(
     seletorGrade,
     divisorMenu(),
     itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
+    divisorMenu(),
+    itemFixarGradeAtual,
+    blocoPresetsGrade,
+    itemMenu(
+      '⚙ Configurar grades e monitores padrão…',
+      undefined,
+      () => abrirConfiguracoes('telas'),
+      menuLayout.fechar,
+    ),
   );
 
   // Menu próprio dos layouts de PET/CT (separado da escolha de grade).
@@ -430,15 +494,164 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     () => alternarOverlay(),
   );
 
-  grupoTela.append(
-    menuAbrir.contentor,
+  const secundaria = ehJanelaSecundaria();
+  let menuSegundaJanela: ReturnType<typeof criarMenuSuspenso> | null = null;
+  if (segundaJanelaDisponivel()) {
+    const mSeg = criarMenuSuspenso({
+      rotulo: secundaria ? '🖥 Outro monitor' : '🖥 Abrir no outro monitor',
+      dica: secundaria
+        ? 'Opções de sincronia com a janela principal'
+        : 'Abrir a segunda janela para outro monitor; a seta ao lado liga/desliga cada sincronia entre as janelas',
+      acaoPrincipal: () => {
+        if (!secundaria) {
+          void abrirSegundaJanela();
+        }
+      },
+    });
+    menuSegundaJanela = mSeg;
+    if (!secundaria) {
+      mSeg.painel.append(
+        itemMenu(
+          '🖥 Abrir ou focar a 2ª janela',
+          undefined,
+          () => void abrirSegundaJanela(),
+          mSeg.fechar,
+        ),
+        divisorMenu(),
+      );
+    }
+    const nada = (): void => {};
+    const itemSincRolagemJanela = itemMenu(
+      '🔒 Sincronizar rolagem por posição (mm)',
+      undefined,
+      () => {
+        alternarOpcaoSincroniaJanelas('rolagem');
+      },
+      nada,
+    );
+    const itemSincLinhasJanela = itemMenu(
+      '✛ Linha de referência entre planos (Axial/Sagital/Coronal)',
+      undefined,
+      () => {
+        alternarOpcaoSincroniaJanelas('linhas');
+      },
+      nada,
+    );
+    const itemSincVoiJanela = itemMenu(
+      '🔗 Sincronizar janela / nível (mesma modalidade)',
+      undefined,
+      () => {
+        alternarOpcaoSincroniaJanelas('janela');
+      },
+      nada,
+    );
+    const itemSincLocJanela = itemMenu(
+      '┼ Sincronizar localizador (cruzinha 3D)',
+      undefined,
+      () => {
+        alternarOpcaoSincroniaJanelas('localizador');
+      },
+      nada,
+    );
+    const itemSempreTelaToda = itemMenu(
+      '🗖 Sempre abrir ocupando a tela toda (maximizada)',
+      undefined,
+      () => {
+        const tl = telas();
+        if (secundaria) {
+          tl.modoTelaSecundaria = tl.modoTelaSecundaria === 'maximizada' ? 'normal' : 'maximizada';
+        } else {
+          tl.modoTelaPrincipal = tl.modoTelaPrincipal === 'maximizada' ? 'normal' : 'maximizada';
+        }
+        salvarPreferencias();
+        notificarPreferenciasParaOutraJanela();
+        void aplicarExibicaoJanelaAtual();
+      },
+      nada,
+    );
+    const itemAlternarTelaCheia = itemMenu(
+      '⛶ Tela cheia sem bordas',
+      'F11',
+      () => void alternarTelaCheiaJanelaAtual(),
+      mSeg.fechar,
+    );
+    const itemAutoAbrirSecundaria = itemMenu(
+      '🚀 Abrir 2ª janela automaticamente ao iniciar (com 2º monitor)',
+      undefined,
+      () => {
+        const tl = telas();
+        tl.abrirSecundariaAoIniciar = !tl.abrirSecundariaAoIniciar;
+        salvarPreferencias();
+        notificarPreferenciasParaOutraJanela();
+      },
+      nada,
+    );
+    const itemPadrao2x2e1x2 = itemMenu(
+      '💾 Padrão 2×2 (1ª janela) + 1×2 (2ª janela) e aplicar',
+      undefined,
+      () => {
+        const tl = telas();
+        tl.gradePrincipal = '2x2';
+        tl.gradeSecundaria = '1x2';
+        salvarPreferencias();
+        notificarPreferenciasParaOutraJanela();
+        void aplicarPresetVisualizacao({
+          id: 'rapido-2x2-1x2',
+          rotulo: '2x2 + 1x2',
+          gradePrincipal: '2x2',
+          usarSegundaJanela: true,
+          gradeSecundaria: '1x2',
+        });
+      },
+      mSeg.fechar,
+    );
+    const itemConfigMonitores = itemMenu(
+      '⚙ Escolher monitor padrão e grades salvas…',
+      undefined,
+      () => abrirConfiguracoes('telas'),
+      mSeg.fechar,
+    );
+
+    const atualizarMenuSegundaJanela = (): void => {
+      const op = obterOpcoesSincroniaJanelas();
+      itemSincRolagemJanela.setAttribute('aria-pressed', String(op.rolagem));
+      itemSincLinhasJanela.setAttribute('aria-pressed', String(op.linhas));
+      itemSincVoiJanela.setAttribute('aria-pressed', String(op.janela));
+      itemSincLocJanela.setAttribute('aria-pressed', String(op.localizador));
+      const tl = telas();
+      const modoAtual = secundaria ? tl.modoTelaSecundaria : tl.modoTelaPrincipal;
+      itemSempreTelaToda.setAttribute('aria-pressed', String(modoAtual === 'maximizada' || modoAtual === 'tela-cheia'));
+      itemAutoAbrirSecundaria.setAttribute('aria-pressed', String(tl.abrirSecundariaAoIniciar));
+    };
+    atualizarMenuSegundaJanela();
+    document.addEventListener(EVENTO_SINCRONIA_JANELAS, atualizarMenuSegundaJanela);
+    document.addEventListener(EVENTO_PREFERENCIAS, atualizarMenuSegundaJanela);
+    mSeg.painel.append(
+      itemSincRolagemJanela,
+      itemSincLinhasJanela,
+      itemSincVoiJanela,
+      itemSincLocJanela,
+      divisorMenu(),
+      itemPadrao2x2e1x2,
+      itemSempreTelaToda,
+      itemAutoAbrirSecundaria,
+      itemAlternarTelaCheia,
+      divisorMenu(),
+      itemConfigMonitores,
+    );
+  }
+
+  const elementosTela: HTMLElement[] = [
+    ...(!secundaria ? [menuAbrir.contentor] : []),
     menuLayout.contentor,
     menuPetCt.contentor,
     botaoLinhasRef,
     menuComparar.contentor,
     grupoCompararInline,
+    ...(menuSegundaJanela ? [menuSegundaJanela.contentor] : []),
     botaoOverlay,
-  );
+  ];
+  grupoTela.append(...elementosTela);
 
   // 3. Ferramentas de Navegação (Cortes, Janela/Nível + Presets, Pan, Zoom, ┼ Localizar, Crosshairs)
   const grupoNavegacao = document.createElement('div');

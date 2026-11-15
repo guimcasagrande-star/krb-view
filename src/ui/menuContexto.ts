@@ -30,6 +30,11 @@ import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
 import { alternarMaximizado, alternarMpr, itensMenuPlano } from '../viewer/viewport2d';
 import { abrirConfiguracoes } from './configuracoes';
 import { abrirMenuFlutuante, type EntradaMenuFlutuante } from './menuFlutuante';
+import {
+  ehJanelaSecundaria,
+  enviarPilhaParaOutraJanela,
+  segundaJanelaDisponivel,
+} from '../viewer/segundaJanela';
 
 /** Acima disso (px) o botão direito foi um arrasto (zoom), não um clique. */
 const MOVIMENTO_MAXIMO_PX = 4;
@@ -103,6 +108,16 @@ function montarItens(sobreMedida: boolean): EntradaMenuFlutuante[] {
     'divisor',
     { rotulo: mpr ? 'Sair do MPR' : 'MPR (3 planos)', atalho: 'R', acao: () => void alternarMpr() },
     { rotulo: 'Maximizar / restaurar quadro', atalho: 'F', acao: () => alternarMaximizado() },
+    ...(segundaJanelaDisponivel() && !ehJanelaSecundaria() && estado.pilhaAtiva
+      ? [
+          {
+            rotulo: 'Enviar para a outra janela',
+            acao: () => {
+              if (estado.pilhaAtiva) void enviarPilhaParaOutraJanela(estado.pilhaAtiva);
+            },
+          } satisfies EntradaMenuFlutuante,
+        ]
+      : []),
     'divisor',
     { rotulo: 'Apagar todas as medidas', acao: () => void limparMedidas() },
   );

@@ -14,11 +14,12 @@
 
 export const FERRAMENTA_LOCALIZADOR_3D = 'Localizador3D';
 
-/** Desenha uma mira/cruzinha com centro aberto num `<canvas>` sobreposto ao viewport. */
+/** Desenha uma mira/cruzinha com centro aberto e/ou linha de referência num `<canvas>` sobreposto ao viewport. */
 export function desenharMiraNoCanvas(
   canvas: HTMLCanvasElement,
   pontoCanvas: [number, number] | null,
   cor = '#38bdf8',
+  linhaReferencia?: [[number, number], [number, number]] | null,
 ): void {
   const rect = canvas.parentElement?.getBoundingClientRect();
   const largura = Math.max(1, Math.round(rect?.width ?? canvas.clientWidth));
@@ -34,6 +35,30 @@ export function desenharMiraNoCanvas(
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
+
+  if (linhaReferencia) {
+    const [[x1, y1], [x2, y2]] = linhaReferencia;
+    if (Number.isFinite(x1) && Number.isFinite(y1) && Number.isFinite(x2) && Number.isFinite(y2)) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   if (!pontoCanvas) return;
   const [cx, cy] = pontoCanvas;

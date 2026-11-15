@@ -107,6 +107,22 @@ import {
   mesmoEstudo,
 } from '../compare/modoComparar';
 import { invertLink, mapPosition, type ScrollLink } from '../compare/sync';
+import {
+  cantosMundoDaInstancia,
+  decidirSincRolagemSlot,
+  deveSincronizarJanelaSlot,
+  encontrarPilhaEnviada,
+  intersecaoQuadComPlano,
+  type MensagemSincJanela,
+  type MensagemSincLocalizador,
+  type MensagemSincRolagem,
+  type OpcoesSincroniaJanelas,
+} from '../compare/segundaJanelaLogica';
+import {
+  EVENTO_ABRIR_PILHA,
+  extrairDadosPilhaArrastada,
+  temPilhaEmArraste,
+} from '../ui/painelEstudos';
 import { estado } from '../state/store';
 import { adquirirVolume, descartarVolume, liberarVolume } from '../volume/montarVolume';
 import { avaliarVolume } from '../volume/validarVolume';
@@ -220,6 +236,8 @@ export interface EstadoViewports {
 export interface ElementosViewport2d {
   /** Contêiner da área de viewports; a grade é criada dentro dele. */
   contentor: HTMLElement;
+  /** Grade inicial ao montar (ex.: '2x2' ou '1x2' salva nas preferências). */
+  layoutInicial?: Layout;
 }
 
 interface Slot {
@@ -284,6 +302,10 @@ interface Slot {
 const slots: Slot[] = [];
 let grade: HTMLDivElement;
 let layoutAtual: Layout = '1x1';
+
+export function obterLayoutAtual(): Layout {
+  return layoutAtual;
+}
 
 // Sincronia automática entre séries do mesmo estudo (fora do modo Comparar).
 let sincroniaEstudoLigada = true;
@@ -1254,27 +1276,289 @@ function indiceCorteMaisProximoDoPonto(stack: StackNode, ponto: Types.Point3): n
   return melhorIndice;
 }
 
+export interface OuvinteSegundaJanela {
+  aoRolar: (msg: MensagemSincRolagem) => void;
+  aoMudarJanela: (msg: MensagemSincJanela) => void;
+  aoLocalizar: (msg: MensagemSincLocalizador) => void;
+  aoLimparLocalizador: () => void;
+}
+
+let ouvinteSegundaJanela: OuvinteSegundaJanela | null = null;
+let aplicandoSincRemota = false;
+const posicoesImpostasRemotas = new Map<number, number>();
+let ultimoCorteRemoto: MensagemSincRolagem | null = null;
+let mostrarLinhaRemota = true;
+
+export function definirOuvinteSegundaJanela(ouvinte: OuvinteSegundaJanela | null): void {
+  ouvinteSegundaJanela = ouvinte;
+}
+
+function pontoNoPlanoDoSlot(slot: Slot): [number, number, number] | undefined {
+  if (!slot.viewport || !slot.pilha) return undefined;
+  if ('setImageIdIndex' in slot.viewport) {
+    const idx = slot.viewport.getCurrentImageIdIndex();
+    const inst = slot.pilha.instances[idx] ?? slot.pilha.instances[0];
+    return inst?.imagePositionPatient as [number, number, number] | undefined;
+  }
+  const fp = slot.viewport.getCamera().focalPoint;
+  return fp ? [fp[0], fp[1], fp[2]] : undefined;
+}
+
+function cantosMundoDoSlot(
+  slot: Slot,
+): [[number, number, number], [number, number, number], [number, number, number], [number, number, number]] | undefined {
+  if (!slot.viewport || !slot.pilha) return undefined;
+  if ('setImageIdIndex' in slot.viewport) {
+    const idx = slot.viewport.getCurrentImageIdIndex();
+    const inst = slot.pilha.instances[idx] ?? slot.pilha.instances[0];
+    if (!inst) return undefined;
+    return cantosMundoDaInstancia(inst) ?? undefined;
+  }
+  try {
+    const w = slot.elemento.clientWidth;
+    const h = slot.elemento.clientHeight;
+    if (w <= 0 || h <= 0) return undefined;
+    const c0 = slot.viewport.canvasToWorld([0, 0]);
+    const c1 = slot.viewport.canvasToWorld([w, 0]);
+    const c2 = slot.viewport.canvasToWorld([w, h]);
+    const c3 = slot.viewport.canvasToWorld([0, h]);
+    if (!c0 || !c1 || !c2 || !c3) return undefined;
+    return [
+      [c0[0], c0[1], c0[2]],
+      [c1[0], c1[1], c1[2]],
+      [c2[0], c2[1], c2[2]],
+      [c3[0], c3[1], c3[2]],
+    ];
+  } catch {
+    return undefined;
+  }
+}
+
+function calcularLinhaReferenciaRemotaCanvas(slot: Slot): [[number, number], [number, number]] | null {
+  if (
+    !mostrarLinhaRemota ||
+    !ultimoCorteRemoto?.cantosMundo ||
+    !slot.pilha ||
+    !slot.viewport ||
+    !slot.habilitado ||
+    slot.celula.hidden ||
+    semCortes(slot)
+  ) {
+    return null;
+  }
+  const inst = slot.pilha.instances[0];
+  const normal = normalDoSlot(slot);
+  const pPlano = pontoNoPlanoDoSlot(slot);
+  if (!inst || !normal || !pPlano) return null;
+  const decisao = decidirSincRolagemSlot(ultimoCorteRemoto, {
+    studyInstanceUid: inst.studyInstanceUid ?? '',
+    ...(inst.frameOfReferenceUid ? { frameOfReferenceUid: inst.frameOfReferenceUid } : {}),
+    normal,
+    positions: slot.pilha.geometry.positions,
+    ...(inst.sliceThickness !== undefined ? { sliceThickness: inst.sliceThickness } : {}),
+    ehPilha2d: 'setImageIdIndex' in slot.viewport,
+  });
+  if (decisao.acao !== 'linha-referencia') return null;
+  const seg = intersecaoQuadComPlano(ultimoCorteRemoto.cantosMundo, pPlano, normal);
+  if (!seg) return null;
+  try {
+    const p1 = slot.viewport.worldToCanvas([seg[0][0], seg[0][1], seg[0][2]]);
+    const p2 = slot.viewport.worldToCanvas([seg[1][0], seg[1][1], seg[1][2]]);
+    if (!p1 || !p2) return null;
+    if (!Number.isFinite(p1[0]) || !Number.isFinite(p1[1]) || !Number.isFinite(p2[0]) || !Number.isFinite(p2[1])) {
+      return null;
+    }
+    return [
+      [p1[0], p1[1]],
+      [p2[0], p2[1]],
+    ];
+  } catch {
+    return null;
+  }
+}
+
 function atualizarMiraSlot(slot: Slot): void {
-  if (!slot.pontoMiraMundo || !slot.viewport || !slot.habilitado || slot.celula.hidden || semCortes(slot)) {
-    desenharMiraNoCanvas(slot.canvasMira, null);
+  if (!slot.viewport || !slot.habilitado || slot.celula.hidden || semCortes(slot)) {
+    desenharMiraNoCanvas(slot.canvasMira, null, '#38bdf8', null);
+    return;
+  }
+  const linhaCanvas = calcularLinhaReferenciaRemotaCanvas(slot);
+  if (!slot.pontoMiraMundo) {
+    desenharMiraNoCanvas(slot.canvasMira, null, '#38bdf8', linhaCanvas);
     return;
   }
   try {
     const pontoCanvas = slot.viewport.worldToCanvas(slot.pontoMiraMundo);
     if (!pontoCanvas || !Number.isFinite(pontoCanvas[0]) || !Number.isFinite(pontoCanvas[1])) {
-      desenharMiraNoCanvas(slot.canvasMira, null);
+      desenharMiraNoCanvas(slot.canvasMira, null, '#38bdf8', linhaCanvas);
       return;
     }
-    desenharMiraNoCanvas(slot.canvasMira, [pontoCanvas[0], pontoCanvas[1]]);
+    desenharMiraNoCanvas(slot.canvasMira, [pontoCanvas[0], pontoCanvas[1]], '#38bdf8', linhaCanvas);
   } catch {
-    desenharMiraNoCanvas(slot.canvasMira, null);
+    desenharMiraNoCanvas(slot.canvasMira, null, '#38bdf8', linhaCanvas);
   }
 }
 
 export function limparMirasLocalizador(): void {
+  ultimoCorteRemoto = null;
   for (const s of slots) {
     s.pontoMiraMundo = null;
-    desenharMiraNoCanvas(s.canvasMira, null);
+    desenharMiraNoCanvas(s.canvasMira, null, '#38bdf8', null);
+  }
+  if (!aplicandoSincRemota) {
+    ouvinteSegundaJanela?.aoLimparLocalizador();
+  }
+}
+
+function emitirRolagemSegundaJanela(indice: number): void {
+  if (aplicandoSincRemota || !ouvinteSegundaJanela) return;
+  const so = slots[indice];
+  if (!so?.pilha || !so.viewport || so.celula.hidden || !so.habilitado || semCortes(so)) return;
+  const posicao = posicaoDoSlot(so);
+  const normal = normalDoSlot(so);
+  const inst = so.pilha.instances[0];
+  if (posicao === undefined || !normal || !inst) return;
+  const imposta = posicoesImpostasRemotas.get(indice);
+  if (imposta !== undefined && Math.abs(imposta - posicao) < 0.5) {
+    posicoesImpostasRemotas.delete(indice);
+    return;
+  }
+  const cantos = cantosMundoDoSlot(so);
+  ouvinteSegundaJanela.aoRolar({
+    tipo: 'sinc-rolagem',
+    studyInstanceUid: inst.studyInstanceUid ?? '',
+    ...(inst.frameOfReferenceUid ? { frameOfReferenceUid: inst.frameOfReferenceUid } : {}),
+    normal,
+    posicaoMm: posicao,
+    ...(cantos ? { cantosMundo: cantos } : {}),
+  });
+}
+
+function emitirJanelaSegundaJanela(indice: number): void {
+  if (aplicandoSincRemota || !ouvinteSegundaJanela) return;
+  const so = slots[indice];
+  if (!so?.pilha || !so.viewport || so.celula.hidden || !so.habilitado || semCortes(so)) return;
+  if (!('getProperties' in so.viewport)) return;
+  const props = so.viewport.getProperties();
+  const inst = so.pilha.instances[0];
+  if (!props?.voiRange || !inst?.modality) return;
+  ouvinteSegundaJanela.aoMudarJanela({
+    tipo: 'sinc-janela',
+    studyInstanceUid: inst.studyInstanceUid ?? '',
+    modality: inst.modality,
+    lower: props.voiRange.lower,
+    upper: props.voiRange.upper,
+    ...(props.invert !== undefined ? { invert: props.invert } : {}),
+  });
+}
+
+export function aplicarRolagemDaOutraJanela(msg: MensagemSincRolagem, opcoes: OpcoesSincroniaJanelas): void {
+  mostrarLinhaRemota = opcoes.linhas;
+  ultimoCorteRemoto = opcoes.linhas ? msg : null;
+  aplicandoSincRemota = true;
+  try {
+    for (const s of slots) {
+      if (s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha || semCortes(s)) continue;
+      const inst = s.pilha.instances[0];
+      const normal = normalDoSlot(s);
+      if (!inst || !normal) continue;
+      const decisao = decidirSincRolagemSlot(msg, {
+        studyInstanceUid: inst.studyInstanceUid ?? '',
+        ...(inst.frameOfReferenceUid ? { frameOfReferenceUid: inst.frameOfReferenceUid } : {}),
+        normal,
+        positions: s.pilha.geometry.positions,
+        ...(inst.sliceThickness !== undefined ? { sliceThickness: inst.sliceThickness } : {}),
+        ehPilha2d: 'setImageIdIndex' in s.viewport,
+      });
+      if (decisao.acao === 'rolar' && opcoes.rolagem) {
+        const usada = irParaPosicaoMm(s, decisao.alvoMm);
+        if (usada !== undefined) {
+          posicoesImpostasRemotas.set(s.indice, usada);
+        }
+      }
+      atualizarMiraSlot(s);
+    }
+  } finally {
+    aplicandoSincRemota = false;
+  }
+}
+
+export function definirMostrarLinhaOutraJanela(ativo: boolean): void {
+  mostrarLinhaRemota = ativo;
+  if (!ativo) ultimoCorteRemoto = null;
+  for (const s of slots) {
+    atualizarMiraSlot(s);
+  }
+}
+
+export function aplicarJanelaDaOutraJanela(msg: MensagemSincJanela): void {
+  aplicandoSincRemota = true;
+  try {
+    for (const s of slots) {
+      if (s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha || semCortes(s)) continue;
+      if (!('setProperties' in s.viewport)) continue;
+      const inst = s.pilha.instances[0];
+      if (!inst) continue;
+      if (!deveSincronizarJanelaSlot(msg, inst.modality)) {
+        continue;
+      }
+      s.viewport.setProperties({
+        voiRange: { lower: msg.lower, upper: msg.upper },
+        ...(msg.invert !== undefined ? { invert: msg.invert } : {}),
+      });
+      s.viewport.render();
+      s.overlay.atualizar();
+    }
+  } finally {
+    aplicandoSincRemota = false;
+  }
+}
+
+export function aplicarLocalizadorDaOutraJanela(msg: MensagemSincLocalizador): void {
+  aplicandoSincRemota = true;
+  try {
+    const ponto: Types.Point3 = [msg.pontoMundo[0], msg.pontoMundo[1], msg.pontoMundo[2]];
+    for (const s of slots) {
+      if (s.celula.hidden || !s.habilitado || !s.viewport || !s.pilha || semCortes(s)) continue;
+      const inst = s.pilha.instances[0];
+      const mesmoRef =
+        msg.frameOfReferenceUid && inst?.frameOfReferenceUid
+          ? msg.frameOfReferenceUid === inst.frameOfReferenceUid
+          : Boolean(msg.studyInstanceUid && inst?.studyInstanceUid === msg.studyInstanceUid);
+      if (!mesmoRef) continue;
+      s.pontoMiraMundo = [ponto[0], ponto[1], ponto[2]];
+      if (s.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC && 'jumpToWorld' in s.viewport) {
+        s.viewport.jumpToWorld(ponto);
+        s.viewport.render();
+        s.overlay.atualizar();
+        atualizarMiraSlot(s);
+      } else if (s.tipoViewport === Enums.ViewportType.STACK && 'setImageIdIndex' in s.viewport) {
+        const idx = indiceCorteMaisProximoDoPonto(s.pilha, ponto);
+        const atualIdx = s.viewport.getCurrentImageIdIndex();
+        if (atualIdx !== idx) {
+          const posAlvo = s.pilha.geometry.positions[idx];
+          if (posAlvo !== undefined) posicoesImpostasRemotas.set(s.indice, posAlvo);
+          void s.viewport.setImageIdIndex(idx).then(() => {
+            s.viewport?.render();
+            s.overlay.atualizar();
+            atualizarMiraSlot(s);
+          });
+        } else {
+          atualizarMiraSlot(s);
+        }
+      }
+    }
+  } finally {
+    aplicandoSincRemota = false;
+  }
+}
+
+export function aplicarLimparLocalizadorDaOutraJanela(): void {
+  aplicandoSincRemota = true;
+  try {
+    limparMirasLocalizador();
+  } finally {
+    aplicandoSincRemota = false;
   }
 }
 
@@ -1283,6 +1567,15 @@ function aplicarLocalizador3d(origemIndice: number, pontoMundoOrigem: Types.Poin
   if (slotOrigem) {
     slotOrigem.pontoMiraMundo = [pontoMundoOrigem[0], pontoMundoOrigem[1], pontoMundoOrigem[2]];
     atualizarMiraSlot(slotOrigem);
+  }
+  if (!aplicandoSincRemota && ouvinteSegundaJanela && slotOrigem?.pilha) {
+    const inst = slotOrigem.pilha.instances[0];
+    ouvinteSegundaJanela.aoLocalizar({
+      tipo: 'sinc-localizador',
+      studyInstanceUid: inst?.studyInstanceUid ?? '',
+      ...(inst?.frameOfReferenceUid ? { frameOfReferenceUid: inst.frameOfReferenceUid } : {}),
+      pontoMundo: [pontoMundoOrigem[0], pontoMundoOrigem[1], pontoMundoOrigem[2]],
+    });
   }
 
   const sincronizandoAnterior = sincronizandoRolagemComparar;
@@ -1803,6 +2096,8 @@ async function exibirSlot(
       slot.montandoVolume = false;
       esconderMensagem(slot);
       slot.overlay.atualizar();
+      atualizarMiraSlot(slot);
+      emitirRolagemSegundaJanela(slot.indice);
       sincronizar();
       return;
     } catch (e) {
@@ -1888,6 +2183,8 @@ async function exibirSlot(
       slot.montandoVolume = false;
       esconderMensagem(slot);
       slot.overlay.atualizar();
+      atualizarMiraSlot(slot);
+      emitirRolagemSegundaJanela(slot.indice);
       sincronizar();
 
       const meio = Math.floor(ids.length / 2);
@@ -1930,6 +2227,8 @@ async function exibirSlot(
     viewport.render();
     slot.overlay.atualizar();
     esconderMensagem(slot);
+    atualizarMiraSlot(slot);
+    emitirRolagemSegundaJanela(slot.indice);
     sincronizar();
 
     void carregarRestante(slot, ids, ordemDoMeio(ids.length, inicial), minhaGeracao);
@@ -3016,6 +3315,28 @@ export async function abrirCurvaPerfusaoAtiva(): Promise<void> {
   });
 }
 
+/**
+ * Quando a janela tem grade com vários quadros (ex.: 1x2 ou 2x2) e recebe uma série enviada
+ * pela outra janela, prefere o primeiro quadro visível ainda vazio se o quadro ativo já estiver ocupado.
+ */
+export async function abrirPilhaEmSlotDisponivel(stack: StackNode): Promise<void> {
+  if (!mprAtivo) {
+    const jaAberta = slots.find((s) => !s.celula.hidden && s.pilha?.id === stack.id);
+    if (jaAberta) {
+      ativo = jaAberta.indice;
+      sincronizar();
+      return;
+    }
+    if (slots[ativo]?.pilha) {
+      const livre = slots.find((s) => !s.celula.hidden && s.pilha === null);
+      if (livre) {
+        ativo = livre.indice;
+      }
+    }
+  }
+  await abrirPilha2d(stack);
+}
+
 /** Abre a pilha no viewport ativo (ou nos 3 planos se já estiver em MPR e a pilha suportar volume). */
 export async function abrirPilha2d(stack: StackNode): Promise<void> {
   const arquivos = estado.resultado?.arquivos;
@@ -3667,16 +3988,19 @@ function criarSlot(indice: number): Slot {
   slot.overlay.ligar(elemento);
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => {
     sincronizarVoiMpr(indice);
+    emitirJanelaSegundaJanela(indice);
     document.dispatchEvent(new CustomEvent(EVENTO_JANELA_MUDOU, { detail: { idViewport: slot.idViewport } }));
   });
   elemento.addEventListener(Enums.Events.STACK_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
     aoRolarSlotEstudo(indice);
+    emitirRolagemSegundaJanela(indice);
     atualizarMiraSlot(slot);
   });
   elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
     aoRolarSlotEstudo(indice);
+    emitirRolagemSegundaJanela(indice);
     atualizarMiraSlot(slot);
   });
   elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
@@ -3685,6 +4009,29 @@ function criarSlot(indice: number): Slot {
     slot.cubo.atualizar();
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
+  // Arrastar e soltar uma série da barra lateral diretamente sobre este quadro:
+  celula.addEventListener('dragover', (ev) => {
+    if (!temPilhaEmArraste(ev.dataTransfer)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+    celula.classList.add('alvo-soltar-serie');
+  });
+  celula.addEventListener('dragleave', (ev) => {
+    if (ev.relatedTarget instanceof Node && celula.contains(ev.relatedTarget)) return;
+    celula.classList.remove('alvo-soltar-serie');
+  });
+  celula.addEventListener('drop', (ev) => {
+    celula.classList.remove('alvo-soltar-serie');
+    const dados = extrairDadosPilhaArrastada(ev.dataTransfer);
+    if (!dados) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const pilha = encontrarPilhaEnviada(estado.resultado?.index, dados);
+    if (!pilha) return;
+    ativarViewport(indice);
+    document.dispatchEvent(new CustomEvent<StackNode>(EVENTO_ABRIR_PILHA, { detail: pilha }));
+  });
   // Pintando numa série que ainda não tem segmentação: o 1º clique cria a segmentação (sem pintar).
   celula.addEventListener(
     'mousedown',
@@ -3885,5 +4232,5 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
       }
     }
   });
-  void definirLayout('1x1');
+  void definirLayout(elementos.layoutInicial ?? '1x1');
 }

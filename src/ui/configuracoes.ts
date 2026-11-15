@@ -8,23 +8,35 @@ import {
   JANELAS_PADRAO,
   MAX_JANELAS,
   medidas,
+  type ModoTelaJanela,
   preferencias,
   restaurarAtalhos,
   restaurarJanelas,
   restaurarMedidas,
+  restaurarTelas,
   salvarPreferencias,
+  telas,
 } from '../state/preferencias';
 import { ACOES_ATALHO, teclaDaAcao } from '../tools/atalhos';
 import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
+import {
+  aplicarExibicaoJanelaAtual,
+  aplicarPresetVisualizacao,
+  type InfoMonitor,
+  listarMonitoresDisponiveis,
+  notificarPreferenciasParaOutraJanela,
+  segundaJanelaDisponivel,
+} from '../viewer/segundaJanela';
 
 let caixa: HTMLDialogElement | undefined;
 let corpo: HTMLElement;
-type Aba = 'medidas' | 'interacao' | 'atalhos' | 'janelas';
-let abaAtual: Aba = 'medidas';
+export type AbaConfiguracoes = 'medidas' | 'interacao' | 'telas' | 'atalhos' | 'janelas';
+let abaAtual: AbaConfiguracoes = 'medidas';
 
-const ABAS: Array<{ id: Aba; rotulo: string }> = [
+const ABAS: Array<{ id: AbaConfiguracoes; rotulo: string }> = [
   { id: 'medidas', rotulo: 'Medidas' },
   { id: 'interacao', rotulo: 'Mouse e zoom' },
+  { id: 'telas', rotulo: 'Telas e monitores' },
   { id: 'atalhos', rotulo: 'Atalhos' },
   { id: 'janelas', rotulo: 'Janelas' },
 ];
@@ -334,11 +346,263 @@ function abaJanelas(): HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
+// Aba Telas e monitores
+// ---------------------------------------------------------------------------
+
+const OPCOES_GRADE_PADRAO: Array<[string, string]> = [
+  ['1x1', '1×1 (quadro único)'],
+  ['1x2', '1×2 (2 lado a lado)'],
+  ['2x1', '2×1 (2 empilhados)'],
+  ['2x2', '2×2 (4 quadros)'],
+  ['1x3', '1×3 (3 lado a lado)'],
+  ['2x3', '2×3 (6 quadros)'],
+  ['3x3', '3×3 (9 quadros)'],
+  ['3x4', '3×4 (12 quadros)'],
+  ['4x4', '4×4 (16 quadros)'],
+  ['5x5', '5×5 (25 quadros)'],
+];
+
+const OPCOES_MODO_TELA: Array<[ModoTelaJanela, string]> = [
+  ['maximizada', 'Sempre abrir ocupando a tela toda (maximizada)'],
+  ['tela-cheia', 'Sempre abrir em tela cheia total (sem bordas / F11)'],
+  ['normal', 'Janela normal (tamanho restaurado)'],
+];
+
+let monitoresCache: InfoMonitor[] = [];
+
+function formatarMonitor(m: InfoMonitor): string {
+  const esc = Math.round(m.escala * 100);
+  return `${m.nome} (${m.largura}×${m.altura}, escala ${esc}%)`;
+}
+
+function abaTelas(): HTMLElement {
+  const tl = telas();
+  const salvarENotificar = (): void => {
+    salvarPreferencias();
+    notificarPreferenciasParaOutraJanela();
+  };
+  const raiz = el('div', { class: 'cfg-aba' });
+
+  raiz.append(
+    el('h3', {}, 'Grades padrão ao abrir o programa'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Ficam salvas neste computador. Exemplo: deixar 2×2 na janela principal e 1×2 na 2ª janela.',
+    ),
+    linha(
+      'Grade inicial da 1ª janela (monitor principal)',
+      campoSelect(tl.gradePrincipal, OPCOES_GRADE_PADRAO, (v) => {
+        tl.gradePrincipal = v;
+        salvarENotificar();
+      }),
+    ),
+    linha(
+      'Grade inicial da 2ª janela (outro monitor)',
+      campoSelect(tl.gradeSecundaria, OPCOES_GRADE_PADRAO, (v) => {
+        tl.gradeSecundaria = v;
+        salvarENotificar();
+      }),
+    ),
+    botaoTexto('Usar 2×2 na 1ª janela + 1×2 na 2ª janela como padrão e aplicar agora', () => {
+      tl.gradePrincipal = '2x2';
+      tl.gradeSecundaria = '1x2';
+      salvarENotificar();
+      desenhar();
+      void aplicarPresetVisualizacao({
+        id: 'rapido-2x2-1x2',
+        rotulo: '2x2 + 1x2',
+        gradePrincipal: '2x2',
+        usarSegundaJanela: segundaJanelaDisponivel(),
+        gradeSecundaria: '1x2',
+      });
+    }),
+  );
+
+  if (segundaJanelaDisponivel()) {
+    const opcoesMonPrincipal: Array<[string, string]> = [
+      ['auto', 'Automático (monitor padrão do sistema)'],
+      ...monitoresCache.map<[string, string]>((m) => [m.id, formatarMonitor(m)]),
+    ];
+    if (tl.monitorPrincipal !== 'auto' && !opcoesMonPrincipal.some(([id]) => id === tl.monitorPrincipal)) {
+      opcoesMonPrincipal.push([tl.monitorPrincipal, `Salvo: ${tl.monitorPrincipal}`]);
+    }
+
+    const opcoesMonSecundaria: Array<[string, string]> = [
+      ['auto', 'Automático (sempre enviar para o 2º monitor)'],
+      ...monitoresCache.map<[string, string]>((m) => [m.id, formatarMonitor(m)]),
+    ];
+    if (tl.monitorSecundaria !== 'auto' && !opcoesMonSecundaria.some(([id]) => id === tl.monitorSecundaria)) {
+      opcoesMonSecundaria.push([tl.monitorSecundaria, `Salvo: ${tl.monitorSecundaria}`]);
+    }
+
+    const resumoMonitores = el(
+      'p',
+      { class: 'cfg-dica' },
+      monitoresCache.length > 0
+        ? `Monitores identificados neste PC (${monitoresCache.length}): ${monitoresCache.map((m) => formatarMonitor(m)).join(' · ')}`
+        : 'Identificando monitores conectados…',
+    );
+
+    raiz.append(
+      el('h3', {}, 'Monitores e tela cheia'),
+      resumoMonitores,
+      linha(
+        'Monitor padrão da 1ª janela',
+        campoSelect(tl.monitorPrincipal, opcoesMonPrincipal, (v) => {
+          tl.monitorPrincipal = v;
+          salvarENotificar();
+          void aplicarExibicaoJanelaAtual();
+        }),
+      ),
+      linha(
+        'Monitor padrão da 2ª janela',
+        campoSelect(tl.monitorSecundaria, opcoesMonSecundaria, (v) => {
+          tl.monitorSecundaria = v;
+          salvarENotificar();
+          void aplicarExibicaoJanelaAtual();
+        }),
+        'Em "Automático", a 2ª janela vai sempre para o monitor diferente do da 1ª janela.',
+      ),
+      linha(
+        'Tamanho ao abrir a 1ª janela',
+        campoSelect(tl.modoTelaPrincipal, OPCOES_MODO_TELA, (v) => {
+          tl.modoTelaPrincipal = v;
+          salvarENotificar();
+          void aplicarExibicaoJanelaAtual();
+        }),
+      ),
+      linha(
+        'Tamanho ao abrir a 2ª janela',
+        campoSelect(tl.modoTelaSecundaria, OPCOES_MODO_TELA, (v) => {
+          tl.modoTelaSecundaria = v;
+          salvarENotificar();
+          void aplicarExibicaoJanelaAtual();
+        }),
+      ),
+      linha(
+        'Abrir a 2ª janela automaticamente ao iniciar (quando houver 2º monitor)',
+        campoCheck(tl.abrirSecundariaAoIniciar, (v) => {
+          tl.abrirSecundariaAoIniciar = v;
+          salvarENotificar();
+        }),
+      ),
+      botaoTexto('🔄 Atualizar lista de monitores e posicionar janela agora', () => {
+        void listarMonitoresDisponiveis().then((lista) => {
+          monitoresCache = lista;
+          void aplicarExibicaoJanelaAtual();
+          if (abaAtual === 'telas') desenhar();
+        });
+      }),
+    );
+
+    if (monitoresCache.length === 0) {
+      void listarMonitoresDisponiveis().then((lista) => {
+        if (lista.length > 0 && monitoresCache.length === 0) {
+          monitoresCache = lista;
+          if (caixa?.open && abaAtual === 'telas') desenhar();
+        }
+      });
+    }
+  }
+
+  raiz.append(
+    el('h3', {}, 'Visualizações predefinidas (1 e 2 monitores)'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Combinações prontas que também aparecem no menu ⊞ da barra de ferramentas para aplicar com 1 clique.',
+    ),
+  );
+
+  const tabela = el('table', { class: 'cfg-tabela' });
+  tabela.append(
+    el(
+      'tr',
+      {},
+      el('th', {}, 'Nome'),
+      el('th', {}, '1ª janela'),
+      el('th', {}, 'Abrir 2ª'),
+      el('th', {}, '2ª janela'),
+      el('th', {}),
+      el('th', {}),
+    ),
+  );
+
+  tl.presets.forEach((p, idx) => {
+    const inpNome = el('input', { type: 'text', value: p.rotulo, maxLength: 60 });
+    inpNome.addEventListener('change', () => {
+      p.rotulo = inpNome.value.trim() || 'Visualização';
+      salvarENotificar();
+    });
+    const selG1 = campoSelect(p.gradePrincipal, OPCOES_GRADE_PADRAO, (v) => {
+      p.gradePrincipal = v;
+      salvarENotificar();
+    });
+    const chk2 = campoCheck(p.usarSegundaJanela, (v) => {
+      p.usarSegundaJanela = v;
+      salvarENotificar();
+    });
+    const selG2 = campoSelect(p.gradeSecundaria, OPCOES_GRADE_PADRAO, (v) => {
+      p.gradeSecundaria = v;
+      salvarENotificar();
+    });
+    const btnAplicar = botaoTexto('Aplicar', () => {
+      void aplicarPresetVisualizacao(p);
+    });
+    const btnApagar = botaoTexto('✕', () => {
+      tl.presets.splice(idx, 1);
+      salvarENotificar();
+      desenhar();
+    });
+    btnApagar.title = 'Remover esta visualização';
+    tabela.append(
+      el(
+        'tr',
+        {},
+        el('td', {}, inpNome),
+        el('td', {}, selG1),
+        el('td', {}, chk2),
+        el('td', {}, selG2),
+        el('td', {}, btnAplicar),
+        el('td', {}, btnApagar),
+      ),
+    );
+  });
+
+  const btnAdicionar = botaoTexto('+ Adicionar visualização de grade', () => {
+    tl.presets.push({
+      id: `preset-${Date.now()}`,
+      rotulo: `2 monitores: ${tl.gradePrincipal} + ${tl.gradeSecundaria}`,
+      gradePrincipal: tl.gradePrincipal,
+      usarSegundaJanela: true,
+      gradeSecundaria: tl.gradeSecundaria,
+    });
+    salvarENotificar();
+    desenhar();
+  });
+  btnAdicionar.disabled = tl.presets.length >= 12;
+
+  raiz.append(
+    tabela,
+    btnAdicionar,
+    botaoTexto('Restaurar padrão de telas e monitores', () => {
+      restaurarTelas();
+      notificarPreferenciasParaOutraJanela();
+      desenhar();
+    }),
+  );
+
+  return raiz;
+}
+
+// ---------------------------------------------------------------------------
 
 function desenhar(): void {
-  const abas: Record<Aba, () => HTMLElement> = {
+  const abas: Record<AbaConfiguracoes, () => HTMLElement> = {
     medidas: abaMedidas,
     interacao: abaInteracao,
+    telas: abaTelas,
     atalhos: abaAtalhos,
     janelas: abaJanelas,
   };
@@ -381,7 +645,7 @@ function criarCaixa(): HTMLDialogElement {
   return d;
 }
 
-export function abrirConfiguracoes(aba?: Aba): void {
+export function abrirConfiguracoes(aba?: AbaConfiguracoes): void {
   const d = criarCaixa();
   if (aba) abaAtual = aba;
   mensagemAtalho = '';
