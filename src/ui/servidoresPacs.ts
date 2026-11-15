@@ -97,6 +97,27 @@ function desenhar(): void {
   });
   const linhaAe = el('label', { class: 'cfg-linha' }, el('span', {}, 'AE title desta estação'), ae);
 
+  const limiteCache = el('input', {
+    type: 'number',
+    value: String(config.limiteCacheGb),
+    min: '0',
+    step: '1',
+  });
+  limiteCache.title = 'Tamanho máximo em GB da pasta de exames baixados (0 = sem limite)';
+  limiteCache.addEventListener('change', () => {
+    const val = Number(limiteCache.value);
+    const sanitizado = Number.isFinite(val) && val >= 0 ? val : 0;
+    limiteCache.value = String(sanitizado);
+    config.limiteCacheGb = sanitizado;
+    void guardar().then(mostrar);
+  });
+  const linhaCache = el(
+    'label',
+    { class: 'cfg-linha' },
+    el('span', {}, 'Limite do cache em disco (GB)'),
+    limiteCache,
+  );
+
   const tabela = el('table', { class: 'cfg-tabela pacs-tabela' });
   tabela.append(
     el('tr', {}, el('th', {}, 'Nome'), el('th', {}, 'Endereço'), el('th', {}, 'Porta'), el('th', {}, 'AE title'), el('th', {}, 'Conexão'), el('th', {})),
@@ -158,7 +179,7 @@ function desenhar(): void {
 
   const adicionar = el('button', { type: 'button', textContent: '+ Adicionar servidor' });
   adicionar.addEventListener('click', () => formulario(-1));
-  corpo.append(aviso, linhaAe, tabela, adicionar, msg);
+  corpo.append(aviso, linhaAe, linhaCache, tabela, adicionar, msg);
 
   function formulario(indice: number): void {
     const atual: PacsServer = indice >= 0 ? config.servidores[indice]! : { name: '', host: '', port: 104, aeTitle: '' };

@@ -87,3 +87,23 @@ export function tamanhoDosExames(base: string): Promise<number> {
 export function apagarExames(base: string, relativo: string): Promise<void> {
   return tauri().core.invoke('exames_apagar', { base, relativo });
 }
+
+export interface ResultadoLimpezaCache {
+  removidos: number;
+  bytesLiberados: number;
+  totalRestante: number;
+}
+
+export function limparCacheExames(
+  base: string,
+  limiteGb: number,
+  protegerEstudoUid?: string,
+): Promise<ResultadoLimpezaCache> {
+  const gbValido = Number.isFinite(limiteGb) && limiteGb > 0 ? limiteGb : 0;
+  const limiteBytes = gbValido > 0 ? Math.round(gbValido * 1024 * 1024 * 1024) : 0;
+  return tauri().core.invoke<ResultadoLimpezaCache>('exames_limpar_cache', {
+    base,
+    limiteBytes,
+    protegerEstudoUid: protegerEstudoUid || null,
+  });
+}

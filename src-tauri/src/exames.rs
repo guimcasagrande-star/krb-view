@@ -7,8 +7,10 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
+    time::SystemTime,
 };
 
+use serde::Serialize;
 use tauri::{
     http::HeaderMap,
     ipc::{InvokeBody, Request, Response},
@@ -170,9 +172,163 @@ pub fn exames_apagar(base: String, relativo: String) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultadoLimpeza {
+    pub removidos: usize,
+    pub bytes_liberados: u64,
+    pub total_restante: u64,
+}
+
+struct InfoEstudoCache {
+    nome: String,
+    caminho: PathBuf,
+    bytes: u64,
+    modificado: SystemTime,
+}
+
+fn resumo_pasta(pasta: &Path) -> (u64, SystemTime) {
+    let mut total: u64 = 0;
+    let mut recente = pasta
+        .metadata()
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let Ok(itens) = fs::read_dir(pasta) else {
+        return (0, recente);
+    };
+    for item in itens.flatten() {
+        let caminho = item.path();
+        if caminho.is_dir() {
+            let (sub_bytes, sub_mod) = resumo_pasta(&caminho);
+            total = total.saturating_add(sub_bytes);
+            if sub_mod > recente {
+                recente = sub_mod;
+            }
+        } else if let Ok(meta) = item.metadata() {
+            total = total.saturating_add(meta.len());
+            if let Ok(m) = meta.modified() {
+                if m > recente {
+                    recente = m;
+                }
+            }
+        }
+    }
+    (total, recente)
+}
+
+fn limpar_cache_em_dir(
+    base: &Path,
+    limite_bytes: u64,
+    proteger_estudo_uid: Option<&str>,
+) -> Result<ResultadoLimpeza, String> {
+    if !base.is_absolute() {
+        return Err("A pasta de exames precisa ser um caminho completo.".into());
+    }
+    if !base.exists() {
+        return Ok(ResultadoLimpeza {
+            removidos: 0,
+            bytes_liberados: 0,
+            total_restante: 0,
+        });
+    }
+    if limite_bytes == 0 {
+        return Ok(ResultadoLimpeza {
+            removidos: 0,
+            bytes_liberados: 0,
+            total_restante: tamanho(base),
+        });
+    }
+
+    let mut estudos: Vec<InfoEstudoCache> = Vec::new();
+    let mut bytes_soltos: u64 = 0;
+    for item in fs::read_dir(base).map_err(|e| e.to_string())?.flatten() {
+        let caminho = item.path();
+        if caminho.is_dir() {
+            let (bytes, modificado) = resumo_pasta(&caminho);
+            let nome = item.file_name().to_string_lossy().into_owned();
+            estudos.push(InfoEstudoCache {
+                nome,
+                caminho,
+                bytes,
+                modificado,
+            });
+        } else if let Ok(meta) = item.metadata() {
+            bytes_soltos = bytes_soltos.saturating_add(meta.len());
+        }
+    }
+
+    let mut total_atual = bytes_soltos.saturating_add(estudos.iter().map(|e| e.bytes).sum::<u64>());
+    if total_atual <= limite_bytes {
+        return Ok(ResultadoLimpeza {
+            removidos: 0,
+            bytes_liberados: 0,
+            total_restante: total_atual,
+        });
+    }
+
+    estudos.sort_by(|a, b| a.modificado.cmp(&b.modificado).then_with(|| a.nome.cmp(&b.nome)));
+
+    let mut removidos = 0usize;
+    let mut bytes_liberados = 0u64;
+    for estudo in estudos {
+        if total_atual <= limite_bytes {
+            break;
+        }
+        if proteger_estudo_uid == Some(estudo.nome.as_str()) {
+            continue;
+        }
+        fs::remove_dir_all(&estudo.caminho).map_err(|e| e.to_string())?;
+        total_atual = total_atual.saturating_sub(estudo.bytes);
+        bytes_liberados = bytes_liberados.saturating_add(estudo.bytes);
+        removidos += 1;
+    }
+
+    Ok(ResultadoLimpeza {
+        removidos,
+        bytes_liberados,
+        total_restante: total_atual,
+    })
+}
+
+/// Remove pastas de estudos mais antigas (por timestamp de modificação mais recente) até ficar
+/// dentro de `limite_bytes` (0 = sem limite), preservando `proteger_estudo_uid` se informado.
+#[tauri::command]
+pub fn exames_limpar_cache(
+    base: String,
+    limite_bytes: u64,
+    proteger_estudo_uid: Option<String>,
+) -> Result<ResultadoLimpeza, String> {
+    limpar_cache_em_dir(
+        Path::new(&base),
+        limite_bytes,
+        proteger_estudo_uid.as_deref().filter(|s| !s.is_empty()),
+    )
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    struct PastaTemp(PathBuf);
+    impl PastaTemp {
+        fn nova(nome: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("visu_{nome}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&p);
+            fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for PastaTemp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn criar_estudo(base: &Path, uid: &str, tamanho_bytes: usize) {
+        let dir = base.join(uid).join("serie1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("img.dcm"), vec![7u8; tamanho_bytes]).unwrap();
+    }
 
     #[test]
     fn decodifica_caminho_windows_utf8() {
@@ -187,5 +343,55 @@ mod testes {
     fn recusa_escape_invalido_em_cabecalho() {
         assert!(decodificar_uri_component("%ZZ").is_err());
         assert!(decodificar_uri_component("abc%2").is_ok()); // '%' seguido de menos de 2 chars passa literal
+    }
+
+    #[test]
+    fn limpa_estudo_mais_antigo_ate_respeitar_limite() {
+        let tmp = PastaTemp::nova("cache_lru");
+        criar_estudo(&tmp.0, "estudo_1_antigo", 1000);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        criar_estudo(&tmp.0, "estudo_2_meio", 1000);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        criar_estudo(&tmp.0, "estudo_3_novo", 1000);
+
+        let res = limpar_cache_em_dir(&tmp.0, 2000, Some("estudo_3_novo")).unwrap();
+        assert_eq!(res.removidos, 1);
+        assert_eq!(res.bytes_liberados, 1000);
+        assert_eq!(res.total_restante, 2000);
+        assert!(!tmp.0.join("estudo_1_antigo").exists());
+        assert!(tmp.0.join("estudo_2_meio").exists());
+        assert!(tmp.0.join("estudo_3_novo").exists());
+    }
+
+    #[test]
+    fn preserva_estudo_protegido_mesmo_quando_e_o_mais_antigo() {
+        let tmp = PastaTemp::nova("cache_protegido");
+        criar_estudo(&tmp.0, "estudo_protegido", 1000);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        criar_estudo(&tmp.0, "estudo_segundo", 1000);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        criar_estudo(&tmp.0, "estudo_novo", 1000);
+
+        let res = limpar_cache_em_dir(&tmp.0, 2000, Some("estudo_protegido")).unwrap();
+        assert_eq!(res.removidos, 1);
+        assert_eq!(res.bytes_liberados, 1000);
+        assert_eq!(res.total_restante, 2000);
+        assert!(tmp.0.join("estudo_protegido").exists());
+        assert!(!tmp.0.join("estudo_segundo").exists());
+        assert!(tmp.0.join("estudo_novo").exists());
+    }
+
+    #[test]
+    fn limite_zero_desativa_limpeza() {
+        let tmp = PastaTemp::nova("cache_sem_limite");
+        criar_estudo(&tmp.0, "estudo_a", 500);
+        criar_estudo(&tmp.0, "estudo_b", 500);
+
+        let res = limpar_cache_em_dir(&tmp.0, 0, None).unwrap();
+        assert_eq!(res.removidos, 0);
+        assert_eq!(res.bytes_liberados, 0);
+        assert_eq!(res.total_restante, 1000);
+        assert!(tmp.0.join("estudo_a").exists());
+        assert!(tmp.0.join("estudo_b").exists());
     }
 }

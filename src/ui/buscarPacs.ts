@@ -20,6 +20,7 @@ import {
   definirPastaDeExames,
   gravarExame,
   lerExame,
+  limparCacheExames,
   listarExames,
   pastaDeExames,
   tamanhoDosExames,
@@ -710,8 +711,10 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       });
       dispararAbrirCandidatos(candidatos);
     };
+    let base: string | undefined;
     try {
-      const base = await pastaDeExames();
+      const pastaBase = await pastaDeExames();
+      base = pastaBase;
       await definirServidoresPermitidos(cfg().servidores);
       const estudoTotal = seriesOrdenadas.reduce((n, s) => n + (s.instanceCount ?? 0), 0);
       const resumoEstudo = await retrieveStudyParallel(r.servidor, r.estudo.studyInstanceUid, {
@@ -734,7 +737,7 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
             porSerie.set(serieUid, mapaSerie);
           }
           mapaSerie.set(rel, new File([inst.file as BlobPart], nomeArquivo));
-          await gravarExame(base, rel, inst.file);
+          await gravarExame(pastaBase, rel, inst.file);
         },
         onSeriesComplete: (serieUid, summary) => {
           if (controle.signal.aborted || summary.cancelled) return;
@@ -802,6 +805,13 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       verAgora.hidden = true;
       cancelar.hidden = true;
       progresso.hidden = true;
+      if (base && recebidas > 0) {
+        try {
+          await limparCacheExames(base, cfg().limiteCacheGb, r.estudo.studyInstanceUid);
+        } catch {
+          /* erro na limpeza automática não interrompe o visualizador */
+        }
+      }
       await atualizarPasta();
     }
   });
@@ -846,7 +856,9 @@ function criarCaixa(): HTMLDialogElement {
     try {
       const base = await pastaDeExames();
       pasta.value = base;
-      espaco.textContent = formatarMb(await tamanhoDosExames(base));
+      const usado = formatarMb(await tamanhoDosExames(base));
+      const limite = cfg().limiteCacheGb;
+      espaco.textContent = limite > 0 ? `${usado} (limite ${limite} GB)` : `${usado} (sem limite)`;
       const todos = await listarExames(base, '');
       const pastasEstudo = new Set(todos.map((r) => r.split('/')[0]).filter(Boolean));
       btnAbaBaixados.textContent = `📥 Exames já baixados (${pastasEstudo.size})`;

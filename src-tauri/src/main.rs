@@ -258,6 +258,7 @@ fn main() {
             exames::exames_ler,
             exames::exames_tamanho,
             exames::exames_apagar,
+            exames::exames_limpar_cache,
             monitores_listar,
             janela_secundaria_abrir,
             janela_configurar_exibicao,

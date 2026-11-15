@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { gravarExame, lerExame } from '../src/state/examesBaixados';
+import { gravarExame, lerExame, limparCacheExames } from '../src/state/examesBaixados';
+import { carregarConfigPacs, salvarConfigPacs } from '../src/state/pacsConfig';
 
 type InvokeMock = (
   comando: string,
@@ -69,5 +70,67 @@ describe('examesBaixados (IPC binário sem Base64)', () => {
 
     instalarTauriMock(async () => btoa('DICM'));
     expect(Array.from(await lerExame('C:\\exames', 'a/b.dcm'))).toEqual([68, 73, 67, 77]);
+  });
+
+  it('limparCacheExames envia limiteBytes e protegerEstudoUid corretamente', async () => {
+    let chamado: { comando: string; args: unknown } | undefined;
+    instalarTauriMock(async (comando, args) => {
+      chamado = { comando, args };
+      return { removidos: 1, bytesLiberados: 500, totalRestante: 1500 };
+    });
+
+    const res = await limparCacheExames('C:\\exames', 10, '1.2.3.4');
+    expect(chamado).toEqual({
+      comando: 'exames_limpar_cache',
+      args: {
+        base: 'C:\\exames',
+        limiteBytes: 10 * 1024 * 1024 * 1024,
+        protegerEstudoUid: '1.2.3.4',
+      },
+    });
+    expect(res).toEqual({ removidos: 1, bytesLiberados: 500, totalRestante: 1500 });
+
+    await limparCacheExames('C:\\exames', 0);
+    expect(chamado).toEqual({
+      comando: 'exames_limpar_cache',
+      args: {
+        base: 'C:\\exames',
+        limiteBytes: 0,
+        protegerEstudoUid: null,
+      },
+    });
+  });
+
+  it('carregarConfigPacs usa limiteCacheGb padrão 10 e valida valores salvos', () => {
+    const memoria = new Map<string, string>();
+    (globalThis as unknown as { localStorage?: Storage }).localStorage = {
+      get length() {
+        return memoria.size;
+      },
+      clear: () => memoria.clear(),
+      getItem: (k: string) => memoria.get(k) ?? null,
+      key: (i: number) => [...memoria.keys()][i] ?? null,
+      removeItem: (k: string) => {
+        memoria.delete(k);
+      },
+      setItem: (k: string, v: string) => {
+        memoria.set(k, v);
+      },
+    };
+
+    try {
+      expect(carregarConfigPacs().limiteCacheGb).toBe(10);
+
+      salvarConfigPacs({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: 25 });
+      expect(carregarConfigPacs().limiteCacheGb).toBe(25);
+
+      salvarConfigPacs({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: 0 });
+      expect(carregarConfigPacs().limiteCacheGb).toBe(0);
+
+      memoria.set('visualizador.pacs.v1', JSON.stringify({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: -5 }));
+      expect(carregarConfigPacs().limiteCacheGb).toBe(10);
+    } finally {
+      delete (globalThis as unknown as { localStorage?: Storage }).localStorage;
+    }
   });
 });

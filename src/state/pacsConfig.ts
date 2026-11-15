@@ -9,12 +9,14 @@ import { normalizeFingerprint } from '../pacs/config.ts';
 export interface ConfigPacs {
   meuAeTitle: string;
   servidores: PacsServer[];
+  /** Limite máximo em GB para a pasta de exames baixados (0 = sem limite). Padrão: 10 GB. */
+  limiteCacheGb: number;
 }
 
 const CHAVE = 'visualizador.pacs.v1';
 
 export function carregarConfigPacs(): ConfigPacs {
-  const padrao: ConfigPacs = { meuAeTitle: 'VISUALIZADOR', servidores: [] };
+  const padrao: ConfigPacs = { meuAeTitle: 'VISUALIZADOR', servidores: [], limiteCacheGb: 10 };
   try {
     const bruto = JSON.parse(localStorage.getItem(CHAVE) ?? 'null') as Partial<ConfigPacs> | null;
     if (!bruto || typeof bruto !== 'object') return padrao;
@@ -36,7 +38,15 @@ export function carregarConfigPacs(): ConfigPacs {
         ...(s.tls === true && digital ? { certificateSha256: digital } : {}),
       };
     });
-    return { meuAeTitle: typeof bruto.meuAeTitle === 'string' ? bruto.meuAeTitle : padrao.meuAeTitle, servidores: limpos };
+    const limiteCacheGb =
+      typeof bruto.limiteCacheGb === 'number' && Number.isFinite(bruto.limiteCacheGb) && bruto.limiteCacheGb >= 0
+        ? bruto.limiteCacheGb
+        : padrao.limiteCacheGb;
+    return {
+      meuAeTitle: typeof bruto.meuAeTitle === 'string' ? bruto.meuAeTitle : padrao.meuAeTitle,
+      servidores: limpos,
+      limiteCacheGb,
+    };
   } catch {
     return padrao;
   }
