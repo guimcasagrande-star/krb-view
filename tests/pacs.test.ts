@@ -954,4 +954,182 @@ describe('retrieveStudyParallel', () => {
     });
     expect(progressEvents.at(-1)!.bytesReceived).toBeGreaterThan(0);
   });
+
+  it('faz flush de onInstance assíncrono antes de resolver e propaga rejeição assíncrona', async () => {
+    const connect = async (): Promise<Transport> => {
+      let writes = 0;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) queueMicrotask(() => onData(acceptPdu()));
+          else if (writes === 2) {
+            queueMicrotask(() =>
+              onData(
+                concat([
+                  cGetPending(2),
+                  storeRqFor('1.2.3.10.1', 1),
+                  storeRqFor('1.2.3.10.2', 2),
+                  cGetDone(2),
+                ]),
+              ),
+            );
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    let flushedCount = 0;
+    const summary = await retrieve(
+      SERVER,
+      { studyInstanceUid: '1.2.3' },
+      {
+        connect,
+        callingAeTitle: ME,
+        imageClasses: [PET],
+        otherClasses: [],
+        timeoutMs: 500,
+        onInstance: async () => {
+          await new Promise((r) => setTimeout(r, 20));
+          flushedCount++;
+        },
+      },
+    );
+    expect(summary.received).toBe(2);
+    expect(flushedCount).toBe(2);
+
+    await expect(
+      retrieve(
+        SERVER,
+        { studyInstanceUid: '1.2.3' },
+        {
+          connect,
+          callingAeTitle: ME,
+          imageClasses: [PET],
+          otherClasses: [],
+          timeoutMs: 500,
+          onInstance: async () => {
+            await new Promise((r) => setTimeout(r, 10));
+            throw new PacsError('DADOS_INVALIDOS', 'disco cheio');
+          },
+        },
+      ),
+    ).rejects.toThrow('disco cheio');
+  });
+
+  it('reduz workers graciosamente quando PACS recusa associações simultâneas excedentes', async () => {
+    let activeConnections = 0;
+    let maxActiveConnections = 0;
+    let refusedCount = 0;
+    let seq = 0;
+
+    const connect = async (): Promise<Transport> => {
+      if (activeConnections >= 2) {
+        refusedCount++;
+        throw new PacsError('ASSOCIACAO_RECUSADA', 'limite de conexões simultâneas');
+      }
+      activeConnections++;
+      maxActiveConnections = Math.max(maxActiveConnections, activeConnections);
+      const connId = ++seq;
+      let writes = 0;
+      let closed = false;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) queueMicrotask(() => onData(acceptPdu()));
+          else if (writes === 2) {
+            setTimeout(() => {
+              if (closed) return;
+              onData(
+                concat([
+                  cGetPending(2),
+                  storeRqFor(`1.2.3.${connId}.1`, 10 + connId),
+                  storeRqFor(`1.2.3.${connId}.2`, 20 + connId),
+                  cGetDone(2),
+                ]),
+              );
+            }, 15);
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          activeConnections--;
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const seriesList = [
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.1', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.2', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.3', instanceCount: 2 },
+      { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.4', instanceCount: 2 },
+    ];
+    const receivedInstances: string[] = [];
+
+    const summary = await retrieveStudyParallel(SERVER, '1.2.3', {
+      connect,
+      callingAeTitle: ME,
+      concurrency: 4,
+      seriesList,
+      imageClasses: [PET],
+      otherClasses: [],
+      timeoutMs: 1000,
+      onInstance: (inst) => {
+        receivedInstances.push(inst.sopInstanceUid);
+      },
+    });
+
+    expect(refusedCount).toBe(2);
+    expect(maxActiveConnections).toBe(2);
+    expect(summary).toEqual({ received: 8, failed: 0, warning: 0, cancelled: false });
+    expect(receivedInstances).toHaveLength(8);
+  });
+
+  it('propaga erro se todas as associações falharem em retrieveStudyParallel', async () => {
+    const connect = async (): Promise<Transport> => {
+      throw new PacsError('SEM_CONEXAO', 'PACS inacessível');
+    };
+
+    await expect(
+      retrieveStudyParallel(SERVER, '1.2.3', {
+        connect,
+        callingAeTitle: ME,
+        concurrency: 3,
+        seriesList: [
+          { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.1', instanceCount: 1 },
+          { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.2', instanceCount: 1 },
+          { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.3', instanceCount: 1 },
+        ],
+        imageClasses: [PET],
+        otherClasses: [],
+        timeoutMs: 500,
+        onInstance: () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'SEM_CONEXAO' });
+  });
 });

@@ -638,7 +638,8 @@ export async function retrieve(
     let received = 0;
     let bytesReceived = 0;
     let remaining: number | undefined;
-    let pendingWrites: Promise<void>[] = [];
+    const pendingWrites = new Set<Promise<void>>();
+    let writeError: Error | undefined;
     const MAX_PENDING_WRITES = 16; // Limita gravações simultâneas em disco por conexão
     try {
       for (;;) {
@@ -666,9 +667,9 @@ export async function retrieve(
             sourceAeTitle: server.aeTitle,
             dataset,
           });
-          let writePromise: Promise<void>;
+          let rawWrite: Promise<void>;
           try {
-            writePromise = Promise.resolve(
+            rawWrite = Promise.resolve(
               options.onInstance({
                 sopClassUid,
                 sopInstanceUid,
@@ -681,6 +682,20 @@ export async function retrieve(
             association.send(contextId, { ...reply, status: 0xa700 });
             throw error;
           }
+          const trackedWrite = rawWrite
+            .catch((error) => {
+              writeError ??= error instanceof Error ? error : new Error(String(error));
+            })
+            .finally(() => {
+              pendingWrites.delete(trackedWrite);
+            });
+          pendingWrites.add(trackedWrite);
+
+          if (writeError) {
+            association.send(contextId, { ...reply, status: 0xa700 });
+            throw writeError;
+          }
+
           // 1. Confirma o recebimento IMEDIATAMENTE ao PACS para ele já enviar a próxima fatia pela rede
           association.send(contextId, reply);
           received++;
@@ -692,11 +707,10 @@ export async function retrieve(
               : { received, remaining, bytesReceived },
           );
 
-          // 2. Enfileira o onInstance (disco/indexação) em pipeline sem bloquear o socket TCP
-          pendingWrites.push(writePromise);
-          if (pendingWrites.length >= MAX_PENDING_WRITES) {
-            await Promise.all(pendingWrites);
-            pendingWrites = [];
+          // 2. Janela deslizante: libera o loop assim que uma gravação terminar ao atingir o limite
+          if (pendingWrites.size >= MAX_PENDING_WRITES) {
+            await Promise.race(pendingWrites);
+            if (writeError) throw writeError;
           }
           continue;
         }
@@ -723,10 +737,10 @@ export async function retrieve(
           command.status === STATUS.subOperationsWithFailures ||
           command.status === STATUS.cancel
         ) {
-          if (pendingWrites.length > 0) {
+          if (pendingWrites.size > 0) {
             await Promise.all(pendingWrites);
-            pendingWrites = [];
           }
+          if (writeError) throw writeError;
           return summary;
         }
         throw new PacsError(
@@ -735,7 +749,7 @@ export async function retrieve(
         );
       }
     } finally {
-      if (pendingWrites.length > 0) {
+      if (pendingWrites.size > 0) {
         await Promise.allSettled(pendingWrites);
       }
       options.signal?.removeEventListener('abort', cancel);
@@ -861,50 +875,80 @@ export async function retrieveStudyParallel(
 
   // 2. Cria os workers que consomem a fila de séries em paralelo
   const workerCount = Math.min(concurrency, queue.length);
+  let activeWorkers = workerCount;
   const workers = Array.from({ length: workerCount }, async () => {
-    while (queue.length > 0) {
-      if (options.signal?.aborted) {
-        anyCancelled = true;
-        break;
+    let retriedAlone = false;
+    try {
+      while (queue.length > 0) {
+        if (options.signal?.aborted) {
+          anyCancelled = true;
+          break;
+        }
+        const currentSeries = queue.shift();
+        if (!currentSeries) break;
+
+        const seriesUid = currentSeries.seriesInstanceUid;
+        let lastSeriesReceived = 0;
+        let lastSeriesBytes = 0;
+
+        try {
+          const summary = await retrieve(
+            server,
+            {
+              studyInstanceUid,
+              seriesInstanceUid: seriesUid,
+            },
+            {
+              ...options,
+              onProgress: (p) => {
+                const delta = p.received - lastSeriesReceived;
+                lastSeriesReceived = p.received;
+                totalReceived += delta;
+                const deltaBytes = p.bytesReceived - lastSeriesBytes;
+                lastSeriesBytes = p.bytesReceived;
+                totalBytesReceived += deltaBytes;
+                if (p.remaining !== undefined) {
+                  remainingBySeries.set(seriesUid, p.remaining);
+                }
+                emitProgress();
+              },
+            },
+          );
+
+          remainingBySeries.delete(seriesUid);
+          completedSeries++;
+          totalFailed += summary.failed;
+          totalWarning += summary.warning;
+          if (summary.cancelled) anyCancelled = true;
+
+          emitProgress();
+          options.onSeriesComplete?.(seriesUid, summary);
+        } catch (err) {
+          const isAssociationLimit =
+            err instanceof PacsError &&
+            (err.code === 'ASSOCIACAO_RECUSADA' || err.code === 'SEM_CONEXAO');
+          if (!isAssociationLimit) throw err;
+
+          if (lastSeriesReceived > 0) totalReceived -= lastSeriesReceived;
+          if (lastSeriesBytes > 0) totalBytesReceived -= lastSeriesBytes;
+          remainingBySeries.delete(seriesUid);
+
+          if (activeWorkers > 1) {
+            // PACS limitou associações simultâneas: devolve a série para a fila e encerra este worker excedente.
+            queue.unshift(currentSeries);
+            return;
+          }
+          if (completedSeries > 0 && !retriedAlone) {
+            // Outro worker já terminou depois que esta conexão foi recusada; tenta novamente sozinho uma vez.
+            retriedAlone = true;
+            queue.unshift(currentSeries);
+            continue;
+          }
+          throw err;
+        }
       }
-      const currentSeries = queue.shift();
-      if (!currentSeries) break;
-
-      const seriesUid = currentSeries.seriesInstanceUid;
-      let lastSeriesReceived = 0;
-      let lastSeriesBytes = 0;
-
-      const summary = await retrieve(
-        server,
-        {
-          studyInstanceUid,
-          seriesInstanceUid: seriesUid,
-        },
-        {
-          ...options,
-          onProgress: (p) => {
-            const delta = p.received - lastSeriesReceived;
-            lastSeriesReceived = p.received;
-            totalReceived += delta;
-            const deltaBytes = p.bytesReceived - lastSeriesBytes;
-            lastSeriesBytes = p.bytesReceived;
-            totalBytesReceived += deltaBytes;
-            if (p.remaining !== undefined) {
-              remainingBySeries.set(seriesUid, p.remaining);
-            }
-            emitProgress();
-          },
-        },
-      );
-
-      remainingBySeries.delete(seriesUid);
-      completedSeries++;
-      totalFailed += summary.failed;
-      totalWarning += summary.warning;
-      if (summary.cancelled) anyCancelled = true;
-
-      emitProgress();
-      options.onSeriesComplete?.(seriesUid, summary);
+    } finally {
+      activeWorkers--;
     }
   });
 
