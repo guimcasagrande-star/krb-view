@@ -21,9 +21,9 @@ import {
 } from '@cornerstonejs/tools';
 import { ehFerramentaSegmentacao } from '../segmentation/ferramentas';
 import { ferramentaPrimariaAtual, ID_GRUPO } from './grupo';
+import { ajustarPontosOrtogonaisAoMoverAlca, MedidasOrtogonaisTool } from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
 import { medidaNoPonto, noTexto } from './selecao';
-import { NOME_SONDA, recalcularSonda } from './sonda';
 import { ehFerramentaVoi, NOME_LESAO_PET, NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
 
 type Ponto3 = [number, number, number];
@@ -133,6 +133,9 @@ function aplicarDeslocamento(a: Arrasto, d: Ponto3): void {
   if (pts && a.alca !== undefined) {
     const o = a.pontos[a.alca];
     if (o) pts[a.alca] = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+    if (a.ann.metadata?.toolName === MedidasOrtogonaisTool.toolName) {
+      ajustarPontosOrtogonaisAoMoverAlca(a.pontos, pts, a.alca);
+    }
     a.ann.invalidated = true;
     return;
   }
@@ -180,7 +183,6 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     if (!a) return;
     a.element.classList.remove(CLASSE_ARRASTANDO);
     if (a.moveu && !a.soTexto && ehFerramentaVoi(a.ann.metadata?.toolName)) recalcularVoi(a.ann);
-    if (a.moveu && !a.soTexto && a.ann.metadata?.toolName === NOME_SONDA) void recalcularSonda(a.ann);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
   };
 

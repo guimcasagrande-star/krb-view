@@ -79,13 +79,16 @@ const ICONES_ESQUEMATICOS: Record<string, string> = {
   Length: svgEsquematico(
     '<path d="M5 19L19 5M3.5 16.5l4 4M16.5 3.5l4 4"/><circle cx="5" cy="19" r="1.6" fill="currentColor"/><circle cx="19" cy="5" r="1.6" fill="currentColor"/>',
   ),
+  OrthogonalLengths: svgEsquematico(
+    '<path d="M3 12h18M3 9.5v5M21 9.5v5"/><path d="M12 4v16M9.5 4h5M9.5 20h5"/><path d="M12 8.5h3.5V12"/>',
+  ),
   MidlineShift: svgEsquematico(
     '<path d="M10 3v18" stroke-dasharray="2.5 2.5"/><path d="M10 12h8M15.5 9.5L18 12l-2.5 2.5"/><circle cx="18.5" cy="12" r="1.5" fill="currentColor"/>',
   ),
   LinearRatio: svgEsquematico(
     '<path d="M4 8h16M4 6v4M20 6v4"/><path d="M4 16h10M4 14v4M14 14v4"/>',
   ),
-  Stenosis: svgEsquematico(
+  StenosisRatio: svgEsquematico(
     '<path d="M3 6c4 0 5 3.5 9 3.5S17 6 21 6"/><path d="M3 18c4 0 5-3.5 9-3.5s5 3.5 9 3.5"/><path d="M12 9.5v5M6 6v12"/>',
   ),
   Angle: svgEsquematico(
@@ -100,9 +103,6 @@ const ICONES_ESQUEMATICOS: Record<string, string> = {
   ArrowCustom: svgEsquematico(
     '<path d="M19 5L7 17M7 10v7h7"/><circle cx="5" cy="19" r="1.5" fill="currentColor"/>',
   ),
-  ProbeHuSuv: svgEsquematico(
-    '<circle cx="12" cy="10" r="5"/><path d="M12 15v6M9.5 19h5"/><circle cx="12" cy="10" r="1.5" fill="currentColor"/>',
-  ),
   SphereVOI: svgEsquematico(
     '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3.2"/><ellipse cx="12" cy="12" rx="3.2" ry="8"/>',
   ),
@@ -115,7 +115,7 @@ const ICONES_ESQUEMATICOS: Record<string, string> = {
   PlanarFreehandROI: svgEsquematico(
     '<path d="M6 9c1.5-3.5 6.5-4.5 10-2s4.5 7 1.5 10-8.5 3-11 0S4.5 12.5 6 9z"/>',
   ),
-  PolylineCustom: svgEsquematico(
+  Polyline: svgEsquematico(
     '<path d="M4 17l5-9 6 5 5-8"/><circle cx="4" cy="17" r="1.6" fill="currentColor"/><circle cx="9" cy="8" r="1.6" fill="currentColor"/><circle cx="15" cy="13" r="1.6" fill="currentColor"/><circle cx="20" cy="5" r="1.6" fill="currentColor"/>',
   ),
 

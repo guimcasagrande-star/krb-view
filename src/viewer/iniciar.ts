@@ -11,13 +11,13 @@ import {
   AnguloCobbTool,
   AnguloReferenciaTool,
   EstenoseTool,
+  MedidasOrtogonaisTool,
   ProporcaoLinearTool,
 } from '../tools/medidasAvancadas';
 import { MIPJumpToClickTool } from '../tools/mipRotatorio';
 import { DistanciaTool } from '../tools/estiloMedidas';
 import { PolilinhaTool } from '../tools/polilinha';
 import { SetaTool } from '../tools/seta';
-import { SondaTool } from '../tools/sonda';
 import { LesaoPetTool, VoiEsferaTool } from '../tools/voiEsfera';
 import { BrushTool, CrescerRegiaoTool, PaintFillTool } from '../segmentation/ferramentas';
 import {
@@ -65,6 +65,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       ZoomTool,
       PanTool,
       DistanciaTool,
+      MedidasOrtogonaisTool,
       DesvioLinhaMediaTool,
       ProporcaoLinearTool,
       EstenoseTool,
@@ -72,7 +73,6 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       AnguloCobbTool,
       AnguloReferenciaTool,
       SetaTool,
-      SondaTool,
       VoiEsferaTool,
       LesaoPetTool,
       EllipticalROITool,

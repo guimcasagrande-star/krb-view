@@ -32,19 +32,57 @@ html, body { height: 100%; margin: 0; background: var(--fundo); color: var(--tex
   grid-area: topo;
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 40px;
-  padding: 4px 12px;
+  gap: 8px;
+  min-height: 48px;
+  padding: 4px 10px;
   background: var(--painel);
   border-bottom: 1px solid var(--borda);
   position: relative;
   z-index: 30;
 }
-.marca { font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
-#ferramentas { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; overflow: visible; }
-#ferramentas .grupo-botoes { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-#ferramentas .separador { width: 1px; height: 20px; background: var(--borda); flex-shrink: 0; margin: 0 2px; }
+.marca { font-weight: 600; font-size: 12px; letter-spacing: 0.2px; white-space: nowrap; color: var(--texto-fraco); }
+#ferramentas { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; overflow: visible; }
+#ferramentas .grupo-botoes { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+#ferramentas .separador { width: 1px; height: 26px; background: var(--borda); flex-shrink: 0; margin: 0 2px; }
 #ferramentas button { padding: 4px 8px; font-size: 13px; white-space: nowrap; }
+#ferramentas button.btn-barra-esquematico {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 44px;
+  height: 40px;
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1.05;
+  border-radius: 5px;
+}
+.icone-barra {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  color: #cbd5e1;
+}
+#ferramentas button[aria-pressed="true"] .icone-barra { color: #7dd3fc; }
+.icone-barra svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.legenda-barra {
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--texto-fraco);
+}
+#ferramentas button[aria-pressed="true"] .legenda-barra { color: var(--texto); font-weight: 500; }
 #ferramentas button[aria-pressed="true"] { background: #1f3a57; border-color: var(--destaque); }
 #ferramentas .seletor-botao { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--texto-fraco); white-space: nowrap; }
 #ferramentas .seletor-botao[hidden] { display: none; }
@@ -378,6 +416,7 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   flex-direction: column;
   gap: 2px;
 }
+.painel-menu-suspenso.alinhar-direita { left: auto; right: 0; }
 .painel-menu-suspenso[hidden] { display: none; }
 
 #ferramentas .item-menu-suspenso {
@@ -410,6 +449,31 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   background: rgba(255, 255, 255, 0.06);
   padding: 1px 5px;
   border-radius: 3px;
+}
+
+.item-menu-rotulo,
+.rotulo-config-mouse {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.icone-item-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #7dd3fc;
+  flex-shrink: 0;
+}
+.icone-item-menu svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .divisor-menu {

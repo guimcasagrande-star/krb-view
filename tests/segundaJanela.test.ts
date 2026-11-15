@@ -15,6 +15,10 @@ import { analyzeStack } from '../src/io/geometry';
 import { buildIndex, type StackNode } from '../src/io/organize';
 import type { InstanceMeta } from '../src/io/types';
 import { sanear } from '../src/state/preferencias';
+import {
+  ajustarPontosOrtogonaisAoMoverAlca,
+  projetarPontoOrtogonal,
+} from '../src/tools/medidasAvancadas';
 
 function meta(p: Partial<InstanceMeta> = {}): InstanceMeta {
   const sop = p.sopInstanceUid ?? '1.2.3.1';
@@ -264,19 +268,46 @@ describe('segundaJanelaLogica', () => {
     expect(prefs.telas.presets.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('saneia os 6 botões favoritos do topo do menu de clique direito', () => {
+  it('saneia os 6 botões favoritos do topo do menu de clique direito e migra ProbeHuSuv para OrthogonalLengths', () => {
     const padrao = sanear({});
     expect(padrao.favoritosMenu).toHaveLength(6);
+    expect(padrao.favoritosMenu).toContain('OrthogonalLengths');
+    expect(padrao.favoritosMenu).not.toContain('ProbeHuSuv');
 
     const custom = sanear({
-      favoritosMenu: ['Length', 'Angle', 'acao:mpr', 'janela:1', '', 123, 'ExtraIgnorado'],
+      favoritosMenu: ['Length', 'ProbeHuSuv', 'acao:mpr', 'janela:1', '', 123, 'ExtraIgnorado'],
     });
     expect(custom.favoritosMenu).toHaveLength(6);
     expect(custom.favoritosMenu[0]).toBe('Length');
-    expect(custom.favoritosMenu[1]).toBe('Angle');
+    expect(custom.favoritosMenu[1]).toBe('OrthogonalLengths');
     expect(custom.favoritosMenu[2]).toBe('acao:mpr');
     expect(custom.favoritosMenu[3]).toBe('janela:1');
     expect(custom.favoritosMenu[4]).toBe(padrao.favoritosMenu[4]);
     expect(custom.favoritosMenu[5]).toBe(padrao.favoritosMenu[5]);
+  });
+
+  it('força a 2ª medida das Medidas Ortogonais (90°) a ser perpendicular à 1ª medida ao desenhar e ao mover alças', () => {
+    // 1ª medida inclinada a 45° no plano axial: de (0, 0, 10) até (20, 20, 10)
+    const p0: [number, number, number] = [0, 0, 10];
+    const p1: [number, number, number] = [20, 20, 10];
+    const p2: [number, number, number] = [10, 10, 10];
+    // Cursor movido para um ponto qualquer fora de 90°: (25, 5, 10)
+    const p3Projetado = projetarPontoOrtogonal(p0, p1, p2, [25, 5, 10]);
+
+    const v1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    const v2 = [p3Projetado[0] - p2[0], p3Projetado[1] - p2[1], p3Projetado[2] - p2[2]];
+    const produtoEscalar = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+    expect(produtoEscalar).toBeCloseTo(0, 6);
+    expect(p3Projetado[2]).toBeCloseTo(10, 6);
+
+    // Ao mover a alça 1 (ponta da 1ª medida), a 2ª medida deve girar mantendo seu comprimento e 90°
+    const originais = [p0, p1, p2, p3Projetado];
+    const ptsMovidos = [p0, [30, 0, 10] as [number, number, number], p2, [...p3Projetado] as [number, number, number]];
+    ajustarPontosOrtogonaisAoMoverAlca(originais, ptsMovidos, 1);
+
+    const nv1 = [ptsMovidos[1][0] - ptsMovidos[0][0], ptsMovidos[1][1] - ptsMovidos[0][1], ptsMovidos[1][2] - ptsMovidos[0][2]];
+    const nv2 = [ptsMovidos[3][0] - ptsMovidos[2][0], ptsMovidos[3][1] - ptsMovidos[2][1], ptsMovidos[3][2] - ptsMovidos[2][2]];
+    const novoEscalar = nv1[0] * nv2[0] + nv1[1] * nv2[1] + nv1[2] * nv2[2];
+    expect(novoEscalar).toBeCloseTo(0, 6);
   });
 });

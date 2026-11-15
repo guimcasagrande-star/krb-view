@@ -172,8 +172,8 @@ export const FAVORITOS_MENU_PADRAO: string[] = [
   'Zoom',
   'Localizador3D',
   'Length',
+  'OrthogonalLengths',
   'EllipticalROI',
-  'ProbeHuSuv',
 ];
 
 const CHAVE = 'visualizador.preferencias.v1';
@@ -293,7 +293,8 @@ export function sanear(bruto: unknown): PrefsGerais {
     for (let i = 0; i < TOTAL_FAVORITOS_MENU; i += 1) {
       const item = b.favoritosMenu[i];
       if (typeof item === 'string' && item.trim().length > 0 && item.trim().length <= 60) {
-        p.favoritosMenu[i] = item.trim();
+        const limpo = item.trim();
+        p.favoritosMenu[i] = limpo === 'ProbeHuSuv' ? 'OrthogonalLengths' : limpo;
       }
     }
   }

@@ -74,6 +74,26 @@ abstract class FerramentaDoisSegmentosBase extends FerramentaMultiCliqueBase {
   /** Linhas finais com os 2 segmentos completos. */
   protected abstract textoFinal(p: Ponto[]): string[];
 
+  /** Gancho opcional para desenhar elementos extras (ex.: símbolo de ângulo reto 90°). */
+  protected desenharExtrasDoisSegmentos(
+    svgDrawingHelper: Types.SVGDrawingHelper,
+    uid: string,
+    c0: Ponto2,
+    c1: Ponto2,
+    c2: Ponto2,
+    c3: Ponto2,
+    cor: string,
+    _largura: number,
+  ): void {
+    const m1 = pontoMedio2d(c0, c1);
+    const m2 = pontoMedio2d(c2, c3);
+    drawing.drawLine(svgDrawingHelper, uid, 'conector', m1, m2, {
+      color: cor,
+      width: 1,
+      lineDash: '3,3',
+    });
+  }
+
   override renderAnnotation(
     enabledElement: CoreTypes.IEnabledElement,
     svgDrawingHelper: Types.SVGDrawingHelper,
@@ -118,13 +138,7 @@ abstract class FerramentaDoisSegmentosBase extends FerramentaMultiCliqueBase {
       drawing.drawLine(svgDrawingHelper, uid, 'seg-2', c2, c3, { color: ctx.cor, width: ctx.largura });
       if (medidas().tracinhos) desenharTracinhos(svgDrawingHelper, uid, 'tr-2', c2, c3, ctx.cor, ctx.largura);
 
-      const m1 = pontoMedio2d(c0, c1);
-      const m2 = pontoMedio2d(c2, c3);
-      drawing.drawLine(svgDrawingHelper, uid, 'conector', m1, m2, {
-        color: ctx.cor,
-        width: 1,
-        lineDash: '3,3',
-      });
+      this.desenharExtrasDoisSegmentos(svgDrawingHelper, uid, c0, c1, c2, c3, ctx.cor, ctx.largura);
 
       this.renderLinkedTextBoxAnnotation({
         enabledElement,
@@ -352,5 +366,168 @@ export class AnguloReferenciaTool extends FerramentaMultiCliqueBase {
     const c0 = viewport.worldToCanvas(pontos[0]!) as Ponto2;
     const c1 = viewport.worldToCanvas(pontos[1]!) as Ponto2;
     return distanciaPontoSegmento2d(canvasCoords, c0, c1) <= proximity;
+  }
+}
+
+// ============================================================================
+// 5. Medidas Ortogonais (OrthogonalLengths — 2 medidas obrigatoriamente a 90°)
+// ============================================================================
+
+/**
+ * Projeta `pMovelBruto` (a partir da âncora `pAncora`) para que o segmento
+ * `pAncora → resultado` fique estritamente perpendicular (90°) ao 1º eixo `p0 → p1`.
+ */
+export function projetarPontoOrtogonal(p0: Ponto, p1: Ponto, pAncora: Ponto, pMovelBruto: Ponto): Ponto {
+  const ux = p1[0] - p0[0];
+  const uy = p1[1] - p0[1];
+  const uz = p1[2] - p0[2];
+  const uLen2 = ux * ux + uy * uy + uz * uz;
+  if (uLen2 < 1e-9) return [...pMovelBruto] as Ponto;
+  const wx = pMovelBruto[0] - pAncora[0];
+  const wy = pMovelBruto[1] - pAncora[1];
+  const wz = pMovelBruto[2] - pAncora[2];
+  const proj = (wx * ux + wy * uy + wz * uz) / uLen2;
+  return [
+    pAncora[0] + (wx - proj * ux),
+    pAncora[1] + (wy - proj * uy),
+    pAncora[2] + (wz - proj * uz),
+  ];
+}
+
+/**
+ * Mantém a restrição de 90° entre o 1º segmento (`pts[0]–pts[1]`) e o 2º (`pts[2]–pts[3]`)
+ * quando o usuário arrasta uma das 4 pontas (alças) após o desenho.
+ */
+export function ajustarPontosOrtogonaisAoMoverAlca(
+  originais: Ponto[],
+  pts: Ponto[],
+  alca: number,
+): void {
+  if (pts.length < 4 || originais.length < 4) return;
+  if (alca === 3) {
+    pts[3] = projetarPontoOrtogonal(pts[0]!, pts[1]!, pts[2]!, pts[3]!);
+    return;
+  }
+  if (alca === 2) {
+    pts[2] = projetarPontoOrtogonal(pts[0]!, pts[1]!, pts[3]!, pts[2]!);
+    return;
+  }
+  if (alca === 0 || alca === 1) {
+    // O 1º eixo girou: gira o 2º segmento no mesmo plano mantendo o comprimento L2 e o centro dele.
+    const uAnt: Ponto = [
+      originais[1]![0] - originais[0]![0],
+      originais[1]![1] - originais[0]![1],
+      originais[1]![2] - originais[0]![2],
+    ];
+    const vAnt: Ponto = [
+      originais[3]![0] - originais[2]![0],
+      originais[3]![1] - originais[2]![1],
+      originais[3]![2] - originais[2]![2],
+    ];
+    const l2 = Math.hypot(vAnt[0], vAnt[1], vAnt[2]);
+    if (l2 < 1e-6) return;
+    // Normal do plano do corte = uAnt × vAnt
+    const nx = uAnt[1] * vAnt[2] - uAnt[2] * vAnt[1];
+    const ny = uAnt[2] * vAnt[0] - uAnt[0] * vAnt[2];
+    const nz = uAnt[0] * vAnt[1] - uAnt[1] * vAnt[0];
+    const uNovo: Ponto = [
+      pts[1]![0] - pts[0]![0],
+      pts[1]![1] - pts[0]![1],
+      pts[1]![2] - pts[0]![2],
+    ];
+    // Direção perpendicular no mesmo plano = n × uNovo
+    let dx = ny * uNovo[2] - nz * uNovo[1];
+    let dy = nz * uNovo[0] - nx * uNovo[2];
+    let dz = nx * uNovo[1] - ny * uNovo[0];
+    const dLen = Math.hypot(dx, dy, dz);
+    if (dLen < 1e-9) {
+      pts[3] = projetarPontoOrtogonal(pts[0]!, pts[1]!, pts[2]!, pts[3]!);
+      return;
+    }
+    dx /= dLen;
+    dy /= dLen;
+    dz /= dLen;
+    if (dx * vAnt[0] + dy * vAnt[1] + dz * vAnt[2] < 0) {
+      dx = -dx;
+      dy = -dy;
+      dz = -dz;
+    }
+    const mx = (originais[2]![0] + originais[3]![0]) / 2;
+    const my = (originais[2]![1] + originais[3]![1]) / 2;
+    const mz = (originais[2]![2] + originais[3]![2]) / 2;
+    const metade = l2 / 2;
+    pts[2] = [mx - dx * metade, my - dy * metade, mz - dz * metade];
+    pts[3] = [mx + dx * metade, my + dy * metade, mz + dz * metade];
+  }
+}
+
+export class MedidasOrtogonaisTool extends FerramentaDoisSegmentosBase {
+  static override toolName = 'OrthogonalLengths';
+  protected readonly corPadrao = '#38bdf8';
+
+  protected override ajustarPontoCorrente(indice: number, mundo: Ponto, pontos: Ponto[]): Ponto {
+    if (indice === 3 && pontos.length >= 3) {
+      return projetarPontoOrtogonal(pontos[0]!, pontos[1]!, pontos[2]!, mundo);
+    }
+    return mundo;
+  }
+
+  protected textoPrimeiroSegmento(d1: number): string {
+    return `${mm(d1)} (trace a 2ª medida a 90°)`;
+  }
+
+  protected textoFinal(p: Ponto[]): string[] {
+    const l1 = distancia3(p[0]!, p[1]!);
+    const l2 = distancia3(p[2]!, p[3]!);
+    return [`${mm(l1)} × ${mm(l2)}`];
+  }
+
+  protected override desenharExtrasDoisSegmentos(
+    svgDrawingHelper: Types.SVGDrawingHelper,
+    uid: string,
+    c0: Ponto2,
+    c1: Ponto2,
+    c2: Ponto2,
+    c3: Ponto2,
+    cor: string,
+  ): void {
+    const ux = c1[0] - c0[0];
+    const uy = c1[1] - c0[1];
+    const vx = c3[0] - c2[0];
+    const vy = c3[1] - c2[1];
+    const nu = Math.hypot(ux, uy);
+    const nv = Math.hypot(vx, vy);
+    if (nu < 4 || nv < 4) return;
+
+    // Interseção das retas c0–c1 e c2–c3 (projeção de c2 sobre a reta c0–c1):
+    const t1 = ((c2[0] - c0[0]) * ux + (c2[1] - c0[1]) * uy) / (nu * nu);
+    const inter: Ponto2 = [c0[0] + t1 * ux, c0[1] + t1 * uy];
+
+    // Se o 2º segmento não encosta na 1ª reta, liga a ponta mais próxima até a interseção com tracejado fino:
+    const distSeg2 = distanciaPontoSegmento2d(inter, c2, c3);
+    if (distSeg2 > 3) {
+      const d2 = Math.hypot(c2[0] - inter[0], c2[1] - inter[1]);
+      const d3 = Math.hypot(c3[0] - inter[0], c3[1] - inter[1]);
+      const ponta = d2 <= d3 ? c2 : c3;
+      drawing.drawLine(svgDrawingHelper, uid, 'conector', ponta, inter, {
+        color: cor,
+        width: 1,
+        lineDash: '3,3',
+      });
+    }
+
+    // Desenha o quadradinho de 90° (∟) na interseção:
+    const tam = 7;
+    const m1 = pontoMedio2d(c0, c1);
+    const m2 = pontoMedio2d(c2, c3);
+    const su = (m1[0] - inter[0]) * ux + (m1[1] - inter[1]) * uy >= 0 ? 1 : -1;
+    const sv = (m2[0] - inter[0]) * vx + (m2[1] - inter[1]) * vy >= 0 ? 1 : -1;
+    const du: Ponto2 = [(ux / nu) * tam * su, (uy / nu) * tam * su];
+    const dv: Ponto2 = [(vx / nv) * tam * sv, (vy / nv) * tam * sv];
+    const pA: Ponto2 = [inter[0] + du[0], inter[1] + du[1]];
+    const pC: Ponto2 = [inter[0] + dv[0], inter[1] + dv[1]];
+    const pB: Ponto2 = [inter[0] + du[0] + dv[0], inter[1] + du[1] + dv[1]];
+    drawing.drawLine(svgDrawingHelper, uid, 'ang90-1', pA, pB, { color: cor, width: 1 });
+    drawing.drawLine(svgDrawingHelper, uid, 'ang90-2', pC, pB, { color: cor, width: 1 });
   }
 }

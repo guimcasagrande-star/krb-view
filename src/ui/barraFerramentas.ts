@@ -32,6 +32,7 @@ import {
 } from '../tools/grupo';
 import { EVENTO_PREFERENCIAS, salvarPreferencias, telas } from '../state/preferencias';
 import { abrirConfiguracoes } from './configuracoes';
+import { iconeFavoritoMenu } from './menuContexto';
 import { alternarAjuda } from '../tools/atalhos';
 import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
 import { pacsDisponivel } from '../pacs/transporteTauri.ts';
@@ -100,10 +101,119 @@ import {
   zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
 
-function botao(texto: string, dica: string, acao: () => void): HTMLButtonElement {
+function svgBarra(conteudo: string): string {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${conteudo}</svg>`;
+}
+
+const ICONES_BARRA = {
+  lateral: svgBarra('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>'),
+  abrir: svgBarra(
+    '<path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/>',
+  ),
+  grade: svgBarra('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18M3 12h18"/>'),
+  petct: svgBarra(
+    '<circle cx="12" cy="12" r="3"/><path d="M12 5V3M12 21v-2M5 12H3M21 12h-2M7 7L5.5 5.5M18.5 18.5L17 17M17 7l1.5-1.5M5.5 18.5L7 17"/><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/>',
+  ),
+  linhas: svgBarra(
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18" stroke-dasharray="3 2"/><path d="M12 4v16"/>',
+  ),
+  comparar: svgBarra(
+    '<rect x="2" y="5" width="8" height="14" rx="1.5"/><rect x="14" y="5" width="8" height="14" rx="1.5"/><path d="M10 10h4M10 14h4"/>',
+  ),
+  cadeadoFechado: svgBarra(
+    '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  ),
+  cadeadoAberto: svgBarra(
+    '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.4-2"/>',
+  ),
+  zerar: svgBarra('<path d="M4 12a8 8 0 1 0 2.5-5.8L4 8.5"/><path d="M4 4v4.5h4.5"/>'),
+  segundaTela: svgBarra(
+    '<rect x="2" y="4" width="11" height="8" rx="1"/><rect x="11" y="10" width="11" height="8" rx="1"/><path d="M6 15h3M15 20.5h5"/>',
+  ),
+  texto: svgBarra(
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M6 8h4M6 11h3M15 8h3M6 16h4M15 16h3"/>',
+  ),
+  mouse: svgBarra('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M6 10h12"/>'),
+  cinePlay: svgBarra('<polygon points="7,5 19,12 7,19" fill="currentColor"/>'),
+  cinePause: svgBarra(
+    '<rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/>',
+  ),
+  mip3d: svgBarra('<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="3.5" ry="8"/>'),
+  cubo3d: svgBarra(
+    '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+  ),
+  config: svgBarra(
+    '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.05 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  ),
+  ajuda: svgBarra(
+    '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4"/><circle cx="12" cy="17" r="0.8" fill="currentColor"/>',
+  ),
+};
+
+const ICONES_BOTAO_MOUSE: Record<Botao, string> = {
+  esquerdo: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7H6A6 6 0 0 1 12 3z" fill="#38bdf8"/>',
+  ),
+  direito: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7h6A6 6 0 0 0 12 3z" fill="#38bdf8"/>',
+  ),
+  meio: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="10.6" y="4.5" width="2.8" height="5.2" rx="1" fill="#38bdf8"/>',
+  ),
+  roda: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 4.2v5.8" stroke="#38bdf8" stroke-width="2.6"/>',
+  ),
+  voltar: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="11.2" width="2.6" height="4.2" rx="1" fill="#38bdf8"/>',
+  ),
+  avancar: svgBarra(
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="6.4" width="2.6" height="4.2" rx="1" fill="#38bdf8"/>',
+  ),
+};
+
+const LEGENDAS_CURTAS_FERRAMENTA: Record<string, string> = {
+  StackScroll: 'Cortes',
+  WindowLevel: 'Janela',
+  Pan: 'Mover',
+  Zoom: 'Zoom',
+  Localizador3D: 'Localizar',
+  GirarPlano: 'Inclinar',
+  Crosshairs: 'Eixos',
+  Length: 'Distância',
+  OrthogonalLengths: 'Ortogonal',
+  MidlineShift: 'Desvio',
+  LinearRatio: 'Proporção',
+  StenosisRatio: 'Estenose',
+  Angle: 'Ângulo',
+  CobbAngleCustom: 'Cobb',
+  ReferenceAngle: 'Âng. Eixo',
+  ArrowCustom: 'Seta',
+  SphereVOI: 'Esfera 3D',
+  PetLesionVOI: 'Lesão PET',
+  EllipticalROI: 'Elipse',
+  PlanarFreehandROI: 'Mão livre',
+  Polyline: 'Polilinha',
+  SegPincel: 'Pincel',
+  SegPincelLimiar: 'Limiar',
+  SegEsfera: 'Esfera',
+  PaintFill: 'Preencher',
+  SegBorracha: 'Borracha',
+  CrescerRegiao: 'Crescer',
+};
+
+function definirConteudoBotaoBarra(b: HTMLButtonElement, svg: string, legenda: string): void {
+  b.classList.add('btn-barra-esquematico');
+  b.innerHTML = `<span class="icone-barra">${svg}</span><span class="legenda-barra">${legenda}</span>`;
+}
+
+function botao(legenda: string, dica: string, acao: () => void, svg?: string): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
-  b.textContent = texto;
+  if (svg) {
+    definirConteudoBotaoBarra(b, svg, legenda);
+  } else {
+    b.textContent = legenda;
+  }
   b.title = dica;
   b.addEventListener('click', acao);
   return b;
@@ -156,6 +266,7 @@ function fecharTodosMenus(exceto?: HTMLElement): void {
  */
 function criarMenuSuspenso(opcoes: {
   rotulo: string;
+  svg?: string;
   dica: string;
   acaoPrincipal?: () => void;
 }): {
@@ -171,7 +282,6 @@ function criarMenuSuspenso(opcoes: {
   const botaoPrincipal = document.createElement('button');
   botaoPrincipal.type = 'button';
   botaoPrincipal.className = 'btn-menu-principal';
-  botaoPrincipal.textContent = opcoes.rotulo;
   botaoPrincipal.title = opcoes.dica;
 
   const botaoSeta = document.createElement('button');
@@ -190,9 +300,29 @@ function criarMenuSuspenso(opcoes: {
     const abrir = painel.hidden;
     fecharTodosMenus(painel);
     painel.hidden = !abrir;
+    if (abrir) {
+      painel.classList.remove('alinhar-direita');
+      painel.style.left = '';
+      painel.style.right = '';
+      const rect = painel.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 8) {
+        painel.classList.add('alinhar-direita');
+      }
+      const rectAjustado = painel.getBoundingClientRect();
+      if (rectAjustado.left < 8) {
+        painel.classList.remove('alinhar-direita');
+        const cRect = contentor.getBoundingClientRect();
+        painel.style.left = `${8 - cRect.left}px`;
+      }
+    }
   };
 
   if (opcoes.acaoPrincipal) {
+    if (opcoes.svg) {
+      definirConteudoBotaoBarra(botaoPrincipal, opcoes.svg, opcoes.rotulo);
+    } else {
+      botaoPrincipal.textContent = opcoes.rotulo;
+    }
     botaoPrincipal.addEventListener('click', () => {
       fecharTodosMenus();
       opcoes.acaoPrincipal!();
@@ -200,7 +330,11 @@ function criarMenuSuspenso(opcoes: {
     botaoSeta.addEventListener('click', alternarPainel);
     contentor.append(botaoPrincipal, botaoSeta, painel);
   } else {
-    botaoPrincipal.textContent = `${opcoes.rotulo} ▾`;
+    if (opcoes.svg) {
+      definirConteudoBotaoBarra(botaoPrincipal, opcoes.svg, `${opcoes.rotulo} ▾`);
+    } else {
+      botaoPrincipal.textContent = `${opcoes.rotulo} ▾`;
+    }
     botaoPrincipal.addEventListener('click', alternarPainel);
     contentor.append(botaoPrincipal, painel);
   }
@@ -223,13 +357,23 @@ function itemMenu(
   atalho: string | undefined,
   acao: () => void,
   fecharMenu: () => void,
+  svg?: string,
 ): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'item-menu-suspenso';
+  const spanEsquerda = document.createElement('span');
+  spanEsquerda.className = 'item-menu-rotulo';
+  if (svg) {
+    const ic = document.createElement('span');
+    ic.className = 'icone-item-menu';
+    ic.innerHTML = svg;
+    spanEsquerda.append(ic);
+  }
   const spanTexto = document.createElement('span');
   spanTexto.textContent = rotulo;
-  b.append(spanTexto);
+  spanEsquerda.append(spanTexto);
+  b.append(spanEsquerda);
   if (atalho) {
     const kbd = document.createElement('kbd');
     kbd.textContent = atalho;
@@ -252,11 +396,17 @@ function divisorMenu(): HTMLHRElement {
 export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   contentor.replaceChildren();
 
+  const btnLateral = document.getElementById('btn-lateral') as HTMLButtonElement | null;
+  if (btnLateral) {
+    definirConteudoBotaoBarra(btnLateral, ICONES_BARRA.lateral, 'Exames');
+  }
+
   document.addEventListener('click', () => fecharTodosMenus());
 
   // 1. Menu Abrir (Pasta, Arquivos DICOM, Arquivo ZIP, Limpar lista)
   const menuAbrir = criarMenuSuspenso({
-    rotulo: '📂 Abrir',
+    rotulo: 'Abrir',
+    svg: ICONES_BARRA.abrir,
     dica: 'Abrir pasta DICOM (Ctrl+Shift+O) ou escolher arquivo/ZIP na seta ao lado',
     acaoPrincipal: () => dispararAbrirPasta(),
   });
@@ -307,7 +457,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoTela.className = 'grupo-botoes';
 
   const menuLayout = criarMenuSuspenso({
-    rotulo: '⊞ 1x1',
+    rotulo: '1x1',
+    svg: ICONES_BARRA.grade,
     dica: 'Alternar divisão de tela (tecla L)',
     acaoPrincipal: () => void proximoLayout(),
   });
@@ -347,9 +498,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   areaQuadrados.addEventListener('mouseleave', () => marcarGrade(0, 0));
   seletorGrade.append(areaQuadrados, rotuloGrade);
   const botaoLinhasRef = botao(
-    '✛ Linhas',
+    'Linhas',
     'Linhas de referência: mostra nos outros viewports onde o corte do viewport ativo cruza (quando há planos diferentes)',
     () => alternarLinhasReferencia(),
+    ICONES_BARRA.linhas,
   );
   const blocoPresetsGrade = document.createElement('div');
   const itemFixarGradeAtual = itemMenu(
@@ -373,7 +525,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     const tl = telas();
     const sec = ehJanelaSecundaria();
     const padraoDesta = sec ? tl.gradeSecundaria : tl.gradePrincipal;
-    const spanFixar = itemFixarGradeAtual.querySelector('span');
+    const spanFixar = itemFixarGradeAtual.querySelector('.item-menu-rotulo > span:last-child');
     if (spanFixar) {
       spanFixar.textContent = `💾 Fixar grade atual como padrão desta janela (atual: ${padraoDesta})`;
     }
@@ -410,7 +562,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   // Menu próprio dos layouts de PET/CT (separado da escolha de grade).
   const menuPetCt = criarMenuSuspenso({
-    rotulo: '☢ PET/CT',
+    rotulo: 'PET/CT',
+    svg: ICONES_BARRA.petct,
     dica: 'Layouts de PET/CT: PET, TC e fusão (o par vem da série aberta)',
     acaoPrincipal: () => void abrirLayoutPet(4),
   });
@@ -423,7 +576,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   );
 
   const menuComparar = criarMenuSuspenso({
-    rotulo: '🔗 Comparar',
+    rotulo: 'Comparar',
+    svg: ICONES_BARRA.comparar,
     dica: 'Modo Comparar: dois exames lado a lado (ATUAL × ANTERIOR) com rolagem sincronizada',
     acaoPrincipal: () => void alternarModoComparar(),
   });
@@ -474,9 +628,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoCompararInline.className = 'grupo-botoes controles-comparar';
   grupoCompararInline.hidden = true;
   const botaoCadeadoRolagem = botao(
-    '🔒 Rolagem',
+    'Rolagem',
     'Ligar ou desligar o vínculo de rolagem por posição (ao religar, recalcula o deslocamento pelos cortes atuais)',
     () => alternarCadeadoRolagemComparar(),
+    ICONES_BARRA.cadeadoFechado,
   );
   const rotuloOffsetComparar = document.createElement('span');
   rotuloOffsetComparar.className = 'offset-comparar';
@@ -485,20 +640,23 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     'Zerar',
     'Restaurar o alinhamento inicial automático entre os dois exames',
     () => zerarVinculoRolagemComparar(),
+    ICONES_BARRA.zerar,
   );
   grupoCompararInline.append(botaoCadeadoRolagem, rotuloOffsetComparar, botaoZerarOffset);
 
   const botaoOverlay = botao(
-    'A',
+    'Texto',
     'Mostrar ou esconder textos e informações nos cantos da imagem (tecla O)',
     () => alternarOverlay(),
+    ICONES_BARRA.texto,
   );
 
   const secundaria = ehJanelaSecundaria();
   let menuSegundaJanela: ReturnType<typeof criarMenuSuspenso> | null = null;
   if (segundaJanelaDisponivel()) {
     const mSeg = criarMenuSuspenso({
-      rotulo: secundaria ? '🖥 Outro monitor' : '🖥 Abrir no outro monitor',
+      rotulo: '2ª Tela',
+      svg: ICONES_BARRA.segundaTela,
       dica: secundaria
         ? 'Opções de sincronia com a janela principal'
         : 'Abrir a segunda janela para outro monitor; a seta ao lado liga/desliga cada sincronia entre as janelas',
@@ -663,10 +821,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const botoesFerramenta: HTMLButtonElement[] = [];
 
   for (const f of ferramentasNav) {
+    const legendaCurta = LEGENDAS_CURTAS_FERRAMENTA[f.nome] ?? f.rotulo;
+    const svgIcone = iconeFavoritoMenu(f.nome);
     if (f.nome === 'WindowLevel') {
       // Janela/nível como botão dividido com todos os presets de janela no menu suspenso:
       const menuJanela = criarMenuSuspenso({
-        rotulo: f.rotulo,
+        rotulo: legendaCurta,
+        svg: svgIcone,
         dica: `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${teclaDaFerramenta(f).toUpperCase()})`,
         acaoPrincipal: () => escolherFerramentaPrimaria(f.nome),
       });
@@ -682,12 +843,19 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
               String(i + 1),
               () => void aplicarPredefinicao(i),
               menuJanela.fechar,
+              iconeFavoritoMenu(`janela:${Math.min(i, 5)}`),
             ),
           );
         });
         menuJanela.painel.append(
           divisorMenu(),
-          itemMenu('Inverter preto e branco', undefined, () => void inverter(), menuJanela.fechar),
+          itemMenu(
+            'Inverter preto e branco',
+            undefined,
+            () => void inverter(),
+            menuJanela.fechar,
+            iconeFavoritoMenu('acao:inverter'),
+          ),
           itemMenu('Editar janelas…', undefined, () => abrirConfiguracoes('janelas'), menuJanela.fechar),
         );
       };
@@ -696,9 +864,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       grupoNavegacao.append(menuJanela.contentor);
     } else {
       const b = botao(
-        f.rotulo,
+        legendaCurta,
         `Usar ${f.rotulo.toLowerCase()} com o botão esquerdo (tecla ${teclaDaFerramenta(f).toUpperCase()})`,
         () => escolherFerramentaPrimaria(f.nome),
+        svgIcone,
       );
       b.dataset.ferramenta = f.nome;
       if (f.apenasMpr) b.dataset.apenasMpr = 'true';
@@ -712,38 +881,22 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   let ultimaMedidaEscolhida: FerramentaPrimaria = ferramentasMedida[0]!;
 
   const menuMedidas = criarMenuSuspenso({
-    rotulo: `📏 ${ultimaMedidaEscolhida.rotulo}`,
+    rotulo: LEGENDAS_CURTAS_FERRAMENTA[ultimaMedidaEscolhida.nome] ?? ultimaMedidaEscolhida.rotulo,
+    svg: iconeFavoritoMenu(ultimaMedidaEscolhida.nome),
     dica: 'Ativar a ferramenta de medida atual; a seta ao lado abre a lista de medidas e a curva de ROI (perfusão)',
     acaoPrincipal: () => escolherFerramentaPrimaria(ultimaMedidaEscolhida.nome),
   });
 
-  const iconesMedida: Record<string, string> = {
-    Length: '📏',
-    MidlineShift: '⊢',
-    LinearRatio: '⚖',
-    StenosisRatio: '٪',
-    Angle: '📐',
-    CobbAngleCustom: '⦜',
-    ReferenceAngle: '∟',
-    ArrowCustom: '↗',
-    EllipticalROI: '⭕',
-    PlanarFreehandROI: '✏',
-    Polyline: '〰',
-    SphereVOI: '◍',
-    ProbeHuSuv: '⌖',
-    PetLesionVOI: '🎯',
-  };
-
   for (const f of ferramentasMedida) {
-    const icone = iconesMedida[f.nome] ?? '📏';
     const item = itemMenu(
-      `${icone} ${f.rotulo}`,
+      f.rotulo,
       teclaDaFerramenta(f).toUpperCase(),
       () => {
         ultimaMedidaEscolhida = f;
         escolherFerramentaPrimaria(f.nome);
       },
       menuMedidas.fechar,
+      iconeFavoritoMenu(f.nome),
     );
     item.dataset.ferramenta = f.nome;
     botoesFerramenta.push(item);
@@ -768,25 +921,28 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         void limparMedidas();
       },
       menuMedidas.fechar,
+      iconeFavoritoMenu('acao:limparMedidas'),
     ),
   );
 
   // 4b. Segmentação (fase 9.1): botão dividido com a última ferramenta e o menu das demais.
   let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
   const menuSegmentar = criarMenuSuspenso({
-    rotulo: '✎ Segmentar',
+    rotulo: 'Segmentar',
+    svg: iconeFavoritoMenu(ultimaSegmentacao.nome),
     dica: 'Segmentar a série do quadro ativo (cria a segmentação no 1º uso). Seta: ferramentas e segmentos',
     acaoPrincipal: () => escolherFerramentaPrimaria(ultimaSegmentacao.nome),
   });
   for (const f of FERRAMENTAS_SEGMENTACAO) {
     const item = itemMenu(
-      `${f.icone} ${f.rotulo}`,
+      f.rotulo,
       undefined,
       () => {
         ultimaSegmentacao = f;
         escolherFerramentaPrimaria(f.nome);
       },
       menuSegmentar.fechar,
+      iconeFavoritoMenu(f.nome),
     );
     item.title = f.dica;
     item.dataset.ferramenta = f.nome;
@@ -808,14 +964,33 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   grupoImagem.className = 'grupo-botoes';
 
   const menuTransformar = criarMenuSuspenso({
-    rotulo: '🔄 Girar',
+    rotulo: 'Girar',
+    svg: iconeFavoritoMenu('acao:girar90'),
     dica: 'Girar 90° no sentido horário ou abrir mais opções (espelhar, inverter, restaurar)',
     acaoPrincipal: () => void girar90(),
   });
   menuTransformar.painel.append(
-    itemMenu('Girar 90° no sentido horário', undefined, () => void girar90(), menuTransformar.fechar),
-    itemMenu('Espelhar horizontalmente', undefined, () => void espelhar(), menuTransformar.fechar),
-    itemMenu('Inverter preto e branco', undefined, () => void inverter(), menuTransformar.fechar),
+    itemMenu(
+      'Girar 90° no sentido horário',
+      undefined,
+      () => void girar90(),
+      menuTransformar.fechar,
+      iconeFavoritoMenu('acao:girar90'),
+    ),
+    itemMenu(
+      'Espelhar horizontalmente',
+      undefined,
+      () => void espelhar(),
+      menuTransformar.fechar,
+      iconeFavoritoMenu('acao:espelhar'),
+    ),
+    itemMenu(
+      'Inverter preto e branco',
+      undefined,
+      () => void inverter(),
+      menuTransformar.fechar,
+      iconeFavoritoMenu('acao:inverter'),
+    ),
     divisorMenu(),
     itemMenu(
       'Restaurar visualização inicial',
@@ -825,6 +1000,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         void restaurar();
       },
       menuTransformar.fechar,
+      iconeFavoritoMenu('acao:restaurar'),
     ),
   );
 
@@ -835,11 +1011,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       limparMirasLocalizador();
       void restaurar();
     },
+    iconeFavoritoMenu('acao:restaurar'),
   );
 
   // Menu suspenso para configurar os botões Direito, Meio e Roda do mouse:
   const menuMouse = criarMenuSuspenso({
-    rotulo: '🖱',
+    rotulo: 'Mouse',
+    svg: ICONES_BARRA.mouse,
     dica: 'Escolher a função dos botões Direito, Meio, laterais (voltar/avançar) e Roda do mouse',
   });
   const camposMouse: Array<[Botao, HTMLSelectElement]> = [];
@@ -847,14 +1025,20 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     ['direito', 'Botão direito', OPCOES_SECUNDARIAS],
     ['meio', 'Botão do meio', OPCOES_SECUNDARIAS],
     ['roda', 'Roda do mouse', OPCOES_RODA],
-    ['voltar', 'Botão lateral: voltar', OPCOES_LATERAIS],
-    ['avancar', 'Botão lateral: avançar', OPCOES_LATERAIS],
+    ['voltar', 'Lateral: voltar', OPCOES_LATERAIS],
+    ['avancar', 'Lateral: avançar', OPCOES_LATERAIS],
   ];
   for (const [botaoMouse, rotulo, opcoes] of seletores) {
     const linha = document.createElement('label');
     linha.className = 'linha-config-mouse';
+    const rotuloComIcone = document.createElement('span');
+    rotuloComIcone.className = 'rotulo-config-mouse';
+    const ic = document.createElement('span');
+    ic.className = 'icone-item-menu';
+    ic.innerHTML = ICONES_BOTAO_MOUSE[botaoMouse];
     const span = document.createElement('span');
     span.textContent = rotulo;
+    rotuloComIcone.append(ic, span);
     const seletor = document.createElement('select');
     seletor.setAttribute('aria-label', `Ferramenta do ${rotulo.toLowerCase()}`);
     for (const opcao of opcoes) {
@@ -866,7 +1050,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     seletor.value = botaoAtribuido(botaoMouse);
     camposMouse.push([botaoMouse, seletor]);
     seletor.addEventListener('change', () => definirBotao(botaoMouse, seletor.value));
-    linha.append(span, seletor);
+    linha.append(rotuloComIcone, seletor);
     menuMouse.painel.append(linha);
   }
 
@@ -874,7 +1058,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   // 6. Cine (Tocar/Pausar + Velocidade em q/s)
   const menuCine = criarMenuSuspenso({
-    rotulo: '▶ Cine',
+    rotulo: 'Cine',
+    svg: ICONES_BARRA.cinePlay,
     dica: 'Tocar ou pausar o cine / rotação MIP 3D (barra de espaço)',
     acaoPrincipal: () => alternarCine(),
   });
@@ -955,24 +1140,27 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     'MPR',
     'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)',
     () => void alternarMpr(),
+    iconeFavoritoMenu('acao:mpr'),
   );
   const botaoMip3d = botao(
     'MIP 3D',
     'Abrir MIP rotatório 3D ao lado do corte 2D (clique num ponto intenso para ir ao corte correspondente)',
     () => void alternarMipRotatorio(),
+    ICONES_BARRA.mip3d,
   );
 
   const botao3d = botao(
     '3D',
     'Abrir a reconstrução 3D (renderização volumétrica) ao lado do corte 2D. No 3D: esquerdo gira, direito ou roda dão zoom, meio move',
     () => void alternar3d(),
+    ICONES_BARRA.cubo3d,
   );
 
   grupoMpr3d.append(rotuloPlano, rotuloModo, controleSlab, botaoMpr, botaoMip3d, botao3d);
 
-  const config = botao('⚙', 'Configurações: medidas, atalhos e janelas', () => abrirConfiguracoes());
+  const config = botao('Ajustes', 'Configurações: medidas, atalhos e janelas', () => abrirConfiguracoes(), ICONES_BARRA.config);
   config.setAttribute('aria-label', 'Configurações');
-  const ajuda = botao('?', 'Atalhos de teclado (tecla ?)', () => alternarAjuda());
+  const ajuda = botao('Atalhos', 'Atalhos de teclado (tecla ?)', () => alternarAjuda(), ICONES_BARRA.ajuda);
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
 
   contentor.append(
@@ -1004,9 +1192,23 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     if (medidaAtiva) {
       ultimaMedidaEscolhida = medidaAtiva;
     }
-    const icone = iconesMedida[ultimaMedidaEscolhida.nome] ?? '📏';
-    menuMedidas.botaoPrincipal.textContent = `${icone} ${ultimaMedidaEscolhida.rotulo}`;
+    definirConteudoBotaoBarra(
+      menuMedidas.botaoPrincipal,
+      iconeFavoritoMenu(ultimaMedidaEscolhida.nome),
+      LEGENDAS_CURTAS_FERRAMENTA[ultimaMedidaEscolhida.nome] ?? ultimaMedidaEscolhida.rotulo,
+    );
     menuMedidas.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(medidaAtiva)));
+
+    const segAtiva = FERRAMENTAS_SEGMENTACAO.find((f) => f.nome === atual);
+    if (segAtiva) {
+      ultimaSegmentacao = segAtiva;
+    }
+    definirConteudoBotaoBarra(
+      menuSegmentar.botaoPrincipal,
+      iconeFavoritoMenu(ultimaSegmentacao.nome),
+      segAtiva ? (LEGENDAS_CURTAS_FERRAMENTA[segAtiva.nome] ?? 'Segmentar') : 'Segmentar',
+    );
+    menuSegmentar.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(segAtiva)));
 
     for (const [botaoMouse, seletor] of camposMouse) {
       seletor.value = botaoAtribuido(botaoMouse);
@@ -1016,7 +1218,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
 
   function atualizarViewports(e: EstadoViewports): void {
-    menuLayout.botaoPrincipal.textContent = `⊞ ${e.maximizado ? '1x1 (máx.)' : geometriaLayout(e.layout).rotulo}`;
+    definirConteudoBotaoBarra(
+      menuLayout.botaoPrincipal,
+      ICONES_BARRA.grade,
+      e.maximizado ? '1x1 máx' : geometriaLayout(e.layout).rotulo,
+    );
     menuLayout.botaoPrincipal.disabled = e.mprAtivo;
     menuLayout.botaoSeta.disabled = e.mprAtivo;
     menuPetCt.botaoPrincipal.disabled = e.mprAtivo;
@@ -1052,7 +1258,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     menuComparar.botaoPrincipal.setAttribute('aria-pressed', String(comp.ativo));
     grupoCompararInline.hidden = !comp.ativo;
     if (comp.ativo) {
-      botaoCadeadoRolagem.textContent = comp.rolagemLigada ? '🔒 Rolagem' : '🔓 Rolagem';
+      definirConteudoBotaoBarra(
+        botaoCadeadoRolagem,
+        comp.rolagemLigada ? ICONES_BARRA.cadeadoFechado : ICONES_BARRA.cadeadoAberto,
+        'Rolagem',
+      );
       botaoCadeadoRolagem.setAttribute('aria-pressed', String(comp.rolagemLigada));
       if (comp.erroVinculo) {
         rotuloOffsetComparar.textContent = '⚠ Sem vínculo';
@@ -1069,7 +1279,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     const temPilha = e.pilhaId !== null;
     menuCine.botaoPrincipal.disabled = !temPilha || e.mprAtivo;
     menuCine.botaoSeta.disabled = !temPilha || e.mprAtivo || emMipRotatorio;
-    menuCine.botaoPrincipal.textContent = e.cineTocando ? '⏸ Cine' : '▶ Cine';
+    definirConteudoBotaoBarra(
+      menuCine.botaoPrincipal,
+      e.cineTocando ? ICONES_BARRA.cinePause : ICONES_BARRA.cinePlay,
+      'Cine',
+    );
     menuCine.botaoPrincipal.setAttribute('aria-pressed', String(e.cineTocando));
     for (const item of botoesFps) {
       item.setAttribute('aria-pressed', String(Number(item.dataset.fps) === e.fps));

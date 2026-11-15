@@ -32,11 +32,11 @@ import {
   AnguloCobbTool,
   AnguloReferenciaTool,
   EstenoseTool,
+  MedidasOrtogonaisTool,
   ProporcaoLinearTool,
 } from './medidasAvancadas';
 import { PolilinhaTool } from './polilinha';
 import { SetaTool } from './seta';
-import { SondaTool } from './sonda';
 import { LesaoPetTool, VoiEsferaTool } from './voiEsfera';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 import { BrushTool, configuracaoDoPincel, FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
@@ -70,6 +70,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: NOME_GIRAR_PLANO, rotulo: '⟲ Girar plano', tecla: 'i', categoria: 'navegacao' },
   { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true, categoria: 'navegacao' },
   { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd', categoria: 'medida' },
+  { nome: MedidasOrtogonaisTool.toolName, rotulo: 'Medidas ortogonais (90°)', tecla: 'g', categoria: 'medida' },
   { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'b', categoria: 'medida' },
   { nome: ProporcaoLinearTool.toolName, rotulo: 'Proporção (razão L1/L2)', tecla: 'q', categoria: 'medida' },
   { nome: EstenoseTool.toolName, rotulo: 'Relação de estenose (%)', tecla: 'n', categoria: 'medida' },
@@ -77,7 +78,6 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb (4 pontos)', tecla: 'k', categoria: 'medida' },
   { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo c/ eixo horiz./vert.', tecla: 'v', categoria: 'medida' },
   { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
-  { nome: SondaTool.toolName, rotulo: 'Sonda (HU e SUV)', tecla: 'g', categoria: 'medida' },
   { nome: VoiEsferaTool.toolName, rotulo: 'ROI volumétrica (esfera)', tecla: 'u', categoria: 'medida' },
   { nome: LesaoPetTool.toolName, rotulo: 'Lesão PET (MTV/TLG)', tecla: 'j', categoria: 'medida' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },

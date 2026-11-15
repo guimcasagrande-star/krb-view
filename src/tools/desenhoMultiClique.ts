@@ -116,9 +116,15 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     }
   }
 
-  private posicionarPontoCorrente(mundo: Ponto): void {
+  /** Gancho opcional para restringir a posição de um ponto durante o desenho (ex.: forçar 90°). */
+  protected ajustarPontoCorrente(_indice: number, mundo: Ponto, _pontos: Ponto[]): Ponto {
+    return mundo;
+  }
+
+  private posicionarPontoCorrente(mundoBruto: Ponto): void {
     const r = this.rascunho!;
     const pontos = this.pontos();
+    const mundo = this.ajustarPontoCorrente(r.indice, mundoBruto, pontos);
     pontos[r.indice] = mundo;
     r.moveu = distancia3(pontos[r.indice - 1]!, mundo) >= DISTANCIA_MINIMA_MM;
     r.annotation.invalidated = true;
