@@ -25,6 +25,7 @@ import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
 import { iconeFavoritoMenu, listarOpcoesFavoritosMenu } from './menuContexto';
 import {
   aplicarExibicaoJanelaAtual,
+  aplicarGradesPadraoAtuais,
   aplicarPresetVisualizacao,
   type InfoMonitor,
   listarMonitoresDisponiveis,
@@ -34,8 +35,22 @@ import {
 
 let caixa: HTMLDialogElement | undefined;
 let corpo: HTMLElement;
+let statusSalvoEl: HTMLElement | undefined;
+let timerStatusSalvo: number | undefined;
 export type AbaConfiguracoes = 'medidas' | 'interacao' | 'telas' | 'atalhos' | 'janelas';
 let abaAtual: AbaConfiguracoes = 'medidas';
+
+function confirmarSalvamento(mensagem = '✓ Configurações salvas neste computador'): void {
+  salvarPreferencias();
+  notificarPreferenciasParaOutraJanela();
+  if (!statusSalvoEl) return;
+  statusSalvoEl.textContent = mensagem;
+  statusSalvoEl.classList.add('visivel');
+  if (timerStatusSalvo !== undefined) window.clearTimeout(timerStatusSalvo);
+  timerStatusSalvo = window.setTimeout(() => {
+    statusSalvoEl?.classList.remove('visivel');
+  }, 2600);
+}
 
 const ABAS: Array<{ id: AbaConfiguracoes; rotulo: string }> = [
   { id: 'medidas', rotulo: 'Medidas' },
@@ -65,6 +80,12 @@ function linha(rotulo: string, controle: HTMLElement, dica?: string): HTMLElemen
 
 function campoNumero(valor: number, min: number, max: number, passo: number, aoMudar: (v: number) => void): HTMLInputElement {
   const i = el('input', { type: 'number', min: String(min), max: String(max), step: String(passo), value: String(valor) });
+  i.addEventListener('input', () => {
+    const v = Number(i.value.replace(',', '.'));
+    if (!Number.isFinite(v)) return;
+    const lim = Math.min(max, Math.max(min, v));
+    aoMudar(lim);
+  });
   i.addEventListener('change', () => {
     const v = Number(i.value.replace(',', '.'));
     if (!Number.isFinite(v)) {
@@ -162,10 +183,16 @@ function abaMedidas(): HTMLElement {
       campoNumero(m.tolerancia, 4, 40, 1, (v) => ((m.tolerancia = v), mudou())),
       'Quanto maior, mais fácil selecionar uma medida clicando perto dela.',
     ),
-    botaoTexto('Restaurar padrão das medidas', () => {
-      restaurarMedidas();
-      desenhar();
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto('💾 Salvar medidas', () => confirmarSalvamento('✓ Aparência e medidas salvas'), 'primario'),
+      botaoTexto('Restaurar padrão das medidas', () => {
+        restaurarMedidas();
+        confirmarSalvamento('✓ Padrão das medidas restaurado');
+        desenhar();
+      }),
+    ),
   );
   return raiz;
 }
@@ -253,15 +280,20 @@ function abaInteracao(): HTMLElement {
   }
 
   raiz.append(
-    botaoTexto('Restaurar os 6 favoritos padrão', () => {
-      restaurarFavoritosMenu();
-      notificarPreferenciasParaOutraJanela();
-      desenhar();
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto('💾 Salvar mouse e favoritos', () => confirmarSalvamento('✓ Mouse, zoom e favoritos salvos'), 'primario'),
+      botaoTexto('Restaurar os 6 favoritos padrão', () => {
+        restaurarFavoritosMenu();
+        confirmarSalvamento('✓ 6 favoritos padrão restaurados');
+        desenhar();
+      }),
+    ),
     el(
       'p',
       { class: 'cfg-dica' },
-      'A ferramenta de cada botão do mouse é escolhida no menu 🖱 da barra. Clique com o botão direito, sem arrastar, abre o menu rápido.',
+      'A ferramenta de cada botão do mouse é escolhida no menu Mouse da barra. Clique com o botão direito, sem arrastar, abre o menu rápido.',
     ),
   );
   return raiz;
@@ -316,11 +348,17 @@ function abaAtalhos(): HTMLElement {
   }
   raiz.append(
     tabela,
-    botaoTexto('Restaurar atalhos padrão', () => {
-      mensagemAtalho = '';
-      restaurarAtalhos();
-      desenhar();
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto('💾 Salvar atalhos', () => confirmarSalvamento('✓ Atalhos salvos'), 'primario'),
+      botaoTexto('Restaurar atalhos padrão', () => {
+        mensagemAtalho = '';
+        restaurarAtalhos();
+        confirmarSalvamento('✓ Atalhos padrão restaurados');
+        desenhar();
+      }),
+    ),
   );
   return raiz;
 }
@@ -383,6 +421,10 @@ function abaJanelas(): HTMLElement {
   );
   janelas.forEach((j, i) => {
     const nome = el('input', { type: 'text', value: j.rotulo, maxLength: 40 });
+    nome.addEventListener('input', () => {
+      j.rotulo = nome.value.trim() || 'Janela';
+      salvarPreferencias();
+    });
     nome.addEventListener('change', () => {
       j.rotulo = nome.value.trim() || 'Janela';
       salvarPreferencias();
@@ -407,11 +449,17 @@ function abaJanelas(): HTMLElement {
   adicionar.disabled = janelas.length >= MAX_JANELAS;
   raiz.append(
     tabela,
-    adicionar,
-    botaoTexto(`Restaurar as ${JANELAS_PADRAO.length} janelas padrão`, () => {
-      restaurarJanelas();
-      desenhar();
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto('💾 Salvar janelas', () => confirmarSalvamento('✓ Janelas de TC salvas'), 'primario'),
+      adicionar,
+      botaoTexto(`Restaurar as ${JANELAS_PADRAO.length} janelas padrão`, () => {
+        restaurarJanelas();
+        confirmarSalvamento('✓ Janelas padrão restauradas');
+        desenhar();
+      }),
+    ),
   );
   return raiz;
 }
@@ -466,6 +514,7 @@ function abaTelas(): HTMLElement {
       campoSelect(tl.gradePrincipal, OPCOES_GRADE_PADRAO, (v) => {
         tl.gradePrincipal = v;
         salvarENotificar();
+        void aplicarGradesPadraoAtuais();
       }),
     ),
     linha(
@@ -473,21 +522,34 @@ function abaTelas(): HTMLElement {
       campoSelect(tl.gradeSecundaria, OPCOES_GRADE_PADRAO, (v) => {
         tl.gradeSecundaria = v;
         salvarENotificar();
+        void aplicarGradesPadraoAtuais();
       }),
     ),
-    botaoTexto('Usar 2×2 na 1ª janela + 1×2 na 2ª janela como padrão e aplicar agora', () => {
-      tl.gradePrincipal = '2x2';
-      tl.gradeSecundaria = '1x2';
-      salvarENotificar();
-      desenhar();
-      void aplicarPresetVisualizacao({
-        id: 'rapido-2x2-1x2',
-        rotulo: '2x2 + 1x2',
-        gradePrincipal: '2x2',
-        usarSegundaJanela: segundaJanelaDisponivel(),
-        gradeSecundaria: '1x2',
-      });
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto(
+        '💾 Salvar e aplicar grades padrão agora',
+        () => {
+          confirmarSalvamento('✓ Grades padrão salvas e aplicadas');
+          void aplicarGradesPadraoAtuais();
+        },
+        'primario',
+      ),
+      botaoTexto('Usar 2×2 na 1ª janela + 1×2 na 2ª janela como padrão', () => {
+        tl.gradePrincipal = '2x2';
+        tl.gradeSecundaria = '1x2';
+        confirmarSalvamento('✓ Padrão 2×2 + 1×2 salvo');
+        desenhar();
+        void aplicarPresetVisualizacao({
+          id: 'rapido-2x2-1x2',
+          rotulo: '2x2 + 1x2',
+          gradePrincipal: '2x2',
+          usarSegundaJanela: segundaJanelaDisponivel(),
+          gradeSecundaria: '1x2',
+        });
+      }),
+    ),
   );
 
   if (segundaJanelaDisponivel()) {
@@ -602,6 +664,10 @@ function abaTelas(): HTMLElement {
 
   tl.presets.forEach((p, idx) => {
     const inpNome = el('input', { type: 'text', value: p.rotulo, maxLength: 60 });
+    inpNome.addEventListener('input', () => {
+      p.rotulo = inpNome.value.trim() || 'Visualização';
+      salvarENotificar();
+    });
     inpNome.addEventListener('change', () => {
       p.rotulo = inpNome.value.trim() || 'Visualização';
       salvarENotificar();
@@ -618,8 +684,10 @@ function abaTelas(): HTMLElement {
       p.gradeSecundaria = v;
       salvarENotificar();
     });
-    const btnAplicar = botaoTexto('Aplicar', () => {
+    const btnAplicar = botaoTexto('Aplicar e tornar padrão', () => {
+      confirmarSalvamento(`✓ "${p.rotulo}" aplicado e salvo como padrão`);
       void aplicarPresetVisualizacao(p);
+      desenhar();
     });
     const btnApagar = botaoTexto('✕', () => {
       tl.presets.splice(idx, 1);
@@ -656,12 +724,21 @@ function abaTelas(): HTMLElement {
 
   raiz.append(
     tabela,
-    btnAdicionar,
-    botaoTexto('Restaurar padrão de telas e monitores', () => {
-      restaurarTelas();
-      notificarPreferenciasParaOutraJanela();
-      desenhar();
-    }),
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto('💾 Salvar telas e monitores', () => {
+        confirmarSalvamento('✓ Configurações de telas e monitores salvas');
+        void aplicarGradesPadraoAtuais();
+      }, 'primario'),
+      btnAdicionar,
+      botaoTexto('Restaurar padrão de telas e monitores', () => {
+        restaurarTelas();
+        confirmarSalvamento('✓ Padrão de telas e monitores restaurado');
+        void aplicarGradesPadraoAtuais();
+        desenhar();
+      }),
+    ),
   );
 
   return raiz;
@@ -698,11 +775,39 @@ function criarCaixa(): HTMLDialogElement {
     abas.append(b);
   }
   corpo = el('div', { class: 'cfg-corpo' });
+  statusSalvoEl = el('span', { class: 'cfg-status-salvo', textContent: '✓ Salvo neste computador' });
+  const rodape = el(
+    'div',
+    { class: 'cfg-rodape' },
+    statusSalvoEl,
+    el(
+      'div',
+      { class: 'cfg-rodape-botoes' },
+      botaoTexto(
+        '💾 Salvar',
+        () => {
+          confirmarSalvamento('✓ Todas as configurações foram salvas');
+          if (abaAtual === 'telas') void aplicarGradesPadraoAtuais();
+        },
+        'primario',
+      ),
+      botaoTexto(
+        '💾 Salvar e fechar',
+        () => {
+          confirmarSalvamento('✓ Todas as configurações foram salvas');
+          if (abaAtual === 'telas') void aplicarGradesPadraoAtuais();
+          d.close();
+        },
+        'primario',
+      ),
+      botaoTexto('Fechar', () => d.close(), 'cfg-fechar'),
+    ),
+  );
   d.append(
     el('h2', {}, '⚙ Configurações'),
     abas,
     corpo,
-    botaoTexto('Fechar', () => d.close(), 'cfg-fechar'),
+    rodape,
   );
   // Teclas digitadas aqui não podem disparar atalhos do visualizador (ex.: Delete apagar medida).
   d.addEventListener('keydown', (e) => {

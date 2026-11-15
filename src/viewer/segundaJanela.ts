@@ -34,6 +34,7 @@ import { lerExame, listarExames, pastaDeExames } from '../state/examesBaixados';
 import {
   type PresetVisualizacao,
   recarregarPreferenciasDoDisco,
+  salvarPreferencias,
   telas,
 } from '../state/preferencias';
 import { estado } from '../state/store';
@@ -202,6 +203,14 @@ export async function abrirSegundaJanela(): Promise<boolean> {
  * e ajusta a grade dela também.
  */
 export async function aplicarPresetVisualizacao(preset: PresetVisualizacao): Promise<void> {
+  const tl = telas();
+  tl.gradePrincipal = preset.gradePrincipal;
+  if (preset.usarSegundaJanela) {
+    tl.gradeSecundaria = preset.gradeSecundaria;
+  }
+  salvarPreferencias();
+  notificarPreferenciasParaOutraJanela();
+
   if (ehJanelaSecundaria()) {
     await definirLayout(preset.gradeSecundaria);
     try {
@@ -235,6 +244,34 @@ export async function aplicarPresetVisualizacao(preset: PresetVisualizacao): Pro
     } satisfies MensagemSegundaJanela);
   } catch {
     /* ignora */
+  }
+}
+
+/** Aplica imediatamente as grades padrão (`gradePrincipal` e `gradeSecundaria`) nas janelas abertas. */
+export async function aplicarGradesPadraoAtuais(): Promise<void> {
+  const tl = telas();
+  if (ehJanelaSecundaria()) {
+    await definirLayout(tl.gradeSecundaria);
+    try {
+      canalSecundario?.postMessage({
+        tipo: 'definir-layout',
+        alvo: 'principal',
+        layout: tl.gradePrincipal,
+      } satisfies MensagemSegundaJanela);
+    } catch {
+      /* ignora */
+    }
+  } else {
+    await definirLayout(tl.gradePrincipal);
+    try {
+      canalPrincipal?.postMessage({
+        tipo: 'definir-layout',
+        alvo: 'secundaria',
+        layout: tl.gradeSecundaria,
+      } satisfies MensagemSegundaJanela);
+    } catch {
+      /* ignora */
+    }
   }
 }
 

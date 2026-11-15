@@ -8,6 +8,7 @@ import {
   encontrarPilhaEnviada,
   filtrarItensNovosParaIndice,
   intersecaoQuadComPlano,
+  pilhasExibicaoDaSerie,
   prepararEnvioPilha,
   sanitizarMetasParaCatalogo,
 } from '../src/compare/segundaJanelaLogica';
@@ -309,5 +310,53 @@ describe('segundaJanelaLogica', () => {
     const nv2 = [ptsMovidos[3][0] - ptsMovidos[2][0], ptsMovidos[3][1] - ptsMovidos[2][1], ptsMovidos[3][2] - ptsMovidos[2][2]];
     const novoEscalar = nv1[0] * nv2[0] + nv1[1] * nv2[1] + nv1[2] * nv2[2];
     expect(novoEscalar).toBeCloseTo(0, 6);
+  });
+
+  it('unifica subpilhas da mesma sequência e plano (ex.: AXI T1_smsp_recon em 5 blocos e perfusão) em uma pilha única', () => {
+    // 5 blocos axiais angulados (5 cortes cada = 25 imagens no total, como em RM de coluna por disco)
+    const instanciasColuna: InstanceMeta[] = [];
+    for (let bloco = 0; bloco < 5; bloco++) {
+      const angRad = ((bloco * 4 - 8) * Math.PI) / 180;
+      const iop: [number, number, number, number, number, number] = [
+        1,
+        0,
+        0,
+        0,
+        Math.cos(angRad),
+        -Math.sin(angRad),
+      ];
+      for (let k = 0; k < 5; k++) {
+        const num = bloco * 5 + k + 1;
+        instanciasColuna.push(
+          meta({
+            fileId: `smsp/${num}.dcm`,
+            sopInstanceUid: `1.2.901.${num}`,
+            seriesInstanceUid: '1.2.901',
+            seriesNumber: 901,
+            modality: 'MR',
+            seriesDescription: 'AXI T1_smsp_recon',
+            instanceNumber: num,
+            pixelSpacing: [0.5, 0.5],
+            imageOrientationPatient: iop,
+            imagePositionPatient: [0, 0, 100 - num * 3],
+          }),
+        );
+      }
+    }
+
+    const index = buildIndex(instanciasColuna);
+    const serie = index.patients[0]!.studies[0]!.series[0]!;
+    // Internamente splitIntoStacks separa os 5 blocos angulados:
+    expect(serie.stacks).toHaveLength(5);
+
+    // Para exibição e rolagem conjunta, pilhasExibicaoDaSerie unifica os 5 blocos axiais em 1 só:
+    const exibicao = pilhasExibicaoDaSerie(serie);
+    expect(exibicao).toHaveLength(1);
+    expect(exibicao[0]!.label).toBeUndefined();
+    expect(exibicao[0]!.instances).toHaveLength(25);
+    expect(exibicao[0]!.instances.map((i) => i.instanceNumber)).toEqual(
+      Array.from({ length: 25 }, (_, i) => i + 1),
+    );
+    expect(exibicao[0]!.geometry.issues).toEqual([]);
   });
 });

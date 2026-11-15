@@ -280,6 +280,7 @@ export function iniciarAbrirPasta(
   el: ElementosAbrirPasta,
   aoConcluir: (resultado: ResultadoAbertura) => void,
   aoLimpar?: () => void,
+  aoIniciar?: () => void,
 ): void {
   let ocupado = false;
   let acumulado: ResultadoAbertura | null = null;
@@ -306,6 +307,7 @@ export function iniciarAbrirPasta(
   async function processar(coletar: () => Promise<Candidato[]>): Promise<void> {
     if (ocupado) return;
     ocupado = true;
+    aoIniciar?.();
     el.botao.disabled = true;
     el.botaoAlternativo.disabled = true;
     if (el.botaoLimpar) el.botaoLimpar.disabled = true;

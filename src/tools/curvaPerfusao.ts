@@ -364,6 +364,30 @@ function coletarQuadrosAlvo(
   if (!instRef) return [];
 
   if (modo === 'serie-ativa') {
+    const coordRefAtiva = coordenadaNormalDaInstancia(instRef);
+    if (coordRefAtiva !== undefined && pilhaAtiva.instances.length >= 4) {
+      const noMesmoNivel: QuadroAlvo[] = [];
+      let emOutroNivel = 0;
+      pilhaAtiva.instances.forEach((inst, idx) => {
+        const c = coordenadaNormalDaInstancia(inst);
+        if (c !== undefined && Math.abs(c - coordRefAtiva) <= 2.0) {
+          noMesmoNivel.push({
+            instancia: inst,
+            pilha: pilhaAtiva,
+            indiceNaPilha: idx,
+            tempoSegundos: segundosDoHorarioDicom(inst),
+            rotuloCurto: `#${noMesmoNivel.length + 1}`,
+          });
+        } else if (c !== undefined) {
+          emOutroNivel++;
+        }
+      });
+      // Se a pilha unificada tem várias fases na mesma posição anatômica atual (ex.: perfusão 4D),
+      // mede a evolução temporal apenas nos cortes da mesma posição espacial da fatia ativa.
+      if (noMesmoNivel.length >= 2 && emOutroNivel >= 1) {
+        return noMesmoNivel;
+      }
+    }
     return pilhaAtiva.instances.map((inst, idx) => ({
       instancia: inst,
       pilha: pilhaAtiva,

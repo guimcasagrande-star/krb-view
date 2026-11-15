@@ -614,7 +614,42 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
 .cfg-tabela input[type='number'] { width: 80px; }
 .cfg-tecla { min-width: 56px; font-family: monospace; }
 .cfg-tecla.capturando { outline: 2px solid var(--destaque); }
-.cfg-fechar { margin-top: 14px; }
+.cfg-acoes-aba {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--borda);
+}
+.cfg-rodape {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--borda);
+}
+.cfg-rodape-botoes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cfg-status-salvo {
+  font-size: 12px;
+  color: #4ade80;
+  font-weight: 500;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.cfg-status-salvo.visivel {
+  opacity: 1;
+  font-weight: 600;
+}
+.cfg-fechar { margin-top: 0; }
 
 /* Seletor de grade */
 .seletor-grade { padding: 8px; }

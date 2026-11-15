@@ -71,8 +71,8 @@ document.addEventListener('keydown', (e) => {
 const lista = obter('lista-estudos');
 const vazio = obter('vazio');
 const gradeInicial = ehJanelaSecundaria() ? telas().gradeSecundaria : telas().gradePrincipal;
-configurarViewport2d({ contentor: obter('area-viewports'), layoutInicial: gradeInicial });
 iniciarBarraFerramentas(obter('ferramentas'));
+configurarViewport2d({ contentor: obter('area-viewports'), layoutInicial: gradeInicial });
 iniciarAtalhos();
 iniciarEstiloMedidas();
 iniciarSelecaoFacil(obter('area-viewports'));
@@ -94,6 +94,7 @@ if (ehJanelaSecundaria()) {
         return;
       }
       estado.resultado = resultado;
+      definirLateral(true);
       renderizarPainelEstudos(lista, resultado.index);
       marcarPilhaAtiva(lista, estado.pilhaAtiva?.id ?? null);
       vazio.hidden = true;
@@ -131,6 +132,7 @@ if (ehJanelaSecundaria()) {
     },
     (resultado) => {
       estado.resultado = resultado;
+      definirLateral(true);
       renderizarPainelEstudos(lista, resultado.index);
       marcarPilhaAtiva(lista, estado.pilhaAtiva?.id ?? null);
       vazio.hidden = true;
@@ -142,6 +144,9 @@ if (ehJanelaSecundaria()) {
       lista.replaceChildren();
       vazio.hidden = false;
       sincronizarCatalogoComSegundaJanela();
+    },
+    () => {
+      definirLateral(true);
     },
   );
 }

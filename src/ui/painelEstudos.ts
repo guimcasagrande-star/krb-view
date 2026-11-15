@@ -3,6 +3,7 @@
  * Clicar numa pilha dispara o evento "abrirPilha" (detail = StackNode).
  */
 
+import { pilhasExibicaoDaSerie } from '../compare/segundaJanelaLogica';
 import { formatDatePtBr } from '../io/dicomTime';
 import type { DicomIndex, SeriesNode, StackNode, StudyNode } from '../io/organize';
 import { criarObservadorMiniaturas, type ObservadorMiniaturas } from './miniaturas';
@@ -169,8 +170,10 @@ function criarSerie(
   const rotulo = `${serie.modality ? `${serie.modality} · ` : ''}${descricaoSerie(serie)}`;
   const numero = serie.seriesNumber !== undefined ? `#${serie.seriesNumber}` : '';
 
+  const pilhas = pilhasExibicaoDaSerie(serie);
+
   // Série sem pilhas (SEG, RTSTRUCT, laudo, documento): só informativa.
-  if (serie.stacks.length === 0) {
+  if (pilhas.length === 0) {
     const botao = el('button', 'serie');
     botao.type = 'button';
     botao.disabled = true;
@@ -184,14 +187,14 @@ function criarSerie(
     return [botao];
   }
 
-  // Uma pilha só e sem rótulo: a própria linha da série abre a pilha.
-  const unica = serie.stacks.length === 1 ? serie.stacks[0]! : undefined;
-  if (unica && !unica.label) {
+  // Uma pilha unificada (toda a sequência no mesmo plano): a própria linha da série abre tudo junto.
+  if (pilhas.length === 1) {
+    const unica = pilhas[0]!;
     return [criarLinha(unica, false, numero, rotulo, unica.instances.length, aoEscolher)];
   }
 
   const titulo = el('span', 'titulo-serie', `${numero} ${rotulo}`.trim());
-  const linhas = serie.stacks.map((pilha, n) =>
+  const linhas = pilhas.map((pilha, n) =>
     criarLinha(pilha, true, '', pilha.label ?? `Pilha ${n + 1}`, pilha.instances.length, aoEscolher),
   );
   return [titulo, ...linhas];

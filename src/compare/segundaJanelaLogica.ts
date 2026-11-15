@@ -11,8 +11,8 @@
  */
 
 import { nearestIndex } from './sync';
-import { dot } from '../io/geometry';
-import type { DicomIndex, StackNode } from '../io/organize';
+import { analyzeStack, dot } from '../io/geometry';
+import type { DicomIndex, SeriesNode, StackNode } from '../io/organize';
 import type { InstanceMeta, Vec3 } from '../io/types';
 import { instancePath } from '../pacs/config.ts';
 
@@ -217,6 +217,111 @@ export function prepararEnvioPilha(
   };
 }
 
+const cachePilhasExibicao = new WeakMap<SeriesNode, StackNode[]>();
+
+const AVISOS_IGNORADOS_PILHA_UNIFICADA = new Set([
+  'ORIENTACAO_VARIAVEL',
+  'ESPACAMENTO_IRREGULAR',
+  'CORTES_FALTANDO',
+  'POSICAO_DUPLICADA',
+  'FORA_DE_ORDEM',
+  'GANTRY_INCLINADO',
+]);
+
+const ROTULO_PLANO: Record<string, string> = {
+  axial: 'Axial',
+  coronal: 'Coronal',
+  sagital: 'Sagital',
+};
+
+function menorInstanceNumber(pilha: StackNode): number | undefined {
+  let menor: number | undefined;
+  for (const inst of pilha.instances) {
+    if (inst.instanceNumber === undefined) continue;
+    if (menor === undefined || inst.instanceNumber < menor) {
+      menor = inst.instanceNumber;
+    }
+  }
+  return menor;
+}
+
+/**
+ * Unifica subpilhas da mesma série e do mesmo plano anatômico (ex.: sequências de coluna
+ * multi-bloco com inclinação por disco como `AXI T1_smsp_recon`, ou séries dinâmicas/perfusão/difusão)
+ * em uma única pilha contínua para rolagem conjunta na barra lateral e no viewport 2D.
+ * Localizadores com múltiplos planos distintos (Axial + Coronal + Sagital na mesma série)
+ * permanecem separados apenas por plano.
+ */
+export function pilhasExibicaoDaSerie(serie: SeriesNode): StackNode[] {
+  const emCache = cachePilhasExibicao.get(serie);
+  if (emCache) return emCache;
+
+  if (serie.stacks.length <= 1) {
+    cachePilhasExibicao.set(serie, serie.stacks);
+    return serie.stacks;
+  }
+
+  const porPlano = new Map<string, Array<{ pilha: StackNode; ordemOriginal: number }>>();
+  serie.stacks.forEach((pilha, idx) => {
+    const chavePlano = pilha.geometry.plane?.plane ?? 'outro';
+    const lista = porPlano.get(chavePlano);
+    if (lista) lista.push({ pilha, ordemOriginal: idx });
+    else porPlano.set(chavePlano, [{ pilha, ordemOriginal: idx }]);
+  });
+
+  const multiplosPlanos = porPlano.size > 1;
+  const resultado: StackNode[] = [];
+
+  for (const [chavePlano, grupo] of porPlano.entries()) {
+    if (grupo.length === 1) {
+      const unica = grupo[0]!.pilha;
+      if (!multiplosPlanos && !unica.label) {
+        resultado.push(unica);
+      } else {
+        const rotuloPlano = multiplosPlanos ? (ROTULO_PLANO[chavePlano] ?? unica.label) : undefined;
+        const copia: StackNode = {
+          id: unica.id,
+          instances: unica.instances,
+          geometry: unica.geometry,
+        };
+        if (rotuloPlano) copia.label = rotuloPlano;
+        resultado.push(copia);
+      }
+      continue;
+    }
+
+    const todosTemNum = grupo.every((g) => menorInstanceNumber(g.pilha) !== undefined);
+    const ordenados = [...grupo].sort((a, b) => {
+      if (todosTemNum) {
+        const na = menorInstanceNumber(a.pilha)!;
+        const nb = menorInstanceNumber(b.pilha)!;
+        if (na !== nb) return na - nb;
+      }
+      return a.ordemOriginal - b.ordemOriginal;
+    });
+
+    const instances = ordenados.flatMap((g) => g.pilha.instances);
+    const geoBruta = analyzeStack(instances);
+    const geometry = {
+      ...geoBruta,
+      issues: geoBruta.issues.filter((i) => !AVISOS_IGNORADOS_PILHA_UNIFICADA.has(i.code)),
+    };
+
+    const unificada: StackNode = {
+      id: grupo[0]!.pilha.id,
+      instances,
+      geometry,
+    };
+    if (multiplosPlanos && ROTULO_PLANO[chavePlano]) {
+      unificada.label = ROTULO_PLANO[chavePlano];
+    }
+    resultado.push(unificada);
+  }
+
+  cachePilhasExibicao.set(serie, resultado);
+  return resultado;
+}
+
 /**
  * Coleta apenas o corte central de cada pilha do índice para que as miniaturas do painel
  * lateral da segunda janela possam ser desenhadas sem transferir os arquivos de todas as séries.
@@ -230,7 +335,7 @@ export function prepararMiniaturasDoCatalogo(
   for (const pac of index.patients) {
     for (const est of pac.studies) {
       for (const ser of est.series) {
-        for (const pilha of ser.stacks) {
+        for (const pilha of [...pilhasExibicaoDaSerie(ser), ...ser.stacks]) {
           if (pilha.instances.length === 0) continue;
           const idxMeio = Math.floor(pilha.instances.length / 2);
           const inst = pilha.instances[idxMeio]!;
@@ -287,6 +392,10 @@ export function encontrarPilhaEnviada(
   for (const paciente of index.patients) {
     for (const estudo of paciente.studies) {
       for (const serie of estudo.series) {
+        const unificadas = pilhasExibicaoDaSerie(serie);
+        for (const pilha of unificadas) {
+          if (pilha.id === ref.pilhaId) return pilha;
+        }
         for (const pilha of serie.stacks) {
           if (pilha.id === ref.pilhaId) return pilha;
         }
@@ -300,6 +409,12 @@ export function encontrarPilhaEnviada(
       for (const serie of estudo.series) {
         if (serie.seriesInstanceUid !== ref.seriesInstanceUid) continue;
         for (const pilha of serie.stacks) {
+          if (ref.sopInicial && pilha.instances[0]?.sopInstanceUid === ref.sopInicial) {
+            return pilha;
+          }
+        }
+        const unificadas = pilhasExibicaoDaSerie(serie);
+        for (const pilha of unificadas) {
           primeiraDaSerie ??= pilha;
           if (ref.sopInicial && pilha.instances.some((inst) => inst.sopInstanceUid === ref.sopInicial)) {
             return pilha;

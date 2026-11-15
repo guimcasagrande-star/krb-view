@@ -504,8 +504,9 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     ICONES_BARRA.linhas,
   );
   const blocoPresetsGrade = document.createElement('div');
+  const nadaMenuLayout = (): void => {};
   const itemFixarGradeAtual = itemMenu(
-    '💾 Fixar grade atual como padrão desta janela',
+    '💾 Salvar grade atual como padrão ao iniciar',
     undefined,
     () => {
       const atual = obterLayoutAtual();
@@ -517,29 +518,73 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       }
       salvarPreferencias();
       notificarPreferenciasParaOutraJanela();
+      atualizarMenuPresetsGrade();
     },
-    menuLayout.fechar,
+    nadaMenuLayout,
+  );
+  const itemSalvarPresetNoMenu = itemMenu(
+    '➕ Salvar disposição atual na lista abaixo',
+    undefined,
+    () => {
+      const atual = obterLayoutAtual();
+      const tl = telas();
+      if (ehJanelaSecundaria()) {
+        tl.gradeSecundaria = atual;
+      } else {
+        tl.gradePrincipal = atual;
+      }
+      const rotuloNovo = segundaJanelaDisponivel()
+        ? `Salvo: ${tl.gradePrincipal} (1ª) + ${tl.gradeSecundaria} (2ª)`
+        : `Salvo: grade ${atual}`;
+      const jaExiste = tl.presets.find(
+        (p) =>
+          p.gradePrincipal === tl.gradePrincipal &&
+          p.gradeSecundaria === tl.gradeSecundaria &&
+          p.usarSegundaJanela === segundaJanelaDisponivel(),
+      );
+      if (!jaExiste && tl.presets.length < 12) {
+        tl.presets.unshift({
+          id: `preset-${Date.now()}`,
+          rotulo: rotuloNovo,
+          gradePrincipal: tl.gradePrincipal,
+          usarSegundaJanela: segundaJanelaDisponivel(),
+          gradeSecundaria: tl.gradeSecundaria,
+        });
+      }
+      salvarPreferencias();
+      notificarPreferenciasParaOutraJanela();
+      atualizarMenuPresetsGrade();
+    },
+    nadaMenuLayout,
   );
   const atualizarMenuPresetsGrade = (): void => {
     blocoPresetsGrade.replaceChildren();
     const tl = telas();
     const sec = ehJanelaSecundaria();
+    const atual = obterLayoutAtual();
     const padraoDesta = sec ? tl.gradeSecundaria : tl.gradePrincipal;
+    const jaSalva = atual === padraoDesta;
+    itemFixarGradeAtual.setAttribute('aria-pressed', String(jaSalva));
     const spanFixar = itemFixarGradeAtual.querySelector('.item-menu-rotulo > span:last-child');
     if (spanFixar) {
-      spanFixar.textContent = `💾 Fixar grade atual como padrão desta janela (atual: ${padraoDesta})`;
+      spanFixar.textContent = jaSalva
+        ? `✓ Grade ${atual} já é o padrão desta janela`
+        : `💾 Salvar grade atual (${atual}) como padrão (salvo: ${padraoDesta})`;
     }
     for (const p of tl.presets) {
       if (p.usarSegundaJanela && !segundaJanelaDisponivel()) continue;
       const icone = p.usarSegundaJanela ? '🖥 ' : '⊞ ';
-      blocoPresetsGrade.append(
-        itemMenu(
-          `${icone}${p.rotulo}`,
-          undefined,
-          () => void aplicarPresetVisualizacao(p),
-          menuLayout.fechar,
-        ),
+      const itemPreset = itemMenu(
+        `${icone}${p.rotulo}`,
+        undefined,
+        () => void aplicarPresetVisualizacao(p),
+        menuLayout.fechar,
       );
+      const ehPresetPadrao =
+        p.gradePrincipal === tl.gradePrincipal &&
+        (!p.usarSegundaJanela || p.gradeSecundaria === tl.gradeSecundaria);
+      itemPreset.setAttribute('aria-pressed', String(ehPresetPadrao));
+      blocoPresetsGrade.append(itemPreset);
     }
   };
   atualizarMenuPresetsGrade();
@@ -551,6 +596,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
     divisorMenu(),
     itemFixarGradeAtual,
+    itemSalvarPresetNoMenu,
+    divisorMenu(),
     blocoPresetsGrade,
     itemMenu(
       '⚙ Configurar grades e monitores padrão…',
@@ -1223,6 +1270,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       ICONES_BARRA.grade,
       e.maximizado ? '1x1 máx' : geometriaLayout(e.layout).rotulo,
     );
+    atualizarMenuPresetsGrade();
     menuLayout.botaoPrincipal.disabled = e.mprAtivo;
     menuLayout.botaoSeta.disabled = e.mprAtivo;
     menuPetCt.botaoPrincipal.disabled = e.mprAtivo;
