@@ -31,6 +31,7 @@ let caixa: HTMLDialogElement | undefined;
 export type AbaPacs = 'buscar' | 'baixados';
 let abaAtiva: AbaPacs = 'buscar';
 let geracaoDesenho = 0;
+let downloadEmAndamento = false;
 let atualizarRodapePasta: (() => Promise<void>) | undefined;
 
 interface ExameBaixadoResumo {
@@ -623,6 +624,13 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
   }
   const caixas = series.map((s) => ({ s, c: el('input', { type: 'checkbox', checked: true }) }));
   const baixar = el('button', { type: 'button', class: 'primario', textContent: 'Baixar' });
+  const verAgora = el('button', {
+    type: 'button',
+    class: 'primario',
+    textContent: '👁 Visualizar enquanto baixa',
+  });
+  verAgora.hidden = true;
+  verAgora.addEventListener('click', () => caixa?.close());
   const cancelar = el('button', { type: 'button', textContent: 'Cancelar' });
   cancelar.hidden = true;
   const progresso = el('progress', { max: 1, value: 0 });
@@ -654,7 +662,7 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
         ),
       ),
     ),
-    el('div', { class: 'pacs-botoes' }, baixar, cancelar, progresso),
+    el('div', { class: 'pacs-botoes' }, baixar, verAgora, cancelar, progresso),
     resumo,
     pastaInfo,
   );
@@ -666,7 +674,9 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       return;
     }
     const controle = new AbortController();
+    downloadEmAndamento = true;
     baixar.disabled = true;
+    verAgora.hidden = true;
     cancelar.hidden = false;
     progresso.hidden = false;
     progresso.removeAttribute('value');
@@ -679,17 +689,37 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
     const inicioMs = performance.now();
     const JANELA_VELOCIDADE_MS = 1500;
     const amostras: Array<{ t: number; bytes: number; imgs: number }> = [{ t: inicioMs, bytes: 0, imgs: 0 }];
-    const emMemoria = new Map<string, File>();
+    // Mantém séries volumétricas (> 3 instâncias) antes de scouts/localizers (preservando ordem relativa).
+    const seriesOrdenadas = [...escolhidas].sort((a, b) => {
+      const aVol = (a.instanceCount ?? 0) > 3 ? 0 : 1;
+      const bVol = (b.instanceCount ?? 0) > 3 ? 0 : 1;
+      return aVol - bVol;
+    });
+    const porSerie = new Map<string, Map<string, File>>();
+    const abrirSerieDaMemoria = (mapaSerie: Map<string, File>): void => {
+      if (mapaSerie.size === 0) return;
+      const candidatos = [...mapaSerie.keys()].sort().map((rel) => {
+        const arquivo = mapaSerie.get(rel)!;
+        return {
+          path: rel,
+          obter: async () => {
+            mapaSerie.delete(rel);
+            return arquivo;
+          },
+        };
+      });
+      dispararAbrirCandidatos(candidatos);
+    };
     try {
       const base = await pastaDeExames();
       await definirServidoresPermitidos(cfg().servidores);
-      const estudoTotal = escolhidas.reduce((n, s) => n + (s.instanceCount ?? 0), 0);
+      const estudoTotal = seriesOrdenadas.reduce((n, s) => n + (s.instanceCount ?? 0), 0);
       const resumoEstudo = await retrieveStudyParallel(r.servidor, r.estudo.studyInstanceUid, {
         connect: connectTauri,
         callingAeTitle: cfg().meuAeTitle,
         timeoutMs: 60_000,
         signal: controle.signal,
-        seriesList: escolhidas,
+        seriesList: seriesOrdenadas,
         concurrency: 4,
         onInstance: async (inst) => {
           // A série vem do cabeçalho do próprio arquivo recebido.
@@ -698,8 +728,21 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
           if (!serieUid) throw new PacsError('DADOS_INVALIDOS', 'Imagem recebida sem série; não gravada.');
           const rel = instancePath(r.estudo.studyInstanceUid, serieUid, inst.sopInstanceUid);
           const nomeArquivo = rel.split('/').pop() ?? `${inst.sopInstanceUid}.dcm`;
-          emMemoria.set(rel, new File([inst.file as BlobPart], nomeArquivo));
+          let mapaSerie = porSerie.get(serieUid);
+          if (!mapaSerie) {
+            mapaSerie = new Map<string, File>();
+            porSerie.set(serieUid, mapaSerie);
+          }
+          mapaSerie.set(rel, new File([inst.file as BlobPart], nomeArquivo));
           await gravarExame(base, rel, inst.file);
+        },
+        onSeriesComplete: (serieUid, summary) => {
+          if (controle.signal.aborted || summary.cancelled) return;
+          const arquivosDaSerie = porSerie.get(serieUid);
+          if (!arquivosDaSerie || arquivosDaSerie.size === 0 || summary.received === 0) return;
+          porSerie.delete(serieUid);
+          abrirSerieDaMemoria(arquivosDaSerie);
+          verAgora.hidden = false;
         },
         onProgress: (p) => {
           recebidas = p.received;
@@ -742,49 +785,27 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
           : '';
       resumo.textContent = `${cancelado ? 'Cancelado' : 'Concluído'}: ${recebidas} imagens recebidas, ${falhas} com falha.${mediaVel}`;
       if (recebidas > 0 && !cancelado) {
-        await abrirEstudoBaixado(base, r.estudo.studyInstanceUid, emMemoria);
+        for (const mapaRestante of porSerie.values()) {
+          abrirSerieDaMemoria(mapaRestante);
+        }
+        porSerie.clear();
+        caixa?.close();
       } else {
-        emMemoria.clear();
+        porSerie.clear();
       }
     } catch (e) {
-      emMemoria.clear();
+      porSerie.clear();
       resumo.textContent = `Erro: ${mensagemDe(e)} (${recebidas} imagens já gravadas).`;
     } finally {
+      downloadEmAndamento = false;
       baixar.disabled = false;
+      verAgora.hidden = true;
       cancelar.hidden = true;
       progresso.hidden = true;
       await atualizarPasta();
     }
   });
 
-}
-
-/** Abre a pasta do estudo pelo mesmo fluxo de "Abrir pasta", reaproveitando arquivos já em memória. */
-async function abrirEstudoBaixado(
-  base: string,
-  estudoUid: string,
-  emMemoria?: Map<string, File>,
-): Promise<void> {
-  const caminhos = new Set(await listarExames(base, estudoUid));
-  if (emMemoria) {
-    for (const rel of emMemoria.keys()) caminhos.add(rel);
-  }
-  const arquivos = [...caminhos].sort();
-  dispararAbrirCandidatos(
-    arquivos.map((rel) => {
-      const arquivoEmMemoria = emMemoria?.get(rel);
-      return {
-        path: rel,
-        obter: arquivoEmMemoria
-          ? async () => {
-              emMemoria?.delete(rel);
-              return arquivoEmMemoria;
-            }
-          : async () => new File([(await lerExame(base, rel)) as BlobPart], rel.split('/').pop() ?? rel),
-      };
-    }),
-  );
-  caixa?.close();
 }
 
 function criarCaixa(): HTMLDialogElement {
@@ -873,6 +894,12 @@ function criarCaixa(): HTMLDialogElement {
 
 export function abrirBuscarPacs(aba: AbaPacs = 'buscar'): void {
   caixa ??= criarCaixa();
+  if (downloadEmAndamento) {
+    abaAtiva = 'buscar';
+    atualizarAbasTopo();
+    if (!caixa.open) caixa.showModal();
+    return;
+  }
   abaAtiva = aba;
   desenhar();
   if (!caixa.open) caixa.showModal();

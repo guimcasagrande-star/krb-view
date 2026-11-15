@@ -284,6 +284,7 @@ export function iniciarAbrirPasta(
 ): void {
   let ocupado = false;
   let acumulado: ResultadoAbertura | null = null;
+  const filaColetas: Array<() => Promise<Candidato[]>> = [];
 
   const entradaArquivos = document.createElement('input');
   entradaArquivos.type = 'file';
@@ -305,7 +306,10 @@ export function iniciarAbrirPasta(
   }
 
   async function processar(coletar: () => Promise<Candidato[]>): Promise<void> {
-    if (ocupado) return;
+    if (ocupado) {
+      filaColetas.push(coletar);
+      return;
+    }
     ocupado = true;
     aoIniciar?.();
     el.botao.disabled = true;
@@ -348,11 +352,13 @@ export function iniciarAbrirPasta(
       el.botaoAlternativo.disabled = false;
       if (el.botaoLimpar) el.botaoLimpar.disabled = false;
       ocupado = false;
+      const proxima = filaColetas.shift();
+      if (proxima) void processar(proxima);
     }
   }
 
   function limparLista(): void {
-    if (ocupado) return;
+    if (ocupado || filaColetas.length > 0) return;
     acumulado = null;
     el.resumo.replaceChildren();
     atualizarBotaoLimpar();

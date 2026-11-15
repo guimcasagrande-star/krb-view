@@ -2,9 +2,10 @@ import { iniciarAtalhos } from './tools/atalhos';
 import { iniciarEstiloMedidas } from './tools/estiloMedidas';
 import { iniciarMoverMedidas } from './tools/moverMedidas';
 import { iniciarSelecaoFacil } from './tools/selecao';
+import type { StackNode } from './io/organize';
 import { estado } from './state/store';
 import { telas } from './state/preferencias';
-import { iniciarAbrirPasta } from './ui/abrirPasta';
+import { iniciarAbrirPasta, type ResultadoAbertura } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
 import { iniciarDadosPet } from './ui/dadosPet';
 import { iniciarMenuContexto } from './ui/menuContexto';
@@ -82,6 +83,20 @@ iniciarPainelSuv(obter('painel-suv'));
 iniciarPainelSegmentos(obter('painel-segmentos'));
 iniciarDadosPet();
 
+function primeiraPilhaDeImagem(index: ResultadoAbertura['index']): StackNode | null {
+  for (const pac of index.patients) {
+    for (const est of pac.studies) {
+      for (const ser of est.series) {
+        if (ser.kind === 'imagem' && ser.stacks[0]) return ser.stacks[0];
+      }
+      for (const ser of est.series) {
+        if (ser.stacks[0]) return ser.stacks[0];
+      }
+    }
+  }
+  return null;
+}
+
 if (ehJanelaSecundaria()) {
   obter('abrir').hidden = true;
   vazio.innerHTML =
@@ -134,6 +149,10 @@ if (ehJanelaSecundaria()) {
       estado.resultado = resultado;
       definirLateral(true);
       renderizarPainelEstudos(lista, resultado.index);
+      if (!estado.pilhaAtiva) {
+        const primeira = primeiraPilhaDeImagem(resultado.index);
+        if (primeira) void abrirPilha2d(primeira);
+      }
       marcarPilhaAtiva(lista, estado.pilhaAtiva?.id ?? null);
       vazio.hidden = true;
       sincronizarCatalogoComSegundaJanela();
