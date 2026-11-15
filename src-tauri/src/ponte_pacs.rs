@@ -4,7 +4,9 @@
 //! do protocolo DICOM fica aqui: ela está toda em `src/pacs/` (TypeScript).
 //!
 //! Segurança: só conecta a host e porta que o usuário cadastrou (lista enviada por
-//! `pacs_definir_servidores`) e só quando a tela pede. Os bytes viajam em base64 (eventos).
+//! `pacs_definir_servidores`) e só quando a tela pede. Os bytes recebidos do socket viajam por
+//! `tauri::ipc::Channel` usando `InvokeResponseBody::Raw` (chegam como `ArrayBuffer` puro no JS,
+//! sem `serde_json` nem base64), com coalescência de leitura (~192 KB ou flush em 3 ms).
 //!
 //! Conexão segura (DICOM TLS): o servidor cadastrado com `tls` é acessado por TLS 1.2 ou mais
 //! novo. A cadeia de certificados não é validada (PACS de hospital costuma usar certificado
@@ -24,7 +26,10 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    ipc::{Channel, InvokeResponseBody},
+    AppHandle, Emitter, Manager, State,
+};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
@@ -33,6 +38,9 @@ use tokio::{
 use tokio_native_tls::TlsStream;
 
 const TEMPO_CONEXAO: Duration = Duration::from_secs(10);
+const TAM_BLOCO_LEITURA: usize = 64 * 1024;
+const COALESCENCIA_ALVO: usize = 192 * 1024;
+const ATRASO_FLUSH: Duration = Duration::from_millis(3);
 
 enum Comando {
     Enviar(Vec<u8>),
@@ -57,12 +65,6 @@ pub struct Ponte {
     servidores: Mutex<Vec<Servidor>>,
     proximo: AtomicU32,
     conexoes: Mutex<HashMap<u32, mpsc::UnboundedSender<Comando>>>,
-}
-
-#[derive(Clone, Serialize)]
-struct Dados {
-    id: u32,
-    dados: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -147,23 +149,71 @@ fn pares(hex: &str) -> String {
         .join(":")
 }
 
-/// Liga o fluxo (TCP ou TLS) aos eventos e comandos da tela.
-fn ligar<F>(app: AppHandle, id: u32, mut rx: mpsc::UnboundedReceiver<Comando>, fluxo: F)
-where
+/// Liga o fluxo (TCP ou TLS) ao canal binário (`InvokeResponseBody::Raw`) e comandos da tela.
+fn ligar<F>(
+    app: AppHandle,
+    id: u32,
+    mut rx: mpsc::UnboundedReceiver<Comando>,
+    fluxo: F,
+    canal: Channel<InvokeResponseBody>,
+) where
     F: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (mut leitor, mut escritor) = tokio::io::split(fluxo);
 
-    // Leitura: cada pedaço recebido vira um evento; ao terminar, avisa e remove a conexão.
+    // Leitura com coalescência (~192 KB ou flush em até 3 ms): envia `ArrayBuffer` puro sem JSON/base64.
     tauri::async_runtime::spawn(async move {
-        let mut buf = vec![0u8; 64 * 1024];
+        let mut buf = vec![0u8; TAM_BLOCO_LEITURA];
+        let mut acumulado = Vec::with_capacity(COALESCENCIA_ALVO + TAM_BLOCO_LEITURA);
+        let mut prazo: Option<tokio::time::Instant> = None;
+
         let erro = loop {
-            match leitor.read(&mut buf).await {
-                Ok(0) => break None,
-                Ok(n) => {
-                    let _ = app.emit("pacs-dados", Dados { id, dados: B64.encode(&buf[..n]) });
+            let leitura = match prazo {
+                None => leitor.read(&mut buf).await.map(Some),
+                Some(limite) => match tokio::time::timeout_at(limite, leitor.read(&mut buf)).await {
+                    Ok(res) => res.map(Some),
+                    Err(_) => Ok(None), // timeout de coalescência: faz flush do que já chegou
+                },
+            };
+
+            match leitura {
+                Ok(None) => {
+                    prazo = None;
+                    if !acumulado.is_empty() {
+                        let bloco = std::mem::replace(
+                            &mut acumulado,
+                            Vec::with_capacity(COALESCENCIA_ALVO + TAM_BLOCO_LEITURA),
+                        );
+                        let _ = canal.send(InvokeResponseBody::Raw(bloco));
+                    }
                 }
-                Err(e) => break Some(e.to_string()),
+                Ok(Some(0)) => {
+                    if !acumulado.is_empty() {
+                        let bloco = std::mem::take(&mut acumulado);
+                        let _ = canal.send(InvokeResponseBody::Raw(bloco));
+                    }
+                    break None;
+                }
+                Ok(Some(n)) => {
+                    acumulado.extend_from_slice(&buf[..n]);
+                    if acumulado.len() >= COALESCENCIA_ALVO {
+                        prazo = None;
+                        let bloco = std::mem::replace(
+                            &mut acumulado,
+                            Vec::with_capacity(COALESCENCIA_ALVO + TAM_BLOCO_LEITURA),
+                        );
+                        let _ = canal.send(InvokeResponseBody::Raw(bloco));
+                    } else if prazo.is_none() {
+                        prazo = Some(tokio::time::Instant::now() + ATRASO_FLUSH);
+                    }
+                }
+                Err(e) => {
+                    if !acumulado.is_empty() {
+                        let bloco = std::mem::take(&mut acumulado);
+                        let _ = canal.send(InvokeResponseBody::Raw(bloco));
+                    }
+                    break Some(e.to_string());
+                }
             }
         };
         app.state::<Ponte>().conexoes.lock().unwrap().remove(&id);
@@ -194,6 +244,7 @@ pub async fn pacs_conectar(
     estado: State<'_, Ponte>,
     host: String,
     porta: u16,
+    canal: Channel<InvokeResponseBody>,
 ) -> Result<u32, String> {
     let Some(servidor) = cadastrado(&estado, &host, porta) else {
         return Err("Servidor não cadastrado.".into());
@@ -214,7 +265,7 @@ pub async fn pacs_conectar(
         let id = estado.proximo.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = mpsc::unbounded_channel::<Comando>();
         estado.conexoes.lock().unwrap().insert(id, tx);
-        ligar(app, id, rx, fluxo);
+        ligar(app, id, rx, fluxo, canal);
         return Ok(id);
     }
 
@@ -222,7 +273,7 @@ pub async fn pacs_conectar(
     let id = estado.proximo.fetch_add(1, Ordering::SeqCst) + 1;
     let (tx, rx) = mpsc::unbounded_channel::<Comando>();
     estado.conexoes.lock().unwrap().insert(id, tx);
-    ligar(app, id, rx, fluxo);
+    ligar(app, id, rx, fluxo, canal);
     Ok(id)
 }
 

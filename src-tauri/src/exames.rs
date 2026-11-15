@@ -9,8 +9,40 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use tauri::{AppHandle, Manager};
+use tauri::{
+    http::HeaderMap,
+    ipc::{InvokeBody, Request, Response},
+    AppHandle, Manager,
+};
+
+fn decodificar_uri_component(s: &str) -> Result<String, String> {
+    let raw = s.as_bytes();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' && i + 2 < raw.len() {
+            let hex = std::str::from_utf8(&raw[i + 1..i + 3])
+                .map_err(|_| "Cabeçalho com codificação inválida.".to_string())?;
+            let byte = u8::from_str_radix(hex, 16)
+                .map_err(|_| "Cabeçalho com escape hexadecimal inválido.".to_string())?;
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "Cabeçalho UTF-8 inválido.".to_string())
+}
+
+fn cabecalho(headers: &HeaderMap, nome: &str) -> Result<String, String> {
+    let valor = headers
+        .get(nome)
+        .ok_or_else(|| format!("Cabeçalho obrigatório ausente: {nome}"))?
+        .to_str()
+        .map_err(|_| format!("Cabeçalho inválido: {nome}"))?;
+    decodificar_uri_component(valor)
+}
 
 fn juntar(base: &str, relativo: &str) -> Result<PathBuf, String> {
     let base = PathBuf::from(base);
@@ -40,13 +72,22 @@ pub fn exames_pasta_padrao(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn exames_gravar(base: String, relativo: String, dados: String) -> Result<(), String> {
+pub async fn exames_gravar(request: Request<'_>) -> Result<(), String> {
+    let base = cabecalho(request.headers(), "x-exame-base")?;
+    let relativo = cabecalho(request.headers(), "x-exame-relativo")?;
     let destino = juntar(&base, &relativo)?;
-    let bytes = B64.decode(dados).map_err(|e| e.to_string())?;
+    let bytes = match request.body() {
+        InvokeBody::Raw(b) => b.clone(),
+        InvokeBody::Json(_) => return Err("Corpo binário bruto esperado em exames_gravar.".into()),
+    };
     if let Some(pai) = destino.parent() {
-        fs::create_dir_all(pai).map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(pai)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    fs::write(destino, bytes).map_err(|e| e.to_string())
+    tokio::fs::write(destino, bytes)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn percorrer(pasta: &Path, base: &Path, saida: &mut Vec<String>) {
@@ -76,10 +117,10 @@ pub fn exames_listar(base: String, relativo: String) -> Result<Vec<String>, Stri
 }
 
 #[tauri::command]
-pub fn exames_ler(base: String, relativo: String) -> Result<String, String> {
+pub async fn exames_ler(base: String, relativo: String) -> Result<Response, String> {
     let caminho = juntar(&base, &relativo)?;
-    let bytes = fs::read(caminho).map_err(|e| e.to_string())?;
-    Ok(B64.encode(bytes))
+    let bytes = tokio::fs::read(caminho).await.map_err(|e| e.to_string())?;
+    Ok(Response::new(bytes))
 }
 
 fn tamanho(pasta: &Path) -> u64 {
@@ -126,5 +167,25 @@ pub fn exames_apagar(base: String, relativo: String) -> Result<(), String> {
         fs::remove_dir_all(alvo).map_err(|e| e.to_string())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn decodifica_caminho_windows_utf8() {
+        let encoded = "C%3A%5CUsers%5CJo%C3%A3o%20Silva%5CExames%20M%C3%A9dicos%2B1";
+        assert_eq!(
+            decodificar_uri_component(encoded).unwrap(),
+            "C:\\Users\\João Silva\\Exames Médicos+1"
+        );
+    }
+
+    #[test]
+    fn recusa_escape_invalido_em_cabecalho() {
+        assert!(decodificar_uri_component("%ZZ").is_err());
+        assert!(decodificar_uri_component("abc%2").is_ok()); // '%' seguido de menos de 2 chars passa literal
     }
 }

@@ -6,8 +6,15 @@
 
 import type { Connect, PacsServer, Transport } from './client.ts';
 
+interface TauriChannel<T> {
+  onmessage: ((message: T) => void) | null;
+}
+
 interface TauriGlobal {
-  core: { invoke<T>(comando: string, args?: Record<string, unknown>): Promise<T> };
+  core: {
+    invoke<T>(comando: string, args?: Record<string, unknown>): Promise<T>;
+    Channel: new <T = unknown>() => TauriChannel<T>;
+  };
   event: {
     listen<T>(evento: string, aoReceber: (e: { payload: T }) => void): Promise<() => void>;
   };
@@ -31,11 +38,9 @@ function paraBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-function deBase64(texto: string): Uint8Array {
-  const bin = atob(texto);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+function paraUint8Array(dado: ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (dado instanceof ArrayBuffer) return new Uint8Array(dado);
+  return new Uint8Array(dado.buffer, dado.byteOffset, dado.byteLength);
 }
 
 interface Conexao {
@@ -49,16 +54,9 @@ interface Conexao {
 const conexoes = new Map<number, Conexao>();
 let ouvindo: Promise<void> | undefined;
 
-/** Registra uma vez os ouvintes dos eventos globais da ponte. */
+/** Registra uma vez o ouvinte global de encerramento de conexão da ponte. */
 function garantirOuvintes(t: TauriGlobal): Promise<void> {
   ouvindo ??= (async () => {
-    await t.event.listen<{ id: number; dados: string }>('pacs-dados', (e) => {
-      const c = conexoes.get(e.payload.id);
-      if (!c) return;
-      const bytes = deBase64(e.payload.dados);
-      if (c.aoReceber.length === 0) c.pendentes.push(bytes);
-      else for (const f of c.aoReceber) f(bytes);
-    });
     await t.event.listen<{ id: number; erro?: string | null }>('pacs-fechou', (e) => {
       const c = conexoes.get(e.payload.id);
       if (!c) return;
@@ -112,14 +110,21 @@ export const connectTauri: Connect = async (host, port) => {
     ouvindo = undefined;
     throw new Error(`falha ao ouvir a ponte (${String(e)})`);
   }
+  const c: Conexao = { aoReceber: [], aoFechar: [], pendentes: [] };
+  const canal = new t.core.Channel<ArrayBuffer | ArrayBufferView>();
+  canal.onmessage = (dado) => {
+    const bytes = paraUint8Array(dado);
+    if (c.aoReceber.length === 0) c.pendentes.push(bytes);
+    else for (const f of c.aoReceber) f(bytes);
+  };
+
   let id: number;
   try {
-    id = await t.core.invoke<number>('pacs_conectar', { host, porta: port });
+    id = await t.core.invoke<number>('pacs_conectar', { host, porta: port, canal });
   } catch (e) {
     // `client.ts` envolve este erro em PacsError('SEM_CONEXAO', ...) com o nome do servidor.
     throw new Error(String(e));
   }
-  const c: Conexao = { aoReceber: [], aoFechar: [], pendentes: [] };
   conexoes.set(id, c);
 
   const transporte: Transport = {

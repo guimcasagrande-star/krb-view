@@ -662,6 +662,7 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
     let recebidas = 0;
     let falhas = 0;
     let cancelado = false;
+    const emMemoria = new Map<string, File>();
     try {
       const base = await pastaDeExames();
       await definirServidoresPermitidos(cfg().servidores);
@@ -678,7 +679,10 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
           const lido = parseHeader(inst.file, inst.sopInstanceUid);
           const serieUid = lido.ok ? lido.meta.seriesInstanceUid : undefined;
           if (!serieUid) throw new PacsError('DADOS_INVALIDOS', 'Imagem recebida sem série; não gravada.');
-          await gravarExame(base, instancePath(r.estudo.studyInstanceUid, serieUid, inst.sopInstanceUid), inst.file);
+          const rel = instancePath(r.estudo.studyInstanceUid, serieUid, inst.sopInstanceUid);
+          const nomeArquivo = rel.split('/').pop() ?? `${inst.sopInstanceUid}.dcm`;
+          emMemoria.set(rel, new File([inst.file as BlobPart], nomeArquivo));
+          await gravarExame(base, rel, inst.file);
         },
         onProgress: (p) => {
           recebidas = p.received;
@@ -697,8 +701,13 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       falhas = resumoEstudo.failed;
       cancelado = resumoEstudo.cancelled;
       resumo.textContent = `${cancelado ? 'Cancelado' : 'Concluído'}: ${recebidas} imagens recebidas, ${falhas} com falha.`;
-      if (recebidas > 0 && !cancelado) await abrirEstudoBaixado(base, r.estudo.studyInstanceUid);
+      if (recebidas > 0 && !cancelado) {
+        await abrirEstudoBaixado(base, r.estudo.studyInstanceUid, emMemoria);
+      } else {
+        emMemoria.clear();
+      }
     } catch (e) {
+      emMemoria.clear();
       resumo.textContent = `Erro: ${mensagemDe(e)} (${recebidas} imagens já gravadas).`;
     } finally {
       baixar.disabled = false;
@@ -710,14 +719,30 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
 
 }
 
-/** Abre a pasta do estudo pelo mesmo fluxo de "Abrir pasta". */
-async function abrirEstudoBaixado(base: string, estudoUid: string): Promise<void> {
-  const arquivos = await listarExames(base, estudoUid);
+/** Abre a pasta do estudo pelo mesmo fluxo de "Abrir pasta", reaproveitando arquivos já em memória. */
+async function abrirEstudoBaixado(
+  base: string,
+  estudoUid: string,
+  emMemoria?: Map<string, File>,
+): Promise<void> {
+  const caminhos = new Set(await listarExames(base, estudoUid));
+  if (emMemoria) {
+    for (const rel of emMemoria.keys()) caminhos.add(rel);
+  }
+  const arquivos = [...caminhos].sort();
   dispararAbrirCandidatos(
-    arquivos.map((rel) => ({
-      path: rel,
-      obter: async () => new File([(await lerExame(base, rel)) as BlobPart], rel.split('/').pop() ?? rel),
-    })),
+    arquivos.map((rel) => {
+      const arquivoEmMemoria = emMemoria?.get(rel);
+      return {
+        path: rel,
+        obter: arquivoEmMemoria
+          ? async () => {
+              emMemoria?.delete(rel);
+              return arquivoEmMemoria;
+            }
+          : async () => new File([(await lerExame(base, rel)) as BlobPart], rel.split('/').pop() ?? rel),
+      };
+    }),
   );
   caixa?.close();
 }

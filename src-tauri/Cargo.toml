@@ -10,7 +10,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
+tokio = { version = "1", features = ["fs", "net", "io-util", "time", "sync"] }
 base64 = "0.22"
 # Conexão segura com o PACS (DICOM TLS): TLS do próprio Windows (schannel) e SHA-256 do certificado.
 native-tls = "0.2"

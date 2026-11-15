@@ -3,8 +3,18 @@
  * pelos comandos `exames_*` do Rust. O caminho da pasta é guardado nas preferências do app.
  */
 
+interface TauriInvokeOptions {
+  headers?: Record<string, string>;
+}
+
 interface TauriGlobal {
-  core: { invoke<T>(comando: string, args?: Record<string, unknown>): Promise<T> };
+  core: {
+    invoke<T>(
+      comando: string,
+      args?: Record<string, unknown> | Uint8Array | ArrayBuffer,
+      opcoes?: TauriInvokeOptions,
+    ): Promise<T>;
+  };
 }
 
 const CHAVE_PASTA = 'visualizador.pastaExames';
@@ -13,12 +23,6 @@ function tauri(): TauriGlobal {
   const t = (globalThis as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!t) throw new Error('Disponível só no programa instalado (Tauri).');
   return t;
-}
-
-function paraBase64(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s);
 }
 
 function deBase64(texto: string): Uint8Array {
@@ -49,7 +53,14 @@ export function definirPastaDeExames(caminho: string): void {
 }
 
 export async function gravarExame(base: string, relativo: string, bytes: Uint8Array): Promise<void> {
-  await tauri().core.invoke('exames_gravar', { base, relativo, dados: paraBase64(bytes) });
+  const payload =
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
+  await tauri().core.invoke('exames_gravar', payload, {
+    headers: {
+      'X-Exame-Base': encodeURIComponent(base),
+      'X-Exame-Relativo': encodeURIComponent(relativo),
+    },
+  });
 }
 
 export function listarExames(base: string, relativo: string): Promise<string[]> {
@@ -57,7 +68,16 @@ export function listarExames(base: string, relativo: string): Promise<string[]> 
 }
 
 export async function lerExame(base: string, relativo: string): Promise<Uint8Array> {
-  return deBase64(await tauri().core.invoke<string>('exames_ler', { base, relativo }));
+  const resposta = await tauri().core.invoke<ArrayBuffer | Uint8Array | string>('exames_ler', {
+    base,
+    relativo,
+  });
+  if (resposta instanceof ArrayBuffer) return new Uint8Array(resposta);
+  if (ArrayBuffer.isView(resposta)) {
+    return new Uint8Array(resposta.buffer, resposta.byteOffset, resposta.byteLength);
+  }
+  if (typeof resposta === 'string') return deBase64(resposta);
+  throw new Error('Resposta binária inválida ao ler exame.');
 }
 
 export function tamanhoDosExames(base: string): Promise<number> {
