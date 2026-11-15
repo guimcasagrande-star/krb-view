@@ -263,4 +263,20 @@ describe('segundaJanelaLogica', () => {
     expect(prefs.telas.abrirSecundariaAoIniciar).toBe(true);
     expect(prefs.telas.presets.length).toBeGreaterThanOrEqual(4);
   });
+
+  it('saneia os 6 botões favoritos do topo do menu de clique direito', () => {
+    const padrao = sanear({});
+    expect(padrao.favoritosMenu).toHaveLength(6);
+
+    const custom = sanear({
+      favoritosMenu: ['Length', 'Angle', 'acao:mpr', 'janela:1', '', 123, 'ExtraIgnorado'],
+    });
+    expect(custom.favoritosMenu).toHaveLength(6);
+    expect(custom.favoritosMenu[0]).toBe('Length');
+    expect(custom.favoritosMenu[1]).toBe('Angle');
+    expect(custom.favoritosMenu[2]).toBe('acao:mpr');
+    expect(custom.favoritosMenu[3]).toBe('janela:1');
+    expect(custom.favoritosMenu[4]).toBe(padrao.favoritosMenu[4]);
+    expect(custom.favoritosMenu[5]).toBe(padrao.favoritosMenu[5]);
+  });
 });

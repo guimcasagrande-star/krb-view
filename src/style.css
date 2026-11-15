@@ -706,6 +706,15 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
 .menu-flutuante-item[aria-checked="true"] { background: var(--item-ativo); border-color: var(--destaque); }
 .menu-flutuante-item kbd { font-family: inherit; font-size: 11px; color: var(--texto-fraco); background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 3px; }
 .menu-flutuante-seta { color: var(--texto-fraco); }
+.menu-flutuante-favoritos { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 2px 2px 3px; }
+.menu-flutuante-fav { width: 32px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--borda); color: var(--texto); cursor: pointer; }
+.menu-flutuante-fav:hover:not(:disabled) { background: var(--item-hover); border-color: #7dd3fc; color: #f0f9ff; }
+.menu-flutuante-fav[aria-pressed="true"] { background: var(--item-ativo); border-color: var(--destaque); color: #38bdf8; }
+.menu-flutuante-fav:disabled { opacity: 0.38; cursor: default; }
+.menu-flutuante-fav svg, .cfg-fav-icone svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.cfg-favoritos-previa { display: inline-grid; grid-template-columns: repeat(6, 32px); gap: 5px; padding: 6px; margin: 2px 0 6px; background: rgba(0, 0, 0, 0.28); border: 1px solid var(--borda); border-radius: 6px; width: fit-content; }
+.cfg-fav-rotulo { display: inline-flex; align-items: center; gap: 8px; }
+.cfg-fav-icone { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--borda); color: #7dd3fc; }
 
 /* Cubo de orientação (canto inferior direito, acima do texto do canto). */
 .cubo-orientacao { position: absolute; right: 46px; bottom: 58px; width: 46px; display: flex; flex-direction: column; align-items: center; gap: 5px; pointer-events: auto; cursor: pointer; -webkit-text-stroke: 0; text-shadow: none; user-select: none; }

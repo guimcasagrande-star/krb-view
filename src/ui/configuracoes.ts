@@ -4,6 +4,7 @@
  */
 
 import {
+  favoritosMenu,
   interacao,
   JANELAS_PADRAO,
   MAX_JANELAS,
@@ -11,14 +12,17 @@ import {
   type ModoTelaJanela,
   preferencias,
   restaurarAtalhos,
+  restaurarFavoritosMenu,
   restaurarJanelas,
   restaurarMedidas,
   restaurarTelas,
   salvarPreferencias,
   telas,
+  TOTAL_FAVORITOS_MENU,
 } from '../state/preferencias';
 import { ACOES_ATALHO, teclaDaAcao } from '../tools/atalhos';
 import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
+import { iconeFavoritoMenu, listarOpcoesFavoritosMenu } from './menuContexto';
 import {
   aplicarExibicaoJanelaAtual,
   aplicarPresetVisualizacao,
@@ -172,7 +176,18 @@ function abaMedidas(): HTMLElement {
 
 function abaInteracao(): HTMLElement {
   const it = interacao();
-  const mudou = (): void => salvarPreferencias();
+  const favs = favoritosMenu();
+  const opcoesFav = listarOpcoesFavoritosMenu();
+  const gruposFav = new Map<string, typeof opcoesFav>();
+  for (const op of opcoesFav) {
+    const lista = gruposFav.get(op.grupo) ?? [];
+    lista.push(op);
+    gruposFav.set(op.grupo, lista);
+  }
+  const mudou = (): void => {
+    salvarPreferencias();
+    notificarPreferenciasParaOutraJanela();
+  };
   const raiz = el('div', { class: 'cfg-aba' });
   raiz.append(
     el('h3', {}, 'Zoom'),
@@ -187,6 +202,62 @@ function abaInteracao(): HTMLElement {
       campoCheck(it.voltarAoScroll, (v) => ((it.voltarAoScroll = v), mudou())),
       'Ligado: ao terminar uma medida (linha, ângulo, ROI, sonda...), o botão esquerdo volta a passar cortes (crosshairs no MPR). Desligado: a ferramenta de medida continua ativa.',
     ),
+    el('h3', {}, 'Favoritos do botão direito (6 botões esquemáticos no topo)'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Escolha a função de cada um dos 6 botões sem texto no topo do menu de clique direito sobre a imagem.',
+    ),
+  );
+
+  const GradePrevia = el('div', { class: 'cfg-favoritos-previa' });
+  const iconesPrevia: HTMLElement[] = [];
+  for (let i = 0; i < TOTAL_FAVORITOS_MENU; i += 1) {
+    const idAtual = favs[i] ?? opcoesFav[i]?.id ?? opcoesFav[0]!.id;
+    const opAtual = opcoesFav.find((o) => o.id === idAtual) ?? opcoesFav[0]!;
+    const caixaIcone = el('span', { class: 'menu-flutuante-fav', title: `${i + 1}. ${opAtual.rotulo}` });
+    caixaIcone.innerHTML = iconeFavoritoMenu(opAtual.id);
+    iconesPrevia.push(caixaIcone);
+    GradePrevia.append(caixaIcone);
+  }
+  raiz.append(GradePrevia);
+
+  for (let i = 0; i < TOTAL_FAVORITOS_MENU; i += 1) {
+    const idAtual = favs[i] ?? opcoesFav[i]?.id ?? opcoesFav[0]!.id;
+    const miniatura = el('span', { class: 'cfg-fav-icone' });
+    miniatura.innerHTML = iconeFavoritoMenu(idAtual);
+
+    const sel = el('select');
+    for (const [nomeGrupo, itensGrupo] of gruposFav) {
+      const optgroup = el('optgroup', { label: nomeGrupo });
+      for (const op of itensGrupo) {
+        const textoOp = op.atalho ? `${op.rotulo} (${op.atalho})` : op.rotulo;
+        optgroup.append(el('option', { value: op.id, textContent: textoOp, selected: op.id === idAtual }));
+      }
+      sel.append(optgroup);
+    }
+
+    sel.addEventListener('change', () => {
+      favs[i] = sel.value;
+      miniatura.innerHTML = iconeFavoritoMenu(sel.value);
+      const opNova = opcoesFav.find((o) => o.id === sel.value);
+      if (iconesPrevia[i]) {
+        iconesPrevia[i].innerHTML = iconeFavoritoMenu(sel.value);
+        if (opNova) iconesPrevia[i].title = `${i + 1}. ${opNova.rotulo}`;
+      }
+      mudou();
+    });
+
+    const rotuloSlot = el('span', { class: 'cfg-fav-rotulo' }, miniatura, el('span', {}, `Botão favorito ${i + 1}`));
+    raiz.append(el('label', { class: 'cfg-linha' }, rotuloSlot, sel));
+  }
+
+  raiz.append(
+    botaoTexto('Restaurar os 6 favoritos padrão', () => {
+      restaurarFavoritosMenu();
+      notificarPreferenciasParaOutraJanela();
+      desenhar();
+    }),
     el(
       'p',
       { class: 'cfg-dica' },

@@ -15,7 +15,23 @@ export interface ItemMenuFlutuante {
   desabilitado?: boolean;
 }
 
-export type EntradaMenuFlutuante = ItemMenuFlutuante | 'divisor';
+export interface BotaoIconeMenuFlutuante {
+  id: string;
+  /** Ícone esquemático em SVG (sem texto). */
+  svg: string;
+  /** Dica mostrada ao passar o mouse (nome da função e atalho). */
+  dica: string;
+  marcado?: boolean;
+  desabilitado?: boolean;
+  acao: () => void;
+}
+
+export interface BarraIconesMenuFlutuante {
+  tipo: 'barra-icones';
+  botoes: BotaoIconeMenuFlutuante[];
+}
+
+export type EntradaMenuFlutuante = ItemMenuFlutuante | BarraIconesMenuFlutuante | 'divisor';
 
 let aberto: HTMLDivElement | null = null;
 
@@ -52,6 +68,30 @@ function montarPainel(entradas: EntradaMenuFlutuante[]): HTMLDivElement {
       const hr = document.createElement('hr');
       hr.className = 'divisor-menu';
       painel.append(hr);
+      continue;
+    }
+    if ('tipo' in e) {
+      const barra = document.createElement('div');
+      barra.className = 'menu-flutuante-favoritos';
+      barra.setAttribute('role', 'toolbar');
+      barra.setAttribute('aria-label', 'Favoritos rápidos');
+      for (const item of e.botoes) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'menu-flutuante-fav';
+        btn.dataset.favId = item.id;
+        btn.title = item.dica;
+        btn.setAttribute('aria-label', item.dica);
+        btn.setAttribute('aria-pressed', item.marcado ? 'true' : 'false');
+        btn.disabled = Boolean(item.desabilitado);
+        btn.innerHTML = item.svg;
+        btn.addEventListener('click', () => {
+          fecharMenuFlutuante();
+          item.acao();
+        });
+        barra.append(btn);
+      }
+      painel.append(barra);
       continue;
     }
     const b = document.createElement('button');

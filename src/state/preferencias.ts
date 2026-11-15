@@ -92,6 +92,8 @@ export interface PrefsGerais {
   janelas: Janela[];
   /** Ferramenta de cada botão do mouse escolhida pelo usuário ('' = nenhuma). Só o que difere do padrão. */
   mouse: Record<string, string>;
+  /** 6 botões favoritos (esquemáticos) no topo do menu do botão direito. */
+  favoritosMenu: string[];
 }
 
 export const MEDIDAS_PADRAO: PrefsMedidas = {
@@ -163,6 +165,17 @@ export const JANELAS_PADRAO: Janela[] = [
 
 export const MAX_JANELAS = 9;
 
+export const TOTAL_FAVORITOS_MENU = 6;
+
+export const FAVORITOS_MENU_PADRAO: string[] = [
+  'WindowLevel',
+  'Zoom',
+  'Localizador3D',
+  'Length',
+  'EllipticalROI',
+  'ProbeHuSuv',
+];
+
 const CHAVE = 'visualizador.preferencias.v1';
 export const EVENTO_PREFERENCIAS = 'preferenciasMudaram';
 
@@ -187,6 +200,7 @@ function copiaPadrao(): PrefsGerais {
     atalhos: {},
     janelas: JANELAS_PADRAO.map((j) => ({ ...j })),
     mouse: {},
+    favoritosMenu: [...FAVORITOS_MENU_PADRAO],
   };
 }
 
@@ -275,6 +289,15 @@ export function sanear(bruto: unknown): PrefsGerais {
     }
   }
 
+  if (Array.isArray(b.favoritosMenu)) {
+    for (let i = 0; i < TOTAL_FAVORITOS_MENU; i += 1) {
+      const item = b.favoritosMenu[i];
+      if (typeof item === 'string' && item.trim().length > 0 && item.trim().length <= 60) {
+        p.favoritosMenu[i] = item.trim();
+      }
+    }
+  }
+
   if (Array.isArray(b.janelas)) {
     const lista: Janela[] = [];
     for (const j of b.janelas as Array<Record<string, unknown>>) {
@@ -317,6 +340,10 @@ export function medidas(): PrefsMedidas {
   return atuais.medidas;
 }
 
+export function favoritosMenu(): string[] {
+  return atuais.favoritosMenu;
+}
+
 /** Reler do localStorage (útil quando a outra janela salvou preferências). */
 export function recarregarPreferenciasDoDisco(): void {
   try {
@@ -355,5 +382,10 @@ export function restaurarAtalhos(): void {
 
 export function restaurarTelas(): void {
   atuais.telas = copiaPadrao().telas;
+  salvarPreferencias();
+}
+
+export function restaurarFavoritosMenu(): void {
+  atuais.favoritosMenu = [...FAVORITOS_MENU_PADRAO];
   salvarPreferencias();
 }
