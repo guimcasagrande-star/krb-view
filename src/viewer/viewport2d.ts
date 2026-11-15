@@ -512,7 +512,6 @@ function estadoAtual(): EstadoViewports {
 
 // ---------- sincronia automática entre séries do mesmo estudo ----------
 
-const ID_SYNC_ESTUDO_ZOOM = 'sync-estudo-zoom-pan';
 const ID_SYNC_ESTUDO_VOI = 'sync-estudo-voi';
 
 /** O slot mostra a fusão PET/TC: tem PET associado e está num plano de volume (axial, coronal, sagital). */
@@ -566,6 +565,10 @@ function tentarZoomDoGrupo(): void {
   for (const grupo of gruposSincroniaEstudo()) {
     const chave = chaveDoGrupo(grupo);
     if (!zoomsPendentes.has(chave)) continue;
+    const todosProntos = grupo.every(
+      (s) => s.viewport && !semCortes(s) && s.viewport.getActors().length > 0,
+    );
+    if (!todosProntos) continue;
     const base =
       grupo.find((s) => s.pilha?.instances[0]?.modality === 'CT' && s.viewport && 'setImageIdIndex' in s.viewport) ??
       grupo.find((s) => s.viewport && 'setImageIdIndex' in s.viewport);
@@ -574,10 +577,11 @@ function tentarZoomDoGrupo(): void {
     if (!cache.getImage(id)) continue;
     zoomsPendentes.delete(chave);
     ajustarZoomAoConteudo(base.viewport, id, base.pilha?.instances[0]?.modality);
+    aoMudarCameraEstudo(base.indice);
   }
 }
 
-/** Refaz os sincronizadores de zoom/pan e janela (um par por estudo) só quando os grupos mudam. */
+/** Refaz os sincronizadores de janela (um por estudo/modalidade) e alinha o zoom físico (mm) quando os grupos mudam. */
 function atualizarSincroniaEstudo(): void {
   const grupos = sincroniaEstudoLigada ? gruposSincroniaEstudo() : [];
   const assinatura = grupos
@@ -596,9 +600,6 @@ function atualizarSincroniaEstudo(): void {
   if (grupos.length === 0) return;
 
   grupos.forEach((grupo, n) => {
-    // Os campos de visão (FOV) das séries diferem (PET x TC): o zoom/pan automático de cada uma
-    // não combina entre si. Ao formar o grupo todos voltam ao enquadramento padrão e só então
-    // os sincronizadores são ligados.
     for (const s of grupo) {
       try {
         s.viewport?.resetCamera();
@@ -607,15 +608,9 @@ function atualizarSincroniaEstudo(): void {
         /* viewport ainda sem imagem */
       }
     }
-    const idZoom = `${ID_SYNC_ESTUDO_ZOOM}-${n}`;
     const idVoi = `${ID_SYNC_ESTUDO_VOI}-${n}`;
-    idsSincronizadoresEstudo.push(idZoom, idVoi);
-    const zoom = synchronizers.createZoomPanSynchronizer(idZoom);
+    idsSincronizadoresEstudo.push(idVoi);
     const voi = synchronizers.createVOISynchronizer(idVoi, { syncInvertState: true, syncColormap: true });
-    for (const s of grupo) {
-      // O sincronizador do Cornerstone só atualiza viewports de pilha; os de volume são copiados à mão.
-      if (s.viewport && 'setImageIdIndex' in s.viewport) zoom.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
-    }
     // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
     const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
     const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
@@ -797,8 +792,70 @@ export function alternarLinhasReferencia(): void {
 let sincronizandoCameraEstudo = false;
 
 /**
- * O sincronizador de zoom/pan do Cornerstone não atualiza viewports de volume (fusão e planos
- * reconstruídos), então o zoom e o pan entre os cortes do mesmo plano são copiados aqui.
+ * Copia a escala física em milímetros (`parallelScale`) e o centro anatômico no plano do corte
+ * (`focalPoint` projetado no plano de destino) entre dois viewports.
+ * Assim, mesmo quando uma série tem FOV maior que outra (ex.: PET de 700 mm vs TC de 450 mm),
+ * o paciente fica exatamente do mesmo tamanho e alinhado nos dois quadros.
+ */
+function copiarCameraFisicaNoMesmoPlano(
+  origemVp: Types.IStackViewport | Types.IVolumeViewport,
+  destinoVp: Types.IStackViewport | Types.IVolumeViewport,
+  mesmoReferencial: boolean,
+): void {
+  const camO = origemVp.getCamera();
+  const camD = destinoVp.getCamera();
+  if (
+    camO.parallelScale === undefined ||
+    !Number.isFinite(camO.parallelScale) ||
+    camO.parallelScale <= 0
+  ) {
+    return;
+  }
+
+  if (mesmoReferencial && camO.focalPoint && camD.focalPoint && camD.position && camD.viewPlaneNormal) {
+    const nD = camD.viewPlaneNormal;
+    const diffX = camO.focalPoint[0] - camD.focalPoint[0];
+    const diffY = camO.focalPoint[1] - camD.focalPoint[1];
+    const diffZ = camO.focalPoint[2] - camD.focalPoint[2];
+    const aoNormal = diffX * nD[0] + diffY * nD[1] + diffZ * nD[2];
+    const dx = diffX - aoNormal * nD[0];
+    const dy = diffY - aoNormal * nD[1];
+    const dz = diffZ - aoNormal * nD[2];
+
+    const mudouEscala =
+      camD.parallelScale === undefined || Math.abs(camD.parallelScale - camO.parallelScale) > 0.05;
+    const mudouCentro = Math.hypot(dx, dy, dz) > 0.05;
+    if (!mudouEscala && !mudouCentro) return;
+
+    destinoVp.setCamera({
+      parallelScale: camO.parallelScale,
+      focalPoint: [camD.focalPoint[0] + dx, camD.focalPoint[1] + dy, camD.focalPoint[2] + dz],
+      position: [camD.position[0] + dx, camD.position[1] + dy, camD.position[2] + dz],
+    });
+    destinoVp.render();
+    return;
+  }
+
+  // Entre estudos diferentes (ex.: comparação ATUAL × ANTERIOR): iguala o tamanho físico em mm e o pan.
+  const mudouEscala =
+    camD.parallelScale === undefined || Math.abs(camD.parallelScale - camO.parallelScale) > 0.05;
+  if (mudouEscala) {
+    destinoVp.setCamera({ parallelScale: camO.parallelScale });
+  }
+  const pan = origemVp.getPan?.();
+  const pt = destinoVp.getPan?.();
+  const mudouPan = Boolean(pan && (!pt || Math.abs(pt[0] - pan[0]) > 0.01 || Math.abs(pt[1] - pan[1]) > 0.01));
+  if (pan && mudouPan) {
+    destinoVp.setPan?.(pan);
+  }
+  if (mudouEscala || mudouPan) {
+    destinoVp.render();
+  }
+}
+
+/**
+ * Sincroniza o zoom físico (em mm) e o centro anatômico no plano entre os cortes do mesmo estudo/plano
+ * (tanto viewports de pilha 2D quanto volumes de fusão e planos reconstruídos).
  */
 function aoMudarCameraEstudo(origem: number): void {
   // Comparação com fusões (volumes): zoom/pan copiados entre os dois lados quando ligados.
@@ -810,14 +867,9 @@ function aoMudarCameraEstudo(origem: number): void {
     if ('setImageIdIndex' in so.viewport && 'setImageIdIndex' in d.viewport) return;
     const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
     const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport;
-    const zoom = v.getZoom?.();
-    const pan = v.getPan?.();
     sincronizandoCameraEstudo = true;
     try {
-      if (zoom !== undefined && Math.abs((t.getZoom?.() ?? zoom) - zoom) > 1e-6) t.setZoom?.(zoom);
-      const pt = t.getPan?.();
-      if (pan && (!pt || Math.abs(pt[0] - pan[0]) > 0.01 || Math.abs(pt[1] - pan[1]) > 0.01)) t.setPan?.(pan);
-      t.render();
+      copiarCameraFisicaNoMesmoPlano(v, t, false);
     } finally {
       sincronizandoCameraEstudo = false;
     }
@@ -825,30 +877,29 @@ function aoMudarCameraEstudo(origem: number): void {
   }
   if (!sincroniaEstudoLigada || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
   const so = slots[origem];
-  if (!so?.viewport || !so.pilha) return;
+  if (!so?.viewport || !so.pilha || semCortes(so)) return;
   const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
   if (!grupo) return;
-  const origemVolume = !('setImageIdIndex' in so.viewport);
-  // Pilha↔pilha já é feito pelo Cornerstone; aqui só os pares em que algum lado é volume.
-  const destinos = destinosNoMesmoPlano(grupo, so).filter(({ d }) => origemVolume || !('setImageIdIndex' in d.viewport!));
+  const destinosMesmoEstudo = destinosNoMesmoPlano(grupo, so);
+  const destinosOutroEstudo: Array<{ d: Slot; sinal: 1 | -1 }> = [];
   // Layout de comparação PET/CT: o zoom e o pan também vão para a outra linha (outro exame).
   if (comparacaoPetCtLayout) {
     const outras = gruposSincroniaEstudo().filter((g) => g !== grupo).flat();
-    destinos.push(...destinosNoMesmoPlano(outras, so));
+    destinosOutroEstudo.push(...destinosNoMesmoPlano(outras, so));
   }
-  if (destinos.length === 0) return;
+  if (destinosMesmoEstudo.length === 0 && destinosOutroEstudo.length === 0) return;
   const v = so.viewport as Types.IStackViewport | Types.IVolumeViewport;
-  const pan = v.getPan?.();
-  const zoom = v.getZoom?.();
   sincronizandoCameraEstudo = true;
   try {
-    for (const { d } of destinos) {
+    for (const { d } of destinosMesmoEstudo) {
       const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport | undefined;
-      if (!t) continue;
-      if (zoom !== undefined && Math.abs((t.getZoom?.() ?? zoom) - zoom) > 1e-6) t.setZoom?.(zoom);
-      const pt = t.getPan?.();
-      if (pan && (!pt || Math.abs(pt[0] - pan[0]) > 0.01 || Math.abs(pt[1] - pan[1]) > 0.01)) t.setPan?.(pan);
-      t.render();
+      if (!t || semCortes(d)) continue;
+      copiarCameraFisicaNoMesmoPlano(v, t, true);
+    }
+    for (const { d } of destinosOutroEstudo) {
+      const t = d.viewport as Types.IStackViewport | Types.IVolumeViewport | undefined;
+      if (!t || semCortes(d)) continue;
+      copiarCameraFisicaNoMesmoPlano(v, t, false);
     }
   } finally {
     sincronizandoCameraEstudo = false;
