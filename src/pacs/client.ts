@@ -523,6 +523,8 @@ export interface RetrieveProgress {
   received: number;
   /** Quantas faltam, quando o servidor informa. */
   remaining?: number;
+  /** Bytes DICOM acumulados recebidos nesta conexão. */
+  bytesReceived: number;
 }
 
 export interface RetrieveRequest {
@@ -634,6 +636,7 @@ export async function retrieve(
     options.signal?.addEventListener('abort', cancel, { once: true });
 
     let received = 0;
+    let bytesReceived = 0;
     let remaining: number | undefined;
     let pendingWrites: Promise<void>[] = [];
     const MAX_PENDING_WRITES = 16; // Limita gravações simultâneas em disco por conexão
@@ -681,8 +684,13 @@ export async function retrieve(
           // 1. Confirma o recebimento IMEDIATAMENTE ao PACS para ele já enviar a próxima fatia pela rede
           association.send(contextId, reply);
           received++;
+          bytesReceived += part10File.byteLength;
           if (remaining !== undefined && remaining > 0) remaining--;
-          options.onProgress?.(remaining === undefined ? { received } : { received, remaining });
+          options.onProgress?.(
+            remaining === undefined
+              ? { received, bytesReceived }
+              : { received, remaining, bytesReceived },
+          );
 
           // 2. Enfileira o onInstance (disco/indexação) em pipeline sem bloquear o socket TCP
           pendingWrites.push(writePromise);
@@ -699,7 +707,7 @@ export async function retrieve(
         if (isPending(command.status)) {
           if (command.remaining !== undefined) {
             remaining = command.remaining;
-            options.onProgress?.({ received, remaining });
+            options.onProgress?.({ received, remaining, bytesReceived });
           }
           continue;
         }
@@ -744,6 +752,8 @@ export interface ParallelRetrieveProgress {
   received: number;
   /** Total estimado de imagens no estudo (se informado pelo PACS ou C-FIND). */
   total?: number;
+  /** Bytes DICOM acumulados recebidos somando todas as séries. */
+  bytesReceived: number;
   /** Séries completamente baixadas até agora. */
   completedSeries: number;
   /** Total de séries no estudo. */
@@ -794,6 +804,7 @@ export async function retrieveStudyParallel(
             options.onProgress!({
               received: p.received,
               total: p.remaining !== undefined ? p.received + p.remaining : undefined,
+              bytesReceived: p.bytesReceived,
               completedSeries: 0,
               totalSeries: 1,
             })
@@ -815,6 +826,7 @@ export async function retrieveStudyParallel(
   );
 
   let totalReceived = 0;
+  let totalBytesReceived = 0;
   let totalFailed = 0;
   let totalWarning = 0;
   let anyCancelled = false;
@@ -841,6 +853,7 @@ export async function retrieveStudyParallel(
     options.onProgress({
       received: totalReceived,
       total,
+      bytesReceived: totalBytesReceived,
       completedSeries,
       totalSeries,
     });
@@ -859,6 +872,7 @@ export async function retrieveStudyParallel(
 
       const seriesUid = currentSeries.seriesInstanceUid;
       let lastSeriesReceived = 0;
+      let lastSeriesBytes = 0;
 
       const summary = await retrieve(
         server,
@@ -872,6 +886,9 @@ export async function retrieveStudyParallel(
             const delta = p.received - lastSeriesReceived;
             lastSeriesReceived = p.received;
             totalReceived += delta;
+            const deltaBytes = p.bytesReceived - lastSeriesBytes;
+            lastSeriesBytes = p.bytesReceived;
+            totalBytesReceived += deltaBytes;
             if (p.remaining !== undefined) {
               remainingBySeries.set(seriesUid, p.remaining);
             }

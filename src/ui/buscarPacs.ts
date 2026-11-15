@@ -72,6 +72,13 @@ function formatarMb(bytes: number): string {
   return `${(bytes / 1_048_576).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`;
 }
 
+function formatarVelocidade(bytesPorSeg: number): string {
+  if (bytesPorSeg < 1_048_576) {
+    return `${(bytesPorSeg / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} KB/s`;
+  }
+  return `${(bytesPorSeg / 1_048_576).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB/s`;
+}
+
 function atualizarAbasTopo(): void {
   if (!caixa) return;
   for (const b of caixa.querySelectorAll<HTMLButtonElement>('.pacs-abas button')) {
@@ -660,8 +667,12 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
     cancelar.onclick = () => controle.abort();
     resumo.textContent = 'Baixando…';
     let recebidas = 0;
+    let bytesRecebidos = 0;
     let falhas = 0;
     let cancelado = false;
+    const inicioMs = performance.now();
+    const JANELA_VELOCIDADE_MS = 1500;
+    const amostras: Array<{ t: number; bytes: number; imgs: number }> = [{ t: inicioMs, bytes: 0, imgs: 0 }];
     const emMemoria = new Map<string, File>();
     try {
       const base = await pastaDeExames();
@@ -686,11 +697,29 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
         },
         onProgress: (p) => {
           recebidas = p.received;
+          bytesRecebidos = p.bytesReceived;
+          const agora = performance.now();
+          amostras.push({ t: agora, bytes: p.bytesReceived, imgs: p.received });
+          while (amostras.length > 2 && agora - amostras[0]!.t > JANELA_VELOCIDADE_MS) {
+            amostras.shift();
+          }
+          const baseAmostra = amostras[0]!;
+          const dtSeg = (agora - baseAmostra.t) / 1000;
+          let sufixoVel = '';
+          if (dtSeg >= 0.25 && p.bytesReceived > 0) {
+            const bytesPorSeg = Math.max(0, p.bytesReceived - baseAmostra.bytes) / dtSeg;
+            const imgsPorSeg = Math.max(0, p.received - baseAmostra.imgs) / dtSeg;
+            const imgsTxt = imgsPorSeg.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+            sufixoVel = ` · ${formatarMb(p.bytesReceived)} · ${formatarVelocidade(bytesPorSeg)} (${imgsTxt} img/s)`;
+          } else if (p.bytesReceived > 0) {
+            sufixoVel = ` · ${formatarMb(p.bytesReceived)}`;
+          }
           const total = p.total ?? estudoTotal;
-          resumo.textContent =
+          const baseTexto =
             total > 0
               ? `Baixando… ${p.received} de ${total} imagens (série ${p.completedSeries}/${p.totalSeries})`
               : `Baixando… ${p.received} imagens (série ${p.completedSeries}/${p.totalSeries})`;
+          resumo.textContent = `${baseTexto}${sufixoVel}`;
           if (total > 0) {
             progresso.max = total;
             progresso.value = p.received;
@@ -700,7 +729,12 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       recebidas = resumoEstudo.received;
       falhas = resumoEstudo.failed;
       cancelado = resumoEstudo.cancelled;
-      resumo.textContent = `${cancelado ? 'Cancelado' : 'Concluído'}: ${recebidas} imagens recebidas, ${falhas} com falha.`;
+      const decorridoSeg = Math.max(0.05, (performance.now() - inicioMs) / 1000);
+      const mediaVel =
+        bytesRecebidos > 0
+          ? ` · ${formatarMb(bytesRecebidos)} em ${decorridoSeg.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s (média ${formatarVelocidade(bytesRecebidos / decorridoSeg)})`
+          : '';
+      resumo.textContent = `${cancelado ? 'Cancelado' : 'Concluído'}: ${recebidas} imagens recebidas, ${falhas} com falha.${mediaVel}`;
       if (recebidas > 0 && !cancelado) {
         await abrirEstudoBaixado(base, r.estudo.studyInstanceUid, emMemoria);
       } else {

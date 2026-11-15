@@ -898,7 +898,9 @@ describe('retrieveStudyParallel', () => {
       total: 8,
       completedSeries: 4,
       totalSeries: 4,
+      bytesReceived: expect.any(Number),
     });
+    expect(progressEvents.at(-1)!.bytesReceived).toBeGreaterThan(0);
   });
 
   it('faz fallback para retrieve do estudo inteiro quando seriesList está vazia', async () => {
@@ -948,6 +950,8 @@ describe('retrieveStudyParallel', () => {
       total: 1,
       completedSeries: 0,
       totalSeries: 1,
+      bytesReceived: expect.any(Number),
     });
+    expect(progressEvents.at(-1)!.bytesReceived).toBeGreaterThan(0);
   });
 });
