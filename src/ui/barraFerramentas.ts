@@ -153,6 +153,71 @@ const ICONES_BARRA = {
   ),
 };
 
+const ICONES_MENU = {
+  pasta: svgBarra(
+    '<path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/>',
+  ),
+  arquivo: svgBarra(
+    '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  ),
+  zip: svgBarra(
+    '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M12 3v18M10 7h4M10 11h4M10 15h4"/>',
+  ),
+  limpar: svgBarra(
+    '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  ),
+  historico: svgBarra('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  imagem: svgBarra(
+    '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5" fill="currentColor"/><path d="M21 16l-5-5-6 6-2.5-2.5L3 19"/>',
+  ),
+  baixados: svgBarra(
+    '<path d="M12 4v10M8 10l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  ),
+  buscar: svgBarra('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
+  servidor: svgBarra(
+    '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/>',
+  ),
+  maximizarVp: svgBarra(
+    '<path d="M14 4h6v6M10 20H4v-6M20 4l-6 6M4 20l6-6"/>',
+  ),
+  salvar: svgBarra(
+    '<path d="M5 20V4h11l3 3v13z"/><path d="M8 4v5h7V4"/>',
+  ),
+  adicionar: svgBarra('<path d="M12 5v14M5 12h14"/>'),
+  config: ICONES_BARRA.config,
+  petCt: ICONES_BARRA.petct,
+  comparar: ICONES_BARRA.comparar,
+  rolagem: svgBarra('<path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/>'),
+  linhas: svgBarra('<path d="M3 12h18M12 3v18" stroke-dasharray="3 2.5"/>'),
+  janelaNivel: svgBarra(
+    '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
+  ),
+  zoomPan: svgBarra('<circle cx="10.5" cy="10.5" r="6"/><path d="M20 20l-4.5-4.5"/>'),
+  zerar: ICONES_BARRA.zerar,
+  estudo: svgBarra('<rect x="3" y="5" width="8" height="14" rx="1.5"/><rect x="13" y="5" width="8" height="14" rx="1.5"/>'),
+  segundaJanela: svgBarra(
+    '<rect x="2.5" y="5" width="12" height="14" rx="1.5"/><rect x="16.5" y="7" width="5" height="10" rx="1"/>',
+  ),
+  localizador: svgBarra(
+    '<circle cx="12" cy="12" r="5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  ),
+  padraoRapido: svgBarra(
+    '<rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/>',
+  ),
+  maximizada: svgBarra('<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 8h18"/>'),
+  autoAbrir: svgBarra(
+    '<path d="M4 16V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10M8 20h8"/>',
+  ),
+  telaCheia: svgBarra(
+    '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  ),
+  perfusao: svgBarra('<path d="M3 19h18M4 16l4-5 4 2 4-7 4 4"/>'),
+  abrirSeg: svgBarra(
+    '<path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/>',
+  ),
+  velocidade: svgBarra('<circle cx="12" cy="12" r="8"/><path d="M12 12l4-4M12 7v1"/>'),
+};
+
 const ICONES_BOTAO_MOUSE: Record<Botao, string> = {
   esquerdo: svgBarra(
     '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7H6A6 6 0 0 1 12 3z" fill="#38bdf8"/>',
@@ -355,33 +420,85 @@ function criarMenuSuspenso(opcoes: {
   };
 }
 
+interface OpcoesItemMenu {
+  svg?: string;
+  badge?: string;
+  badgeAzul?: boolean;
+  switchPill?: boolean;
+  check?: boolean;
+  destaque?: boolean;
+}
+
+function secaoMenu(texto: string, destaque = false): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = destaque ? 'secao-menu secao-destaque' : 'secao-menu';
+  div.textContent = texto;
+  return div;
+}
+
 function itemMenu(
   rotulo: string,
   atalho: string | undefined,
   acao: () => void,
   fecharMenu: () => void,
-  svg?: string,
+  extra?: string | OpcoesItemMenu,
 ): HTMLButtonElement {
+  const opcoes: OpcoesItemMenu = typeof extra === 'string' ? { svg: extra } : (extra ?? {});
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'item-menu-suspenso';
+  if (opcoes.destaque) b.classList.add('item-menu-destaque');
+  if (opcoes.switchPill) {
+    b.classList.add('item-menu-switch');
+    b.setAttribute('aria-pressed', 'false');
+  }
+  if (opcoes.check) b.classList.add('item-menu-check');
+
   const spanEsquerda = document.createElement('span');
   spanEsquerda.className = 'item-menu-rotulo';
-  if (svg) {
+  if (opcoes.svg) {
     const ic = document.createElement('span');
     ic.className = 'icone-item-menu';
-    ic.innerHTML = svg;
+    ic.innerHTML = opcoes.svg;
     spanEsquerda.append(ic);
   }
   const spanTexto = document.createElement('span');
   spanTexto.textContent = rotulo;
   spanEsquerda.append(spanTexto);
   b.append(spanEsquerda);
-  if (atalho) {
-    const kbd = document.createElement('kbd');
-    kbd.textContent = atalho;
-    b.append(kbd);
+
+  const temBadge = Boolean(opcoes.badge);
+  const temAtalho = Boolean(atalho);
+  if (temBadge || temAtalho || opcoes.switchPill || opcoes.check) {
+    const direito = document.createElement('span');
+    direito.className = 'item-menu-direito';
+    if (opcoes.badge) {
+      const badge = document.createElement('span');
+      badge.className = opcoes.badgeAzul ? 'badge-menu badge-azul' : 'badge-menu';
+      badge.textContent = opcoes.badge;
+      direito.append(badge);
+    }
+    if (atalho) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = atalho;
+      direito.append(kbd);
+    }
+    if (opcoes.switchPill) {
+      const sw = document.createElement('span');
+      sw.className = 'switch-pill';
+      sw.setAttribute('aria-hidden', 'true');
+      direito.append(sw);
+    }
+    if (opcoes.check) {
+      const chk = document.createElement('span');
+      chk.className = 'check-menu';
+      chk.setAttribute('aria-hidden', 'true');
+      chk.textContent = '✓';
+      direito.append(chk);
+    }
+    b.append(direito);
   }
+
   b.addEventListener('click', () => {
     fecharMenu();
     acao();
@@ -414,11 +531,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     acaoPrincipal: () => dispararAbrirPasta(),
   });
   menuAbrir.painel.append(
-    itemMenu('Abrir pasta DICOM…', 'Ctrl+Shift+O', () => dispararAbrirPasta(), menuAbrir.fechar),
-    itemMenu('Abrir arquivo(s) DICOM…', 'Ctrl+O', () => dispararAbrirArquivos(), menuAbrir.fechar),
-    itemMenu('Abrir arquivo ZIP…', undefined, () => dispararAbrirZip(), menuAbrir.fechar),
+    itemMenu('Abrir pasta DICOM…', 'Ctrl+Shift+O', () => dispararAbrirPasta(), menuAbrir.fechar, ICONES_MENU.pasta),
+    itemMenu('Abrir arquivos DICOM…', 'Ctrl+O', () => dispararAbrirArquivos(), menuAbrir.fechar, ICONES_MENU.arquivo),
+    itemMenu('Abrir arquivo ZIP…', undefined, () => dispararAbrirZip(), menuAbrir.fechar, ICONES_MENU.zip),
     divisorMenu(),
-    itemMenu('Limpar lista de exames', undefined, () => dispararLimparLista(), menuAbrir.fechar),
+    itemMenu('Limpar lista de exames', undefined, () => dispararLimparLista(), menuAbrir.fechar, ICONES_MENU.limpar),
   );
   // Pastas recentes (só a referência da pasta) e exportação da imagem.
   const secaoRecentes = document.createElement('div');
@@ -427,12 +544,14 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     const lista = await listarRecentes();
     secaoRecentes.replaceChildren();
     if (lista.length === 0) return;
-    secaoRecentes.append(divisorMenu());
+    secaoRecentes.append(divisorMenu(), secaoMenu('Pastas recentes'));
     for (const r of lista) {
-      secaoRecentes.append(itemMenu(`🕘 ${r.nome}`, undefined, () => dispararAbrirRecente(r.handle), menuAbrir.fechar));
+      secaoRecentes.append(
+        itemMenu(r.nome, undefined, () => dispararAbrirRecente(r.handle), menuAbrir.fechar, ICONES_MENU.historico),
+      );
     }
     secaoRecentes.append(
-      itemMenu('Limpar pastas recentes', undefined, () => void limparRecentes(), menuAbrir.fechar),
+      itemMenu('Limpar pastas recentes', undefined, () => void limparRecentes(), menuAbrir.fechar, ICONES_MENU.limpar),
     );
   };
   void montarRecentes();
@@ -450,16 +569,26 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       acaoPrincipal: () => abrirExamesBaixadosPacs(),
     });
     menuPacs.painel.append(
-      itemMenu('📥 Exames já baixados (abrir ou apagar)…', undefined, () => abrirExamesBaixadosPacs(), menuPacs.fechar),
-      itemMenu('🔍 Buscar novos exames no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuPacs.fechar),
+      itemMenu('Exames já baixados…', undefined, () => abrirExamesBaixadosPacs(), menuPacs.fechar, {
+        svg: ICONES_MENU.baixados,
+        destaque: true,
+      }),
+      itemMenu('Buscar novos exames no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuPacs.fechar, ICONES_MENU.buscar),
       divisorMenu(),
-      itemMenu('🖧 Configurar servidores PACS…', undefined, () => abrirServidoresPacs(), menuPacs.fechar),
+      itemMenu('Configurar servidores PACS…', undefined, () => abrirServidoresPacs(), menuPacs.fechar, ICONES_MENU.servidor),
     );
   }
   menuAbrir.painel.append(
     divisorMenu(),
-    itemMenu('Exportar imagem do viewport (PNG)', undefined, () => void exportar('png'), menuAbrir.fechar),
-    itemMenu('Exportar imagem do viewport (JPEG)', undefined, () => void exportar('jpeg'), menuAbrir.fechar),
+    secaoMenu('Exportar imagem'),
+    itemMenu('Exportar viewport em PNG', undefined, () => void exportar('png'), menuAbrir.fechar, {
+      svg: ICONES_MENU.imagem,
+      badge: 'PNG',
+    }),
+    itemMenu('Exportar viewport em JPEG', undefined, () => void exportar('jpeg'), menuAbrir.fechar, {
+      svg: ICONES_MENU.imagem,
+      badge: 'JPEG',
+    }),
   );
 
 
@@ -476,15 +605,24 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   // Seletor de grade: passe o mouse sobre os quadradinhos e clique para escolher linhas x colunas.
   const seletorGrade = document.createElement('div');
   seletorGrade.className = 'seletor-grade';
-  const rotuloGrade = document.createElement('div');
-  rotuloGrade.className = 'rotulo-grade';
-  rotuloGrade.textContent = 'Escolha a grade';
+  const gradeInfo = document.createElement('div');
+  gradeInfo.className = 'grade-info-menu';
+  const gradeTitulo = document.createElement('strong');
+  const gradeSub = document.createElement('small');
+  gradeInfo.append(gradeTitulo, gradeSub);
+
   const quadrados: HTMLButtonElement[] = [];
+  const mostrarInfoGrade = (linhas: number, colunas: number): void => {
+    const g = linhas > 0 ? { linhas, colunas } : geometriaLayout(obterLayoutAtual());
+    const total = g.linhas * g.colunas;
+    gradeTitulo.textContent = `${g.linhas} × ${g.colunas}`;
+    gradeSub.textContent = total === 1 ? '1 viewport' : `${total} viewports`;
+  };
   const marcarGrade = (linhas: number, colunas: number): void => {
     for (const q of quadrados) {
       q.classList.toggle('marcado', Number(q.dataset.l) <= linhas && Number(q.dataset.c) <= colunas);
     }
-    rotuloGrade.textContent = linhas > 0 ? `${linhas} linha(s) × ${colunas} coluna(s)` : 'Escolha a grade';
+    mostrarInfoGrade(linhas, colunas);
   };
   const areaQuadrados = document.createElement('div');
   areaQuadrados.className = 'quadrados-grade';
@@ -494,8 +632,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       q.type = 'button';
       q.dataset.l = String(l);
       q.dataset.c = String(c);
-      q.title = `${l}x${c}`;
-      q.setAttribute('aria-label', `Grade ${l} linha(s) por ${c} coluna(s)`);
+      q.title = `${l}×${c}`;
+      q.setAttribute('aria-label', `Grade ${l} por ${c}`);
       q.addEventListener('mouseenter', () => marcarGrade(l, c));
       q.addEventListener('focus', () => marcarGrade(l, c));
       q.addEventListener('click', () => {
@@ -506,8 +644,15 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       areaQuadrados.append(q);
     }
   }
-  areaQuadrados.addEventListener('mouseleave', () => marcarGrade(0, 0));
-  seletorGrade.append(areaQuadrados, rotuloGrade);
+  areaQuadrados.addEventListener('mouseleave', () => {
+    const atual = geometriaLayout(obterLayoutAtual());
+    marcarGrade(atual.linhas, atual.colunas);
+  });
+  {
+    const atual = geometriaLayout(obterLayoutAtual());
+    marcarGrade(atual.linhas, atual.colunas);
+  }
+  seletorGrade.append(areaQuadrados, gradeInfo);
   const botaoLinhasRef = botao(
     'Linhas',
     'Linhas de referência: mostra nos outros viewports onde o corte do viewport ativo cruza (quando há planos diferentes)',
@@ -515,9 +660,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     ICONES_BARRA.linhas,
   );
   const blocoPresetsGrade = document.createElement('div');
+  blocoPresetsGrade.className = 'chips-preset-menu';
   const nadaMenuLayout = (): void => {};
   const itemFixarGradeAtual = itemMenu(
-    '💾 Salvar grade atual como padrão ao iniciar',
+    'Definir como padrão ao iniciar',
     undefined,
     () => {
       const atual = obterLayoutAtual();
@@ -532,9 +678,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       atualizarMenuPresetsGrade();
     },
     nadaMenuLayout,
+    { svg: ICONES_MENU.salvar, check: true },
   );
   const itemSalvarPresetNoMenu = itemMenu(
-    '➕ Salvar disposição atual na lista abaixo',
+    'Salvar disposição atual…',
     undefined,
     () => {
       const atual = obterLayoutAtual();
@@ -545,8 +692,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         tl.gradePrincipal = atual;
       }
       const rotuloNovo = segundaJanelaDisponivel()
-        ? `Salvo: ${tl.gradePrincipal} (1ª) + ${tl.gradeSecundaria} (2ª)`
-        : `Salvo: grade ${atual}`;
+        ? `${tl.gradePrincipal} + ${tl.gradeSecundaria}`
+        : `Grade ${atual}`;
       const jaExiste = tl.presets.find(
         (p) =>
           p.gradePrincipal === tl.gradePrincipal &&
@@ -567,6 +714,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       atualizarMenuPresetsGrade();
     },
     nadaMenuLayout,
+    ICONES_MENU.adicionar,
   );
   const atualizarMenuPresetsGrade = (): void => {
     blocoPresetsGrade.replaceChildren();
@@ -578,24 +726,32 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     itemFixarGradeAtual.setAttribute('aria-pressed', String(jaSalva));
     const spanFixar = itemFixarGradeAtual.querySelector('.item-menu-rotulo > span:last-child');
     if (spanFixar) {
+      const atualBonito = atual.replace('x', '×');
       spanFixar.textContent = jaSalva
-        ? `✓ Grade ${atual} já é o padrão desta janela`
-        : `💾 Salvar grade atual (${atual}) como padrão (salvo: ${padraoDesta})`;
+        ? `Padrão ${atualBonito} ativo`
+        : `Definir ${atualBonito} como padrão`;
     }
+    const atualGeom = geometriaLayout(atual);
+    marcarGrade(atualGeom.linhas, atualGeom.colunas);
+
     for (const p of tl.presets) {
       if (p.usarSegundaJanela && !segundaJanelaDisponivel()) continue;
-      const icone = p.usarSegundaJanela ? '🖥 ' : '⊞ ';
-      const itemPreset = itemMenu(
-        `${icone}${p.rotulo}`,
-        undefined,
-        () => void aplicarPresetVisualizacao(p),
-        menuLayout.fechar,
-      );
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip-preset';
+      const gp = p.gradePrincipal.replace('x', '×');
+      const gs = p.gradeSecundaria.replace('x', '×');
       const ehPresetPadrao =
         p.gradePrincipal === tl.gradePrincipal &&
         (!p.usarSegundaJanela || p.gradeSecundaria === tl.gradeSecundaria);
-      itemPreset.setAttribute('aria-pressed', String(ehPresetPadrao));
-      blocoPresetsGrade.append(itemPreset);
+      chip.textContent = `${p.usarSegundaJanela ? `${gp} + ${gs}` : gp}${ehPresetPadrao ? ' ★' : ''}`;
+      chip.title = p.rotulo;
+      chip.setAttribute('aria-pressed', String(ehPresetPadrao));
+      chip.addEventListener('click', () => {
+        void aplicarPresetVisualizacao(p);
+        menuLayout.fechar();
+      });
+      blocoPresetsGrade.append(chip);
     }
   };
   atualizarMenuPresetsGrade();
@@ -603,18 +759,19 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   menuLayout.painel.append(
     seletorGrade,
+    itemMenu('Maximizar viewport', 'F', () => alternarMaximizado(), menuLayout.fechar, ICONES_MENU.maximizarVp),
     divisorMenu(),
-    itemMenu('Maximizar / restaurar viewport ativo', 'F ou 2 cliques', () => alternarMaximizado(), menuLayout.fechar),
-    divisorMenu(),
+    secaoMenu('Grades salvas'),
+    blocoPresetsGrade,
     itemFixarGradeAtual,
     itemSalvarPresetNoMenu,
     divisorMenu(),
-    blocoPresetsGrade,
     itemMenu(
-      '⚙ Configurar grades e monitores padrão…',
+      'Monitores e grades…',
       undefined,
       () => abrirConfiguracoes('telas'),
       menuLayout.fechar,
+      ICONES_MENU.config,
     ),
   );
 
@@ -626,13 +783,24 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     acaoPrincipal: () => void abrirLayoutPet(4),
   });
   menuPetCt.painel.append(
-    itemMenu('4 campos: MIP 3D, PET, TC, Fusão', undefined, () => void abrirLayoutPet(4), menuPetCt.fechar),
-    itemMenu('3 campos: PET, TC, Fusão', undefined, () => void abrirLayoutPet(3), menuPetCt.fechar),
+    secaoMenu('Layouts PET/CT'),
+    itemMenu('MIP 3D, PET, TC e Fusão', undefined, () => void abrirLayoutPet(4), menuPetCt.fechar, {
+      svg: ICONES_MENU.petCt,
+      badge: '4 campos',
+    }),
+    itemMenu('PET, TC e Fusão', undefined, () => void abrirLayoutPet(3), menuPetCt.fechar, {
+      svg: ICONES_MENU.petCt,
+      badge: '3 campos',
+    }),
     divisorMenu(),
-    itemMenu('Comparação (6): atual em cima, anterior embaixo', undefined, () => void abrirLayoutComparacaoPetCt(), menuPetCt.fechar),
-    itemMenu('Comparar fusões lado a lado (modo Comparar)', undefined, () => void compararPetCt(), menuPetCt.fechar),
+    itemMenu('Comparação atual × anterior', undefined, () => void abrirLayoutComparacaoPetCt(), menuPetCt.fechar, {
+      svg: ICONES_MENU.comparar,
+      badge: '6 campos',
+    }),
+    itemMenu('Comparar fusões lado a lado', undefined, () => void compararPetCt(), menuPetCt.fechar, ICONES_MENU.comparar),
   );
 
+  const nadaComparar = (): void => {};
   const menuComparar = criarMenuSuspenso({
     rotulo: 'Comparar',
     svg: ICONES_BARRA.comparar,
@@ -640,40 +808,48 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     acaoPrincipal: () => void alternarModoComparar(),
   });
   const itemCadeadoMenu = itemMenu(
-    '🔒 Rolagem sincronizada por posição',
+    'Rolagem por posição',
     undefined,
     () => alternarCadeadoRolagemComparar(),
-    menuComparar.fechar,
+    nadaComparar,
+    { svg: ICONES_MENU.rolagem, switchPill: true },
   );
   const itemJanelaMenu = itemMenu(
-    '🔗 Sincronizar Janela / Nível',
+    'Janela e nível',
     undefined,
     () => alternarSincronizacaoJanelaComparar(),
-    menuComparar.fechar,
+    nadaComparar,
+    { svg: ICONES_MENU.janelaNivel, switchPill: true },
   );
   const itemZoomMenu = itemMenu(
-    '🔗 Sincronizar Zoom / Pan',
+    'Zoom e pan',
     undefined,
     () => alternarSincronizacaoZoomPanComparar(),
-    menuComparar.fechar,
+    nadaComparar,
+    { svg: ICONES_MENU.zoomPan, switchPill: true },
   );
   const itemZerarMenu = itemMenu(
     'Zerar deslocamento entre exames',
     undefined,
     () => zerarVinculoRolagemComparar(),
     menuComparar.fechar,
+    ICONES_MENU.zerar,
   );
   const itemSincEstudo = itemMenu(
-    '🔗 Sincronizar séries do mesmo estudo (automático)',
+    'Sincronizar séries do estudo',
     undefined,
     () => alternarSincroniaEstudo(),
-    menuComparar.fechar,
+    nadaComparar,
+    { svg: ICONES_MENU.estudo, switchPill: true },
   );
   menuComparar.painel.append(
+    itemMenu('Ativar ou sair do Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar, {
+      svg: ICONES_MENU.comparar,
+      destaque: true,
+    }),
     itemSincEstudo,
     divisorMenu(),
-    itemMenu('Ativar / sair do modo Comparar', undefined, () => void alternarModoComparar(), menuComparar.fechar),
-    divisorMenu(),
+    secaoMenu('Sincronia'),
     itemCadeadoMenu,
     itemJanelaMenu,
     itemZoomMenu,
@@ -728,49 +904,53 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     if (!secundaria) {
       mSeg.painel.append(
         itemMenu(
-          '🖥 Abrir ou focar a 2ª janela',
+          'Abrir ou focar 2ª janela',
           undefined,
           () => void abrirSegundaJanela(),
           mSeg.fechar,
+          { svg: ICONES_MENU.segundaJanela, badge: '2º monitor', badgeAzul: true, destaque: true },
         ),
-        divisorMenu(),
       );
     }
     const nada = (): void => {};
     const itemSincRolagemJanela = itemMenu(
-      '🔒 Sincronizar rolagem por posição (mm)',
+      'Rolagem por posição',
       undefined,
       () => {
         alternarOpcaoSincroniaJanelas('rolagem');
       },
       nada,
+      { svg: ICONES_MENU.rolagem, switchPill: true },
     );
     const itemSincLinhasJanela = itemMenu(
-      '✛ Linha de referência entre planos (Axial/Sagital/Coronal)',
+      'Linhas de referência',
       undefined,
       () => {
         alternarOpcaoSincroniaJanelas('linhas');
       },
       nada,
+      { svg: ICONES_MENU.linhas, switchPill: true },
     );
     const itemSincVoiJanela = itemMenu(
-      '🔗 Sincronizar janela / nível (mesma modalidade)',
+      'Janela e nível',
       undefined,
       () => {
         alternarOpcaoSincroniaJanelas('janela');
       },
       nada,
+      { svg: ICONES_MENU.janelaNivel, switchPill: true },
     );
     const itemSincLocJanela = itemMenu(
-      '┼ Sincronizar localizador (cruzinha 3D)',
+      'Localizador 3D',
       undefined,
       () => {
         alternarOpcaoSincroniaJanelas('localizador');
       },
       nada,
+      { svg: ICONES_MENU.localizador, switchPill: true },
     );
     const itemSempreTelaToda = itemMenu(
-      '🗖 Sempre abrir ocupando a tela toda (maximizada)',
+      'Sempre abrir maximizada',
       undefined,
       () => {
         const tl = telas();
@@ -784,15 +964,17 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         void aplicarExibicaoJanelaAtual();
       },
       nada,
+      { svg: ICONES_MENU.maximizada, switchPill: true },
     );
     const itemAlternarTelaCheia = itemMenu(
-      '⛶ Tela cheia sem bordas',
+      'Tela cheia sem bordas',
       'F11',
       () => void alternarTelaCheiaJanelaAtual(),
       mSeg.fechar,
+      ICONES_MENU.telaCheia,
     );
     const itemAutoAbrirSecundaria = itemMenu(
-      '🚀 Abrir 2ª janela automaticamente ao iniciar (com 2º monitor)',
+      'Autoabrir no 2º monitor',
       undefined,
       () => {
         const tl = telas();
@@ -801,9 +983,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         notificarPreferenciasParaOutraJanela();
       },
       nada,
+      { svg: ICONES_MENU.autoAbrir, switchPill: true },
     );
     const itemPadrao2x2e1x2 = itemMenu(
-      '💾 Padrão 2×2 (1ª janela) + 1×2 (2ª janela) e aplicar',
+      'Aplicar padrão rápido',
       undefined,
       () => {
         const tl = telas();
@@ -820,12 +1003,14 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         });
       },
       mSeg.fechar,
+      { svg: ICONES_MENU.padraoRapido, badge: '2×2 + 1×2' },
     );
     const itemConfigMonitores = itemMenu(
-      '⚙ Escolher monitor padrão e grades salvas…',
+      'Monitores e grades…',
       undefined,
       () => abrirConfiguracoes('telas'),
       mSeg.fechar,
+      ICONES_MENU.config,
     );
 
     const atualizarMenuSegundaJanela = (): void => {
@@ -843,11 +1028,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     document.addEventListener(EVENTO_SINCRONIA_JANELAS, atualizarMenuSegundaJanela);
     document.addEventListener(EVENTO_PREFERENCIAS, atualizarMenuSegundaJanela);
     mSeg.painel.append(
+      secaoMenu('Sincronia entre janelas'),
       itemSincRolagemJanela,
       itemSincLinhasJanela,
       itemSincVoiJanela,
       itemSincLocJanela,
       divisorMenu(),
+      secaoMenu('Janela e disposição'),
       itemPadrao2x2e1x2,
       itemSempreTelaToda,
       itemAutoAbrirSecundaria,
@@ -895,14 +1082,18 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
       const montarJanelas = (): void => {
         menuJanela.painel.replaceChildren();
+        menuJanela.painel.append(secaoMenu('Predefinições'));
         predefinicoes().forEach((p, i) => {
           menuJanela.painel.append(
             itemMenu(
-              `${p.rotulo} (WL ${p.centro} / WW ${p.largura})`,
+              p.rotulo,
               String(i + 1),
               () => void aplicarPredefinicao(i),
               menuJanela.fechar,
-              iconeFavoritoMenu(`janela:${Math.min(i, 5)}`),
+              {
+                svg: iconeFavoritoMenu(`janela:${Math.min(i, 5)}`),
+                badge: `WL ${p.centro} · WW ${p.largura}`,
+              },
             ),
           );
         });
@@ -915,7 +1106,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
             menuJanela.fechar,
             iconeFavoritoMenu('acao:inverter'),
           ),
-          itemMenu('Editar janelas…', undefined, () => abrirConfiguracoes('janelas'), menuJanela.fechar),
+          itemMenu(
+            'Editar janelas…',
+            undefined,
+            () => abrirConfiguracoes('janelas'),
+            menuJanela.fechar,
+            ICONES_MENU.config,
+          ),
         );
       };
       montarJanelas();
@@ -935,18 +1132,57 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     }
   }
 
-  // 4. Menu agrupado de Medidas e Ferramentas Avançadas (estilo RadiAnt)
+  // 4. Menu agrupado de Medidas e Ferramentas Avançadas em 2 colunas + rodapé horizontal
   const ferramentasMedida = FERRAMENTAS_PRIMARIAS.filter((f) => f.categoria === 'medida');
   let ultimaMedidaEscolhida: FerramentaPrimaria = ferramentasMedida[0]!;
 
   const menuMedidas = criarMenuSuspenso({
     rotulo: LEGENDAS_CURTAS_FERRAMENTA[ultimaMedidaEscolhida.nome] ?? ultimaMedidaEscolhida.rotulo,
     svg: iconeFavoritoMenu(ultimaMedidaEscolhida.nome),
-    dica: 'Ativar a ferramenta de medida atual; a seta ao lado abre a lista de medidas e a curva de ROI (perfusão)',
+    dica: 'Ativar a ferramenta de medida atual; a seta ao lado abre a lista de medidas e a curva de ROI',
     acaoPrincipal: () => escolherFerramentaPrimaria(ultimaMedidaEscolhida.nome),
   });
+  menuMedidas.painel.classList.add('painel-medidas');
 
+  const ORDEM_MEDIDAS_BASICAS = [
+    'Length',
+    'OrthogonalLengths',
+    'Angle',
+    'ArrowCustom',
+    'EllipticalROI',
+    'PlanarFreehandROI',
+    'Polyline',
+  ];
+  const ORDEM_MEDIDAS_AVANCADAS = [
+    'MidlineShift',
+    'LinearRatio',
+    'StenosisRatio',
+    'CobbAngleCustom',
+    'ReferenceAngle',
+  ];
+  const ORDEM_MEDIDAS_PET = ['SphereVOI', 'PetLesionVOI'];
+
+  const mapaMedidas = new Map(ferramentasMedida.map((f) => [f.nome, f]));
+  const usadasMedidas = new Set<string>();
+  const pegarMedidasOrdenadas = (nomes: string[]): FerramentaPrimaria[] => {
+    const lista: FerramentaPrimaria[] = [];
+    for (const nome of nomes) {
+      const f = mapaMedidas.get(nome);
+      if (f) {
+        lista.push(f);
+        usadasMedidas.add(nome);
+      }
+    }
+    return lista;
+  };
+  const medidasBasicas = pegarMedidasOrdenadas(ORDEM_MEDIDAS_BASICAS);
+  const medidasAvancadas = pegarMedidasOrdenadas(ORDEM_MEDIDAS_AVANCADAS);
+  const medidasPet = pegarMedidasOrdenadas(ORDEM_MEDIDAS_PET);
   for (const f of ferramentasMedida) {
+    if (!usadasMedidas.has(f.nome)) medidasBasicas.push(f);
+  }
+
+  const criarItemMedida = (f: FerramentaPrimaria): HTMLButtonElement => {
     const item = itemMenu(
       f.rotulo,
       teclaDaFerramenta(f).toUpperCase(),
@@ -959,30 +1195,70 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     );
     item.dataset.ferramenta = f.nome;
     botoesFerramenta.push(item);
-    menuMedidas.painel.append(item);
-  }
+    return item;
+  };
 
-  menuMedidas.painel.append(
+  const colBasicas = document.createElement('div');
+  colBasicas.className = 'medidas-col';
+  colBasicas.append(secaoMenu('Básicas'), ...medidasBasicas.map(criarItemMedida));
+
+  const divisorVerticalMedidas = document.createElement('div');
+  divisorVerticalMedidas.className = 'medidas-divisor-v';
+
+  const colDireitaMedidas = document.createElement('div');
+  colDireitaMedidas.className = 'medidas-col';
+  colDireitaMedidas.append(
+    secaoMenu('Avançadas'),
+    ...medidasAvancadas.map(criarItemMedida),
     divisorMenu(),
+    secaoMenu('PET e Perfusão', true),
+    ...medidasPet.map(criarItemMedida),
     itemMenu(
-      '📈 Gerar curva tempo-intensidade (Perfusão)',
+      'Curva tempo-intensidade',
       'Ctrl+Shift+E',
       () => void abrirCurvaPerfusaoAtiva(),
       menuMedidas.fechar,
-    ),
-    divisorMenu(),
-    itemMenu('Apagar medida selecionada', 'Del', () => void apagarSelecionadas(), menuMedidas.fechar),
-    itemMenu('Aparência e texto das medidas…', undefined, () => abrirConfiguracoes('medidas'), menuMedidas.fechar),
-    itemMenu(
-      'Apagar todas as medidas',
-      undefined,
-      () => {
-        void limparMedidas();
-      },
-      menuMedidas.fechar,
-      iconeFavoritoMenu('acao:limparMedidas'),
+      ICONES_MENU.perfusao,
     ),
   );
+
+  const gradeMedidas = document.createElement('div');
+  gradeMedidas.className = 'medidas-colunas';
+  gradeMedidas.append(colBasicas, divisorVerticalMedidas, colDireitaMedidas);
+
+  const botaoRodapeMedida = (
+    rotulo: string,
+    atalho: string | undefined,
+    acao: () => void,
+    perigo = false,
+  ): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = perigo ? 'btn-rodape-medida perigo' : 'btn-rodape-medida';
+    const span = document.createElement('span');
+    span.textContent = rotulo;
+    b.append(span);
+    if (atalho) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = atalho;
+      b.append(kbd);
+    }
+    b.addEventListener('click', () => {
+      menuMedidas.fechar();
+      acao();
+    });
+    return b;
+  };
+
+  const rodapeMedidas = document.createElement('div');
+  rodapeMedidas.className = 'medidas-rodape';
+  rodapeMedidas.append(
+    botaoRodapeMedida('Apagar selecionada', 'Del', () => void apagarSelecionadas()),
+    botaoRodapeMedida('Aparência e texto…', undefined, () => abrirConfiguracoes('medidas')),
+    botaoRodapeMedida('Apagar todas', undefined, () => void limparMedidas(), true),
+  );
+
+  menuMedidas.painel.append(gradeMedidas, rodapeMedidas);
 
   // 4b. Segmentação (fase 9.1): botão dividido com a última ferramenta e o menu das demais.
   let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
@@ -992,6 +1268,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     dica: 'Segmentar a série do quadro ativo (cria a segmentação no 1º uso). Seta: ferramentas e segmentos',
     acaoPrincipal: () => escolherFerramentaPrimaria(ultimaSegmentacao.nome),
   });
+  menuSegmentar.painel.append(secaoMenu('Ferramentas'));
   for (const f of FERRAMENTAS_SEGMENTACAO) {
     const item = itemMenu(
       f.rotulo,
@@ -1010,10 +1287,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   }
   menuSegmentar.painel.append(
     divisorMenu(),
-    itemMenu('+ Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar),
-    itemMenu('Salvar segmentação…', undefined, () => void salvarSegmentacaoAtiva(), menuSegmentar.fechar),
-    itemMenu('Abrir segmentação…', undefined, () => void abrirSegmentacaoDeArquivo(), menuSegmentar.fechar),
-    itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar),
+    secaoMenu('Segmentos'),
+    itemMenu('Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar, ICONES_MENU.adicionar),
+    itemMenu('Salvar segmentação…', undefined, () => void salvarSegmentacaoAtiva(), menuSegmentar.fechar, ICONES_MENU.salvar),
+    itemMenu('Abrir segmentação…', undefined, () => void abrirSegmentacaoDeArquivo(), menuSegmentar.fechar, ICONES_MENU.abrirSeg),
+    itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar, ICONES_MENU.limpar),
   );
 
   grupoNavegacao.append(menuMedidas.contentor, menuSegmentar.contentor);
@@ -1122,13 +1400,15 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     dica: 'Tocar ou pausar o cine / rotação MIP 3D (barra de espaço)',
     acaoPrincipal: () => alternarCine(),
   });
+  menuCine.painel.append(secaoMenu('Velocidade'));
   const botoesFps: HTMLButtonElement[] = [];
   for (const fps of VELOCIDADES_CINE) {
     const item = itemMenu(
-      `Velocidade: ${fps} quadros/s`,
+      `${fps} quadros/s`,
       undefined,
       () => definirVelocidadeCine(fps),
       menuCine.fechar,
+      ICONES_MENU.velocidade,
     );
     item.dataset.fps = String(fps);
     botoesFps.push(item);
@@ -1331,10 +1611,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         rotuloOffsetComparar.textContent = formatarDeslocamentoMm(comp.deslocamentoMm ?? 0);
         rotuloOffsetComparar.title = 'Deslocamento atual entre os referenciais dos dois exames';
       }
-      itemCadeadoMenu.setAttribute('aria-pressed', String(comp.rolagemLigada));
-      itemJanelaMenu.setAttribute('aria-pressed', String(comp.janelaLigada));
-      itemZoomMenu.setAttribute('aria-pressed', String(comp.zoomPanLigado));
     }
+    itemCadeadoMenu.setAttribute('aria-pressed', String(comp.rolagemLigada));
+    itemJanelaMenu.setAttribute('aria-pressed', String(comp.janelaLigada));
+    itemZoomMenu.setAttribute('aria-pressed', String(comp.zoomPanLigado));
 
     const temPilha = e.pilhaId !== null;
     menuCine.botaoPrincipal.disabled = !temPilha || e.mprAtivo;
