@@ -7,9 +7,10 @@ import { estado } from './state/store';
 import { telas } from './state/preferencias';
 import { iniciarAbrirPasta, type ResultadoAbertura } from './ui/abrirPasta';
 import { iniciarBarraFerramentas } from './ui/barraFerramentas';
+import { iniciarBarraLateral } from './ui/barraLateral';
 import { iniciarDadosPet } from './ui/dadosPet';
 import { iniciarMenuContexto } from './ui/menuContexto';
-import { iniciarPacs } from './ui/servidoresPacs';
+import { pacsDisponivel } from './pacs/transporteTauri';
 import { iniciarPainelSuv } from './ui/painelSuv';
 import { iniciarPainelSegmentos } from './ui/painelSegmentos';
 import {
@@ -25,6 +26,7 @@ import {
   EVENTO_ESTADO_VIEWPORTS,
   type EstadoViewports,
   limparViewports,
+  redimensionarViewports,
 } from './viewer/viewport2d';
 import {
   abrirOuPedirPilhaNaSegundaJanela,
@@ -52,6 +54,7 @@ function definirLateral(visivel: boolean): void {
   } catch {
     /* sem armazenamento: vale só nesta sessão */
   }
+  redimensionarViewports();
 }
 try {
   if (localStorage.getItem('visualizador.lateral') === '0') definirLateral(false);
@@ -63,7 +66,7 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
     e.preventDefault();
     definirLateral(appEl.classList.contains('lateral-recolhida'));
-  } else if (e.key === 'F11') {
+  } else if ((e.key === 'F11' && e.shiftKey) || (e.key === 'Enter' && e.altKey)) {
     e.preventDefault();
     void alternarTelaCheiaJanelaAtual();
   }
@@ -71,6 +74,14 @@ document.addEventListener('keydown', (e) => {
 
 const lista = obter('lista-estudos');
 const vazio = obter('vazio');
+iniciarBarraLateral({
+  appEl,
+  painelEl: obter('painel-lateral'),
+  listaEl: lista,
+  secundaria: ehJanelaSecundaria(),
+  aoRecolher: () => definirLateral(false),
+  aoMudarGeometria: () => redimensionarViewports(),
+});
 const gradeInicial = ehJanelaSecundaria() ? telas().gradeSecundaria : telas().gradePrincipal;
 iniciarBarraFerramentas(obter('ferramentas'));
 configurarViewport2d({ contentor: obter('area-viewports'), layoutInicial: gradeInicial });
@@ -98,17 +109,20 @@ function primeiraPilhaDeImagem(index: ResultadoAbertura['index']): StackNode | n
 }
 
 if (ehJanelaSecundaria()) {
+  document.title = 'KRB View — 2ª janela';
   obter('abrir').hidden = true;
   vazio.innerHTML =
     'Segunda janela pronta.<br /><span>Clique numa série ao lado ou envie pela primeira janela.</span>';
   iniciarModoSecundario({
     aoAtualizarIndice: (resultado) => {
       if (resultado.metas.length === 0) {
+        appEl.classList.remove('tem-exame');
         lista.replaceChildren();
         vazio.hidden = false;
         return;
       }
       estado.resultado = resultado;
+      appEl.classList.add('tem-exame');
       definirLateral(true);
       renderizarPainelEstudos(lista, resultado.index);
       marcarPilhaAtiva(lista, estado.pilhaAtiva?.id ?? null);
@@ -132,7 +146,10 @@ if (ehJanelaSecundaria()) {
     },
   });
 } else {
-  iniciarPacs();
+  if (pacsDisponivel()) {
+    void import('./ui/servidoresPacs').then((m) => m.iniciarPacs());
+    void import('./ui/configuracoes').then((m) => m.verificarAtualizacaoAoIniciarSeAtivo());
+  }
   iniciarCanalJanelaPrincipal();
 
   iniciarAbrirPasta(
@@ -147,6 +164,7 @@ if (ehJanelaSecundaria()) {
     },
     (resultado) => {
       estado.resultado = resultado;
+      appEl.classList.toggle('tem-exame', resultado.metas.length > 0);
       definirLateral(true);
       renderizarPainelEstudos(lista, resultado.index);
       if (!estado.pilhaAtiva) {
@@ -159,6 +177,7 @@ if (ehJanelaSecundaria()) {
     },
     () => {
       estado.resultado = null;
+      appEl.classList.remove('tem-exame');
       void limparViewports();
       lista.replaceChildren();
       vazio.hidden = false;

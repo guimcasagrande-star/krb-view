@@ -6,11 +6,15 @@
 import {
   favoritosMenu,
   interacao,
+  ITENS_PERSONALIZAVEIS_BARRA,
   JANELAS_PADRAO,
   MAX_JANELAS,
   medidas,
   type ModoTelaJanela,
+  type PosicaoBarraSeries,
   preferencias,
+  type PreferenciaGpu,
+  type Qualidade3d,
   restaurarAtalhos,
   restaurarFavoritosMenu,
   restaurarJanelas,
@@ -20,6 +24,7 @@ import {
   telas,
   TOTAL_FAVORITOS_MENU,
 } from '../state/preferencias';
+import { sincronizarPreferenciaGpuNativa } from '../viewer/iniciar';
 import { ACOES_ATALHO, teclaDaAcao } from '../tools/atalhos';
 import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
 import { iconeFavoritoMenu, listarOpcoesFavoritosMenu } from './menuContexto';
@@ -32,12 +37,30 @@ import {
   notificarPreferenciasParaOutraJanela,
   segundaJanelaDisponivel,
 } from '../viewer/segundaJanela';
+import {
+  abrirConfigTotalSegmentator,
+  consultarDiagnosticoTotalSeg,
+  EVENTO_DIAGNOSTICO_TOTALSEG,
+  formatarEspacoGb,
+  obterDiagnosticoCacheTotalSeg,
+  origemLegivelTotalSeg,
+  resumoCurtoTotalSeg,
+  tauriTotalSegDisponivel,
+} from './configTotalSegmentator';
 
 let caixa: HTMLDialogElement | undefined;
 let corpo: HTMLElement;
 let statusSalvoEl: HTMLElement | undefined;
 let timerStatusSalvo: number | undefined;
-export type AbaConfiguracoes = 'medidas' | 'interacao' | 'telas' | 'atalhos' | 'janelas';
+export type AbaConfiguracoes =
+  | 'medidas'
+  | 'interacao'
+  | 'barra3d'
+  | 'telas'
+  | 'atalhos'
+  | 'janelas'
+  | 'totalseg'
+  | 'atualizacoes';
 let abaAtual: AbaConfiguracoes = 'medidas';
 
 function confirmarSalvamento(mensagem = '✓ Configurações salvas neste computador'): void {
@@ -52,12 +75,15 @@ function confirmarSalvamento(mensagem = '✓ Configurações salvas neste comput
   }, 2600);
 }
 
-const ABAS: Array<{ id: AbaConfiguracoes; rotulo: string }> = [
+const ABAS: Array<{ id: AbaConfiguracoes; rotulo: string; apenasTauri?: boolean }> = [
   { id: 'medidas', rotulo: 'Medidas' },
   { id: 'interacao', rotulo: 'Mouse e zoom' },
+  { id: 'barra3d', rotulo: 'Barra e 3D' },
   { id: 'telas', rotulo: 'Telas e monitores' },
   { id: 'atalhos', rotulo: 'Atalhos' },
   { id: 'janelas', rotulo: 'Janelas' },
+  { id: 'totalseg', rotulo: 'TotalSegmentator (IA)', apenasTauri: true },
+  { id: 'atualizacoes', rotulo: 'Atualizações', apenasTauri: true },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -303,30 +329,44 @@ function abaInteracao(): HTMLElement {
 // Aba Atalhos
 // ---------------------------------------------------------------------------
 
+type CategoriaAtalho = 'todos' | 'navegacao' | 'medida' | 'segmentacao' | 'geral';
+
 interface ItemAtalho {
   chave: string;
   rotulo: string;
   padrao: string;
+  categoria: Exclude<CategoriaAtalho, 'todos'>;
   atual: () => string;
 }
+
+const ROTULOS_CAT_ATALHO: ReadonlyArray<readonly [CategoriaAtalho, string]> = [
+  ['todos', 'Todos'],
+  ['navegacao', 'Navegação'],
+  ['medida', 'Medidas'],
+  ['segmentacao', 'Segmentação'],
+  ['geral', 'Geral e layout'],
+];
 
 function itensAtalho(): ItemAtalho[] {
   const ferramentas = FERRAMENTAS_PRIMARIAS.map<ItemAtalho>((f) => ({
     chave: f.nome,
-    rotulo: f.rotulo,
+    rotulo: f.categoria === 'segmentacao' ? f.rotulo.replace(/^Segmentação:\s*/i, '') : f.rotulo,
     padrao: f.tecla,
+    categoria: f.categoria,
     atual: () => teclaDaFerramenta(f),
   }));
   const acoes = ACOES_ATALHO.map<ItemAtalho>((a) => ({
     chave: `acao:${a.id}`,
     rotulo: a.rotulo,
     padrao: a.tecla,
+    categoria: 'geral',
     atual: () => teclaDaAcao(a.id),
   }));
   return [...ferramentas, ...acoes];
 }
 
 let mensagemAtalho = '';
+let catAtalhoAtiva: CategoriaAtalho = 'navegacao';
 
 function abaAtalhos(): HTMLElement {
   const raiz = el('div', { class: 'cfg-aba' });
@@ -334,25 +374,53 @@ function abaAtalhos(): HTMLElement {
     el(
       'p',
       { class: 'cfg-dica' },
-      'Clique numa tecla e pressione a nova. Delete/Backspace volta ao padrão. As teclas 1 a 9 são das janelas; Esc, Delete, Espaço, setas e ? são fixas.',
+      'Clique numa tecla para alterar · Delete restaura · 1–9, Esc, Espaço, setas e ? são fixos.',
     ),
   );
   if (mensagemAtalho) raiz.append(el('p', { class: 'cfg-aviso' }, mensagemAtalho));
 
-  const itens = itensAtalho();
-  const tabela = el('table', { class: 'cfg-tabela' });
-  for (const item of itens) {
-    const b = el('button', { type: 'button', class: 'cfg-tecla', textContent: item.atual().toUpperCase() || '—' });
-    b.addEventListener('click', () => capturarTecla(b, item, itens));
-    tabela.append(el('tr', {}, el('td', {}, item.rotulo), el('td', {}, b)));
+  const todosItens = itensAtalho();
+  const subAbas = el('div', { class: 'cfg-subabas' });
+  for (const [cat, rotulo] of ROTULOS_CAT_ATALHO) {
+    const count = cat === 'todos' ? todosItens.length : todosItens.filter((x) => x.categoria === cat).length;
+    const b = el('button', {
+      type: 'button',
+      class: catAtalhoAtiva === cat ? 'ativa' : '',
+      textContent: `${rotulo} (${count})`,
+    });
+    b.addEventListener('click', () => {
+      catAtalhoAtiva = cat;
+      desenhar();
+    });
+    subAbas.append(b);
   }
+  raiz.append(subAbas);
+
+  const grupos: Array<Exclude<CategoriaAtalho, 'todos'>> =
+    catAtalhoAtiva === 'todos' ? ['navegacao', 'medida', 'segmentacao', 'geral'] : [catAtalhoAtiva];
+
+  for (const grupo of grupos) {
+    const lista = todosItens.filter((x) => x.categoria === grupo);
+    if (lista.length === 0) continue;
+    if (catAtalhoAtiva === 'todos') {
+      const titulo = ROTULOS_CAT_ATALHO.find(([c]) => c === grupo)?.[1] ?? grupo;
+      raiz.append(el('h3', {}, titulo));
+    }
+    const tabela = el('table', { class: 'cfg-tabela' });
+    for (const item of lista) {
+      const b = el('button', { type: 'button', class: 'cfg-tecla', textContent: item.atual().toUpperCase() || '—' });
+      b.addEventListener('click', () => capturarTecla(b, item, todosItens));
+      tabela.append(el('tr', {}, el('td', {}, item.rotulo), el('td', {}, b)));
+    }
+    raiz.append(tabela);
+  }
+
   raiz.append(
-    tabela,
     el(
       'div',
       { class: 'cfg-acoes-aba' },
       botaoTexto('💾 Salvar atalhos', () => confirmarSalvamento('✓ Atalhos salvos'), 'primario'),
-      botaoTexto('Restaurar atalhos padrão', () => {
+      botaoTexto('Restaurar padrão', () => {
         mensagemAtalho = '';
         restaurarAtalhos();
         confirmarSalvamento('✓ Atalhos padrão restaurados');
@@ -482,16 +550,16 @@ const OPCOES_GRADE_PADRAO: Array<[string, string]> = [
 ];
 
 const OPCOES_MODO_TELA: Array<[ModoTelaJanela, string]> = [
-  ['maximizada', 'Sempre abrir ocupando a tela toda (maximizada)'],
-  ['tela-cheia', 'Sempre abrir em tela cheia total (sem bordas / F11)'],
-  ['normal', 'Janela normal (tamanho restaurado)'],
+  ['maximizada', 'Maximizada'],
+  ['tela-cheia', 'Tela cheia (F11)'],
+  ['normal', 'Normal'],
 ];
 
 let monitoresCache: InfoMonitor[] = [];
 
 function formatarMonitor(m: InfoMonitor): string {
   const esc = Math.round(m.escala * 100);
-  return `${m.nome} (${m.largura}×${m.altura}, escala ${esc}%)`;
+  return `${m.nome} (${m.largura}×${m.altura}, ${esc}%)`;
 }
 
 function abaTelas(): HTMLElement {
@@ -503,14 +571,9 @@ function abaTelas(): HTMLElement {
   const raiz = el('div', { class: 'cfg-aba' });
 
   raiz.append(
-    el('h3', {}, 'Grades padrão ao abrir o programa'),
-    el(
-      'p',
-      { class: 'cfg-dica' },
-      'Ficam salvas neste computador. Exemplo: deixar 2×2 na janela principal e 1×2 na 2ª janela.',
-    ),
+    el('h3', {}, 'Grades padrão'),
     linha(
-      'Grade inicial da 1ª janela (monitor principal)',
+      '1ª janela',
       campoSelect(tl.gradePrincipal, OPCOES_GRADE_PADRAO, (v) => {
         tl.gradePrincipal = v;
         salvarENotificar();
@@ -518,7 +581,7 @@ function abaTelas(): HTMLElement {
       }),
     ),
     linha(
-      'Grade inicial da 2ª janela (outro monitor)',
+      '2ª janela',
       campoSelect(tl.gradeSecundaria, OPCOES_GRADE_PADRAO, (v) => {
         tl.gradeSecundaria = v;
         salvarENotificar();
@@ -529,14 +592,14 @@ function abaTelas(): HTMLElement {
       'div',
       { class: 'cfg-acoes-aba' },
       botaoTexto(
-        '💾 Salvar e aplicar grades padrão agora',
+        'Aplicar agora',
         () => {
-          confirmarSalvamento('✓ Grades padrão salvas e aplicadas');
+          confirmarSalvamento('✓ Grades aplicadas');
           void aplicarGradesPadraoAtuais();
         },
         'primario',
       ),
-      botaoTexto('Usar 2×2 na 1ª janela + 1×2 na 2ª janela como padrão', () => {
+      botaoTexto('Padrão 2×2 + 1×2', () => {
         tl.gradePrincipal = '2x2';
         tl.gradeSecundaria = '1x2';
         confirmarSalvamento('✓ Padrão 2×2 + 1×2 salvo');
@@ -554,7 +617,7 @@ function abaTelas(): HTMLElement {
 
   if (segundaJanelaDisponivel()) {
     const opcoesMonPrincipal: Array<[string, string]> = [
-      ['auto', 'Automático (monitor padrão do sistema)'],
+      ['auto', 'Automático (sistema)'],
       ...monitoresCache.map<[string, string]>((m) => [m.id, formatarMonitor(m)]),
     ];
     if (tl.monitorPrincipal !== 'auto' && !opcoesMonPrincipal.some(([id]) => id === tl.monitorPrincipal)) {
@@ -562,26 +625,29 @@ function abaTelas(): HTMLElement {
     }
 
     const opcoesMonSecundaria: Array<[string, string]> = [
-      ['auto', 'Automático (sempre enviar para o 2º monitor)'],
+      ['auto', 'Automático (2º monitor)'],
       ...monitoresCache.map<[string, string]>((m) => [m.id, formatarMonitor(m)]),
     ];
     if (tl.monitorSecundaria !== 'auto' && !opcoesMonSecundaria.some(([id]) => id === tl.monitorSecundaria)) {
       opcoesMonSecundaria.push([tl.monitorSecundaria, `Salvo: ${tl.monitorSecundaria}`]);
     }
 
-    const resumoMonitores = el(
-      'p',
-      { class: 'cfg-dica' },
+    const btnAtualizarMon = botaoTexto('🔄 Atualizar monitores', () => {
+      void listarMonitoresDisponiveis().then((lista) => {
+        monitoresCache = lista;
+        void aplicarExibicaoJanelaAtual();
+        if (abaAtual === 'telas') desenhar();
+      });
+    });
+    btnAtualizarMon.title =
       monitoresCache.length > 0
-        ? `Monitores identificados neste PC (${monitoresCache.length}): ${monitoresCache.map((m) => formatarMonitor(m)).join(' · ')}`
-        : 'Identificando monitores conectados…',
-    );
+        ? `Detectados (${monitoresCache.length}): ${monitoresCache.map((m) => formatarMonitor(m)).join(' · ')}`
+        : 'Atualizar lista de monitores conectados';
 
     raiz.append(
-      el('h3', {}, 'Monitores e tela cheia'),
-      resumoMonitores,
+      el('h3', {}, 'Monitores e tela'),
       linha(
-        'Monitor padrão da 1ª janela',
+        'Monitor 1ª janela',
         campoSelect(tl.monitorPrincipal, opcoesMonPrincipal, (v) => {
           tl.monitorPrincipal = v;
           salvarENotificar();
@@ -589,16 +655,16 @@ function abaTelas(): HTMLElement {
         }),
       ),
       linha(
-        'Monitor padrão da 2ª janela',
+        'Monitor 2ª janela',
         campoSelect(tl.monitorSecundaria, opcoesMonSecundaria, (v) => {
           tl.monitorSecundaria = v;
           salvarENotificar();
           void aplicarExibicaoJanelaAtual();
         }),
-        'Em "Automático", a 2ª janela vai sempre para o monitor diferente do da 1ª janela.',
+        'Em Automático, usa sempre o outro monitor.',
       ),
       linha(
-        'Tamanho ao abrir a 1ª janela',
+        'Tela 1ª janela',
         campoSelect(tl.modoTelaPrincipal, OPCOES_MODO_TELA, (v) => {
           tl.modoTelaPrincipal = v;
           salvarENotificar();
@@ -606,7 +672,7 @@ function abaTelas(): HTMLElement {
         }),
       ),
       linha(
-        'Tamanho ao abrir a 2ª janela',
+        'Tela 2ª janela',
         campoSelect(tl.modoTelaSecundaria, OPCOES_MODO_TELA, (v) => {
           tl.modoTelaSecundaria = v;
           salvarENotificar();
@@ -614,19 +680,22 @@ function abaTelas(): HTMLElement {
         }),
       ),
       linha(
-        'Abrir a 2ª janela automaticamente ao iniciar (quando houver 2º monitor)',
+        'Abrir 2ª janela ao iniciar',
         campoCheck(tl.abrirSecundariaAoIniciar, (v) => {
           tl.abrirSecundariaAoIniciar = v;
           salvarENotificar();
         }),
       ),
-      botaoTexto('🔄 Atualizar lista de monitores e posicionar janela agora', () => {
-        void listarMonitoresDisponiveis().then((lista) => {
-          monitoresCache = lista;
-          void aplicarExibicaoJanelaAtual();
-          if (abaAtual === 'telas') desenhar();
-        });
-      }),
+      el(
+        'div',
+        { class: 'cfg-acoes-aba' },
+        btnAtualizarMon,
+        el(
+          'span',
+          { class: 'cfg-dica' },
+          monitoresCache.length > 0 ? `${monitoresCache.length} monitor(es) detectado(s)` : 'Detectando monitores…',
+        ),
+      ),
     );
 
     if (monitoresCache.length === 0) {
@@ -639,24 +708,17 @@ function abaTelas(): HTMLElement {
     }
   }
 
-  raiz.append(
-    el('h3', {}, 'Visualizações predefinidas (1 e 2 monitores)'),
-    el(
-      'p',
-      { class: 'cfg-dica' },
-      'Combinações prontas que também aparecem no menu ⊞ da barra de ferramentas para aplicar com 1 clique.',
-    ),
-  );
+  raiz.append(el('h3', {}, 'Predefinições rápidas'));
 
-  const tabela = el('table', { class: 'cfg-tabela' });
+  const tabela = el('table', { class: 'cfg-tabela cfg-tabela-telas' });
   tabela.append(
     el(
       'tr',
       {},
       el('th', {}, 'Nome'),
-      el('th', {}, '1ª janela'),
-      el('th', {}, 'Abrir 2ª'),
-      el('th', {}, '2ª janela'),
+      el('th', {}, '1ª jan.'),
+      el('th', {}, '2ª'),
+      el('th', {}, '2ª jan.'),
       el('th', {}),
       el('th', {}),
     ),
@@ -684,17 +746,18 @@ function abaTelas(): HTMLElement {
       p.gradeSecundaria = v;
       salvarENotificar();
     });
-    const btnAplicar = botaoTexto('Aplicar e tornar padrão', () => {
-      confirmarSalvamento(`✓ "${p.rotulo}" aplicado e salvo como padrão`);
+    const btnAplicar = botaoTexto('Aplicar', () => {
+      confirmarSalvamento(`✓ "${p.rotulo}" aplicado`);
       void aplicarPresetVisualizacao(p);
       desenhar();
     });
+    btnAplicar.title = 'Aplicar e definir como padrão';
     const btnApagar = botaoTexto('✕', () => {
       tl.presets.splice(idx, 1);
       salvarENotificar();
       desenhar();
     });
-    btnApagar.title = 'Remover esta visualização';
+    btnApagar.title = 'Remover';
     tabela.append(
       el(
         'tr',
@@ -709,10 +772,10 @@ function abaTelas(): HTMLElement {
     );
   });
 
-  const btnAdicionar = botaoTexto('+ Adicionar visualização de grade', () => {
+  const btnAdicionar = botaoTexto('+ Nova predefinição', () => {
     tl.presets.push({
       id: `preset-${Date.now()}`,
-      rotulo: `2 monitores: ${tl.gradePrincipal} + ${tl.gradeSecundaria}`,
+      rotulo: `${tl.gradePrincipal} + ${tl.gradeSecundaria}`,
       gradePrincipal: tl.gradePrincipal,
       usarSegundaJanela: true,
       gradeSecundaria: tl.gradeSecundaria,
@@ -727,14 +790,14 @@ function abaTelas(): HTMLElement {
     el(
       'div',
       { class: 'cfg-acoes-aba' },
-      botaoTexto('💾 Salvar telas e monitores', () => {
-        confirmarSalvamento('✓ Configurações de telas e monitores salvas');
+      botaoTexto('💾 Salvar', () => {
+        confirmarSalvamento('✓ Configurações salvas');
         void aplicarGradesPadraoAtuais();
       }, 'primario'),
       btnAdicionar,
-      botaoTexto('Restaurar padrão de telas e monitores', () => {
+      botaoTexto('Restaurar padrão', () => {
         restaurarTelas();
-        confirmarSalvamento('✓ Padrão de telas e monitores restaurado');
+        confirmarSalvamento('✓ Padrão restaurado');
         void aplicarGradesPadraoAtuais();
         desenhar();
       }),
@@ -745,14 +808,488 @@ function abaTelas(): HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
+// Aba TotalSegmentator (IA)
+// ---------------------------------------------------------------------------
+
+function abaTotalSeg(): HTMLElement {
+  const raiz = el('div', { class: 'cfg-aba' });
+  const diag = obterDiagnosticoCacheTotalSeg();
+  const resumo = resumoCurtoTotalSeg(diag);
+
+  raiz.append(
+    el('h3', {}, 'Auto-Segmentação local (TotalSegmentator)'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Instale sob demanda em ambiente isolado (%LOCALAPPDATA%\\VisuTS) com GPU NVIDIA ou CPU, ou aponte uma instalação offline já existente.',
+    ),
+    el('div', { class: 'cfg-linha' }, el('span', {}, 'Status'), el('strong', { class: `ts-badge ts-badge-${resumo.classe}` }, resumo.texto)),
+  );
+
+  if (diag) {
+    const grade = el('dl', { class: 'ts-diag-grid' });
+    const item = (k: string, v: string): void => {
+      grade.append(el('dt', {}, k), el('dd', { title: v }, v));
+    };
+    item('Origem', origemLegivelTotalSeg(diag.origem));
+    item('Executável', diag.executavelCaminho ?? 'Não encontrado');
+    item('Pasta de pesos (TOTALSEG_HOME_DIR)', diag.pastaPesos);
+    item(
+      'GPU NVIDIA (nvidia-smi)',
+      diag.gpuNvidia ? `${diag.gpuNvidia.nome} (${Math.max(1, Math.round(diag.gpuNvidia.memoriaMb / 1024))} GB)` : 'Não detectada',
+    );
+    item(
+      'PyTorch / CUDA',
+      diag.versaoTorch
+        ? `torch ${diag.versaoTorch} · CUDA ${diag.cudaDisponivel ? `True (${diag.versaoCudaTorch ?? '?'})` : 'False'}`
+        : '—',
+    );
+    item(
+      'Pesos baixados',
+      diag.tarefasBaixadas
+        .filter((t) => t.baixado)
+        .map((t) => t.id)
+        .join(', ') || 'Nenhum completo',
+    );
+    item('Espaço livre em disco', formatarEspacoGb(diag.espacoLivreBytes));
+    raiz.append(grade);
+  } else {
+    raiz.append(el('p', { class: 'cfg-dica' }, 'Consultando diagnóstico do TotalSegmentator…'));
+    void consultarDiagnosticoTotalSeg(true);
+  }
+
+  const btnConfig = botaoTexto(
+    '⚙ Instalar / Configurar TotalSegmentator…',
+    () => abrirConfigTotalSegmentator(),
+    'primario',
+  );
+  const btnAtualizar = botaoTexto('🔄 Atualizar diagnóstico', () => {
+    void consultarDiagnosticoTotalSeg(true).then(() => {
+      if (caixa?.open && abaAtual === 'totalseg') desenhar();
+    });
+  });
+
+  raiz.append(el('div', { class: 'cfg-acoes-aba' }, btnConfig, btnAtualizar));
+  return raiz;
+}
+
+// ---------------------------------------------------------------------------
+// Aba Barra superior, Barra de séries e Desempenho 3D / GPU
+// ---------------------------------------------------------------------------
+
+const OPCOES_POSICAO_BARRA: Array<[PosicaoBarraSeries, string]> = [
+  ['esquerda', 'À esquerda (coluna vertical enxuta)'],
+  ['rodape', 'No rodapé (faixa horizontal)'],
+];
+
+const OPCOES_QUALIDADE_3D: Array<[Qualidade3d, string]> = [
+  ['desempenho', '⚡ Máximo desempenho (mais fluido, ideal para notebooks)'],
+  ['equilibrado', 'Equilibrado (fluido ao girar, nítido ao soltar)'],
+  ['alta', 'Alta resolução (máxima nitidez volumétrica)'],
+];
+
+const OPCOES_GPU: Array<[PreferenciaGpu, string]> = [
+  ['alto-desempenho', 'Placa de vídeo dedicada (Alto desempenho — recomendado)'],
+  ['economia', 'Placa integrada / CPU (Economia de bateria)'],
+  ['auto', 'Automático do sistema (Windows)'],
+];
+
+function abaBarraE3d(): HTMLElement {
+  const p = preferencias();
+  const tl = telas();
+  const salvarENotificar = (): void => {
+    salvarPreferencias();
+    notificarPreferenciasParaOutraJanela();
+  };
+
+  const raiz = el('div', { class: 'cfg-aba' });
+
+  raiz.append(
+    el('h3', {}, 'Desempenho 3D e Placa de Vídeo (Notebooks)'),
+    linha(
+      'Perfil de fluidez / resolução do 3D',
+      campoSelect(p.qualidade3d, OPCOES_QUALIDADE_3D, (v) => {
+        p.qualidade3d = v;
+        salvarENotificar();
+      }),
+      'Controla a densidade de raios e sombreamento durante o giro do 3D (também ajustável direto no quadro 3D).',
+    ),
+    linha(
+      'Preferência de adaptador gráfico (GPU)',
+      campoSelect(p.preferenciaGpu, OPCOES_GPU, (v) => {
+        p.preferenciaGpu = v;
+        sincronizarPreferenciaGpuNativa(v);
+        salvarENotificar();
+      }),
+      'Em notebooks com GPU integrada + dedicada (NVIDIA/AMD), solicita a GPU escolhida ao WebGL e ao WebView2.',
+    ),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Em notebooks híbridos, o WebGL aplica a preferência aos novos contextos e o motor nativo WebView2 fixa a placa escolhida ao reiniciar o programa.',
+    ),
+
+    el('h3', {}, 'Posição da barra de séries'),
+    linha(
+      'Posição na 1ª janela',
+      campoSelect(tl.posicaoBarraSeriesPrincipal, OPCOES_POSICAO_BARRA, (v) => {
+        tl.posicaoBarraSeriesPrincipal = v;
+        salvarENotificar();
+      }),
+      'Também é possível arrastar pela alça “⋮⋮ Séries” ou clicar em ⬓ / ◧ no topo da barra lateral.',
+    ),
+    ...(segundaJanelaDisponivel()
+      ? [
+          linha(
+            'Posição na 2ª janela',
+            campoSelect(tl.posicaoBarraSeriesSecundaria, OPCOES_POSICAO_BARRA, (v) => {
+              tl.posicaoBarraSeriesSecundaria = v;
+              salvarENotificar();
+            }),
+          ),
+        ]
+      : []),
+
+    el('h3', {}, 'Itens visíveis no menu superior'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Desmarque os botões que não usa com frequência para deixar a barra superior mais limpa (especialmente em monitores retrato). Os atalhos de teclado e o menu do botão direito continuam funcionando.',
+    ),
+  );
+
+  const gradeChecks = el('div', { class: 'cfg-grade-barra-topo' });
+  const ocultos = new Set(p.barraSuperiorOcultos);
+  for (const item of ITENS_PERSONALIZAVEIS_BARRA) {
+    const chk = campoCheck(!ocultos.has(item.id), (visivel) => {
+      if (visivel) ocultos.delete(item.id);
+      else ocultos.add(item.id);
+      p.barraSuperiorOcultos = Array.from(ocultos);
+      salvarENotificar();
+    });
+    const lbl = el('label', { class: 'cfg-item-barra-check' }, chk, el('span', {}, item.rotulo));
+    gradeChecks.append(lbl);
+  }
+
+  raiz.append(
+    gradeChecks,
+    el(
+      'div',
+      { class: 'cfg-acoes-aba' },
+      botaoTexto(
+        '📱 Barra enxuta (modo retrato)',
+        () => {
+          p.barraSuperiorOcultos = ITENS_PERSONALIZAVEIS_BARRA.filter((i) => i.retratoOcultar).map((i) => i.id);
+          confirmarSalvamento('✓ Barra enxuta aplicada');
+          desenhar();
+        },
+        'primario',
+      ),
+      botaoTexto('Mostrar todos os botões', () => {
+        p.barraSuperiorOcultos = [];
+        confirmarSalvamento('✓ Todos os botões exibidos');
+        desenhar();
+      }),
+    ),
+  );
+  return raiz;
+}
+
+// ---------------------------------------------------------------------------
+// Aba Atualizações (GitHub Releases)
+// ---------------------------------------------------------------------------
+
+interface EstadoAtualizador {
+  versaoAtual: string;
+  repositorio: string;
+  verificarAoIniciar: boolean;
+}
+
+interface ResultadoVerificacaoAtualizacao {
+  versaoAtual: string;
+  versaoRemota: string;
+  atualizacaoDisponivel: boolean;
+  titulo: string;
+  notas: string;
+  publicadoEm: string | null;
+  nomeInstalador: string | null;
+  urlInstalador: string | null;
+  tamanhoBytes: number | null;
+  sha256Esperado: string | null;
+  urlRelease: string | null;
+}
+
+let estadoAtualizadorCache: EstadoAtualizador | null = null;
+let rascunhoRepoAtualizador = '';
+let rascunhoRepoIniciado = false;
+let verificandoAtualizacao = false;
+let baixandoAtualizacao = false;
+let resultadoAtualizacao: ResultadoVerificacaoAtualizacao | null = null;
+let msgAtualizador: { texto: string; tipo: 'ok' | 'aviso' | 'erro' } | null = null;
+
+function invokeTauriAtualizador<T>(cmd: string, args?: Record<string, unknown>): Promise<T> | null {
+  const inv = (
+    globalThis as unknown as {
+      __TAURI__?: { core?: { invoke<R>(c: string, a?: Record<string, unknown>): Promise<R> } };
+    }
+  ).__TAURI__?.core?.invoke;
+  return inv ? inv<T>(cmd, args) : null;
+}
+
+async function carregarConfigAtualizador(): Promise<void> {
+  const prom = invokeTauriAtualizador<EstadoAtualizador>('atualizador_obter_config');
+  if (!prom) return;
+  try {
+    const est = await prom;
+    estadoAtualizadorCache = est;
+    if (!rascunhoRepoIniciado) {
+      rascunhoRepoAtualizador = est.repositorio;
+      rascunhoRepoIniciado = true;
+    }
+    if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+  } catch {
+    /* ignora */
+  }
+}
+
+async function salvarConfigAtualizador(repo: string, verificarAoIniciar: boolean): Promise<void> {
+  const prom = invokeTauriAtualizador<EstadoAtualizador>('atualizador_salvar_config', {
+    repositorio: repo,
+    verificarAoIniciar,
+  });
+  if (!prom) return;
+  try {
+    const est = await prom;
+    estadoAtualizadorCache = est;
+    rascunhoRepoAtualizador = est.repositorio;
+    msgAtualizador = { texto: '✓ Configuração de atualizações salva.', tipo: 'ok' };
+    confirmarSalvamento('✓ Configuração de atualizações salva');
+  } catch (e) {
+    msgAtualizador = { texto: e instanceof Error ? e.message : String(e), tipo: 'erro' };
+  }
+  if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+}
+
+async function verificarAtualizacaoAgora(): Promise<void> {
+  if (verificandoAtualizacao || baixandoAtualizacao) return;
+  const prom = invokeTauriAtualizador<ResultadoVerificacaoAtualizacao>('atualizador_verificar', {
+    repositorio: rascunhoRepoAtualizador.trim() || null,
+  });
+  if (!prom) return;
+  verificandoAtualizacao = true;
+  msgAtualizador = null;
+  if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+  try {
+    const res = await prom;
+    resultadoAtualizacao = res;
+    if (estadoAtualizadorCache && rascunhoRepoAtualizador.trim()) {
+      estadoAtualizadorCache.repositorio = rascunhoRepoAtualizador.trim();
+    }
+    msgAtualizador = res.atualizacaoDisponivel
+      ? {
+          texto: `🎉 Nova versão disponível: v${res.versaoRemota} (você está na v${res.versaoAtual}).`,
+          tipo: 'ok',
+        }
+      : {
+          texto: `✓ O KRB View já está na versão mais recente (v${res.versaoAtual}).`,
+          tipo: 'ok',
+        };
+  } catch (e) {
+    resultadoAtualizacao = null;
+    msgAtualizador = { texto: e instanceof Error ? e.message : String(e), tipo: 'erro' };
+  } finally {
+    verificandoAtualizacao = false;
+    if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+  }
+}
+
+async function baixarEInstalarAtualizacao(): Promise<void> {
+  if (baixandoAtualizacao || !resultadoAtualizacao?.urlInstalador || !resultadoAtualizacao.nomeInstalador) return;
+  const prom = invokeTauriAtualizador<void>('atualizador_baixar_e_instalar', {
+    urlInstalador: resultadoAtualizacao.urlInstalador,
+    nomeInstalador: resultadoAtualizacao.nomeInstalador,
+    sha256Esperado: resultadoAtualizacao.sha256Esperado,
+  });
+  if (!prom) return;
+  baixandoAtualizacao = true;
+  msgAtualizador = {
+    texto: `Baixando ${resultadoAtualizacao.nomeInstalador} e verificando integridade… O aplicativo será reiniciado automaticamente.`,
+    tipo: 'aviso',
+  };
+  if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+  try {
+    await prom;
+  } catch (e) {
+    baixandoAtualizacao = false;
+    msgAtualizador = { texto: e instanceof Error ? e.message : String(e), tipo: 'erro' };
+    if (caixa?.open && abaAtual === 'atualizacoes') desenhar();
+  }
+}
+
+function abaAtualizacoes(): HTMLElement {
+  const raiz = el('div', { class: 'cfg-aba' });
+  if (!estadoAtualizadorCache) {
+    void carregarConfigAtualizador();
+  }
+
+  const versao = estadoAtualizadorCache?.versaoAtual ?? '0.1.0';
+  raiz.append(
+    el('h3', {}, 'Atualizações do KRB View (GitHub Releases)'),
+    el(
+      'p',
+      { class: 'cfg-dica' },
+      'Verifica o último Release publicado no seu repositório do GitHub, compara a versão e baixa/executa o instalador assinado (.exe / .msi) com conferência de SHA-256. Nenhum dado do computador ou exame é enviado.',
+    ),
+    el('div', { class: 'cfg-linha' }, el('span', {}, 'Versão instalada'), el('strong', {}, `v${versao}`)),
+  );
+
+  const inpRepo = el('input', {
+    type: 'text',
+    value: rascunhoRepoAtualizador,
+    placeholder: 'Ex.: usuario/repositorio ou https://github.com/usuario/repositorio',
+    disabled: verificandoAtualizacao || baixandoAtualizacao,
+  });
+  inpRepo.style.minWidth = '300px';
+  inpRepo.addEventListener('input', () => {
+    rascunhoRepoAtualizador = inpRepo.value;
+  });
+
+  const btnSalvarRepo = botaoTexto('Salvar repositório', () => {
+    void salvarConfigAtualizador(rascunhoRepoAtualizador, Boolean(estadoAtualizadorCache?.verificarAoIniciar));
+  });
+  btnSalvarRepo.disabled = verificandoAtualizacao || baixandoAtualizacao;
+
+  const linhaRepo = el(
+    'div',
+    { class: 'ts-campo-manual' },
+    el('label', {}, 'Repositório GitHub das Releases'),
+    el('div', { class: 'ts-campo-linha' }, inpRepo, btnSalvarRepo),
+  );
+
+  const chkAoIniciar = campoCheck(Boolean(estadoAtualizadorCache?.verificarAoIniciar), (ativo) => {
+    void salvarConfigAtualizador(rascunhoRepoAtualizador, ativo);
+  });
+  chkAoIniciar.disabled = verificandoAtualizacao || baixandoAtualizacao;
+
+  const btnVerificar = botaoTexto(
+    verificandoAtualizacao ? '⏳ Consultando GitHub…' : '🔄 Verificar se há atualização agora',
+    () => void verificarAtualizacaoAgora(),
+    'primario',
+  );
+  btnVerificar.disabled = verificandoAtualizacao || baixandoAtualizacao;
+
+  raiz.append(
+    linhaRepo,
+    linha(
+      'Verificar automaticamente ao abrir o programa',
+      chkAoIniciar,
+      'Desligado por padrão para não fazer conexões sem você pedir. Quando ligado, avisa discretamente se sair versão nova.',
+    ),
+    el('div', { class: 'cfg-acoes-aba' }, btnVerificar),
+  );
+
+  if (msgAtualizador) {
+    raiz.append(
+      el('p', {
+        class: `ts-msg-status ${msgAtualizador.tipo}`,
+        textContent: msgAtualizador.texto,
+      }),
+    );
+  }
+
+  if (resultadoAtualizacao) {
+    const r = resultadoAtualizacao;
+    const cardRes = el('div', { class: 'ts-diag-card' });
+    cardRes.style.marginTop = '10px';
+    const mb =
+      r.tamanhoBytes && r.tamanhoBytes > 0
+        ? ` (${(r.tamanhoBytes / (1024 * 1024)).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB)`
+        : '';
+    cardRes.append(
+      el(
+        'div',
+        { class: 'ts-diag-topo' },
+        el('strong', {}, `${r.titulo} (v${r.versaoRemota})`),
+        el(
+          'span',
+          { class: `ts-badge ${r.atualizacaoDisponivel ? 'ts-badge-aviso' : 'ts-badge-ok'}` },
+          r.atualizacaoDisponivel ? 'Nova versão disponível' : 'Já atualizado',
+        ),
+      ),
+    );
+    if (r.notas) {
+      cardRes.append(el('pre', { class: 'ts-log', textContent: r.notas }));
+    }
+    if (r.atualizacaoDisponivel && r.urlInstalador && r.nomeInstalador) {
+      const btnBaixar = botaoTexto(
+        baixandoAtualizacao
+          ? '⏳ Baixando e iniciando instalador…'
+          : `⬇ Baixar e atualizar agora: ${r.nomeInstalador}${mb}`,
+        () => void baixarEInstalarAtualizacao(),
+        'primario',
+      );
+      btnBaixar.disabled = baixandoAtualizacao;
+      cardRes.append(el('div', { class: 'cfg-acoes-aba' }, btnBaixar));
+    } else if (r.atualizacaoDisponivel && !r.urlInstalador) {
+      cardRes.append(
+        el(
+          'p',
+          { class: 'cfg-aviso' },
+          'Release encontrada, mas ainda não há um arquivo .exe ou .msi anexado nos Assets dessa Release no GitHub.',
+        ),
+      );
+    }
+    raiz.append(cardRes);
+  }
+
+  return raiz;
+}
+
+/**
+ * Chamado uma vez na janela principal ao iniciar: só consulta o GitHub se o usuário tiver
+ * ativado explicitamente `verificarAoIniciar` e configurado um repositório.
+ */
+export async function verificarAtualizacaoAoIniciarSeAtivo(): Promise<void> {
+  const promCfg = invokeTauriAtualizador<EstadoAtualizador>('atualizador_obter_config');
+  if (!promCfg) return;
+  try {
+    const cfg = await promCfg;
+    estadoAtualizadorCache = cfg;
+    if (!cfg.verificarAoIniciar || !cfg.repositorio.trim()) return;
+    const res = await invokeTauriAtualizador<ResultadoVerificacaoAtualizacao>('atualizador_verificar', {
+      repositorio: cfg.repositorio,
+    });
+    if (res?.atualizacaoDisponivel) {
+      resultadoAtualizacao = res;
+      msgAtualizador = {
+        texto: `🎉 Nova versão disponível: v${res.versaoRemota} (atual: v${res.versaoAtual}).`,
+        tipo: 'ok',
+      };
+      if (
+        window.confirm(
+          `Uma nova versão do KRB View (v${res.versaoRemota}) está disponível!\n\nDeseja abrir a tela de Atualizações para baixar e instalar?`,
+        )
+      ) {
+        abrirConfiguracoes('atualizacoes');
+      }
+    }
+  } catch {
+    /* falha silenciosa na checagem em segundo plano */
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 function desenhar(): void {
   const abas: Record<AbaConfiguracoes, () => HTMLElement> = {
     medidas: abaMedidas,
     interacao: abaInteracao,
+    barra3d: abaBarraE3d,
     telas: abaTelas,
     atalhos: abaAtalhos,
     janelas: abaJanelas,
+    totalseg: abaTotalSeg,
+    atualizacoes: abaAtualizacoes,
   };
   corpo.replaceChildren(abas[abaAtual]());
   for (const b of caixa!.querySelectorAll<HTMLButtonElement>('.cfg-abas button')) {
@@ -765,7 +1302,9 @@ function criarCaixa(): HTMLDialogElement {
   const d = el('dialog', { id: 'configuracoes' });
   d.setAttribute('aria-label', 'Configurações');
   const abas = el('div', { class: 'cfg-abas' });
+  const emTauri = tauriTotalSegDisponivel();
   for (const a of ABAS) {
+    if (a.apenasTauri && !emTauri) continue;
     const b = botaoTexto(a.rotulo, () => {
       abaAtual = a.id;
       mensagemAtalho = '';
@@ -815,6 +1354,9 @@ function criarCaixa(): HTMLDialogElement {
   });
   d.addEventListener('click', (e) => {
     if (e.target === d) d.close();
+  });
+  document.addEventListener(EVENTO_DIAGNOSTICO_TOTALSEG, () => {
+    if (d.open && abaAtual === 'totalseg') desenhar();
   });
   document.body.append(d);
   caixa = d;

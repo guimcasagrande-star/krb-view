@@ -1,8 +1,10 @@
 // Não abre o console no Windows na versão final.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod atualizador;
 mod exames;
 mod ponte_pacs;
+mod totalseg;
 
 use serde::Serialize;
 use tauri::{Manager, PhysicalPosition, Position};
@@ -177,7 +179,7 @@ async fn janela_secundaria_abrir(
         "secundaria",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Visualizador DICOM — 2ª janela")
+    .title("KRB View — 2ª janela")
     .inner_size(1200.0, 850.0)
     .disable_drag_drop_handler();
 
@@ -232,9 +234,55 @@ async fn janela_alternar_tela_cheia(
     Ok(false)
 }
 
+fn caminho_preferencia_gpu() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(std::path::PathBuf::from))?;
+    Some(base.join("VisuTS").join("gpu_webview.txt"))
+}
+
+#[tauri::command]
+fn gpu_definir_preferencia(modo: String) -> Result<(), String> {
+    let limpo = match modo.trim() {
+        "alto-desempenho" | "economia" | "auto" => modo.trim(),
+        _ => "alto-desempenho",
+    };
+    if let Some(caminho) = caminho_preferencia_gpu() {
+        if let Some(pai) = caminho.parent() {
+            let _ = std::fs::create_dir_all(pai);
+        }
+        std::fs::write(&caminho, limpo)
+            .map_err(|e| format!("Falha ao salvar preferência de GPU: {e}"))?;
+    }
+    Ok(())
+}
+
+fn aplicar_preferencia_gpu_webview2() {
+    #[cfg(target_os = "windows")]
+    {
+        if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_some() {
+            return;
+        }
+        let modo = caminho_preferencia_gpu()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "alto-desempenho".to_string());
+        let flag = match modo.as_str() {
+            "alto-desempenho" => Some("--force_high_performance_gpu"),
+            "economia" => Some("--force_low_power_gpu"),
+            _ => None,
+        };
+        if let Some(arg) = flag {
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", arg);
+        }
+    }
+}
+
 fn main() {
+    aplicar_preferencia_gpu_webview2();
     tauri::Builder::default()
         .manage(ponte_pacs::Ponte::default())
+        .manage(totalseg::EstadoTotalSeg::default())
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::Destroyed = event {
@@ -259,10 +307,29 @@ fn main() {
             exames::exames_tamanho,
             exames::exames_apagar,
             exames::exames_limpar_cache,
+            exames::exames_gravar_temp,
+            exames::exames_limpar_temp,
+            exames::exames_rodar_totalsegmentator,
+            exames::exames_ler_saida_ts,
+            exames::exames_limpar_saida_ts,
+            totalseg::totalseg_diagnosticar,
+            totalseg::totalseg_escolher_executavel,
+            totalseg::totalseg_escolher_pasta_pesos,
+            totalseg::totalseg_salvar_config_manual,
+            totalseg::totalseg_limpar_config_customizada,
+            totalseg::totalseg_instalar,
+            totalseg::totalseg_baixar_pesos,
+            totalseg::totalseg_cancelar_instalacao,
+            totalseg::totalseg_salvar_licenca,
+            atualizador::atualizador_obter_config,
+            atualizador::atualizador_salvar_config,
+            atualizador::atualizador_verificar,
+            atualizador::atualizador_baixar_e_instalar,
             monitores_listar,
             janela_secundaria_abrir,
             janela_configurar_exibicao,
-            janela_alternar_tela_cheia
+            janela_alternar_tela_cheia,
+            gpu_definir_preferencia
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o visualizador");
