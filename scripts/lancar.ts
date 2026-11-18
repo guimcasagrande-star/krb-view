@@ -12,7 +12,7 @@
  */
 
 import { execFileSync, execSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const REPO = 'guimcasagrande-star/krb-view';
@@ -44,8 +44,28 @@ const cargoTxt = readFileSync(cargoPath, 'utf8');
 const cargoNovo = cargoTxt.replace(/^version\s*=\s*"[^"]+"/m, `version = "${argVersao}"`);
 writeFileSync(cargoPath, cargoNovo, 'utf8');
 
-console.log(`✓ Versão atualizada para ${argVersao}. Compilando instaladores...`);
+console.log(`✓ Versão atualizada para ${argVersao}. Limpando instaladores antigos e compilando...`);
+for (const sub of ['nsis', 'msi']) {
+  const dirBundle = resolve(raiz, 'src-tauri/target/release/bundle', sub);
+  if (existsSync(dirBundle)) {
+    for (const f of readdirSync(dirBundle)) {
+      if (f.endsWith('.exe') || f.endsWith('.msi')) {
+        try {
+          unlinkSync(resolve(dirBundle, f));
+        } catch {
+          /* ignora */
+        }
+      }
+    }
+  }
+}
 execSync('npm run tauri build', { stdio: 'inherit' });
+
+const exeGerado = resolve(raiz, `src-tauri/target/release/bundle/nsis/KRB View_${argVersao}_x64-setup.exe`);
+const destinoEntrega = resolve(raiz, 'entrega/KRB-View-instalador.exe');
+if (existsSync(exeGerado) && existsSync(resolve(raiz, 'entrega'))) {
+  copyFileSync(exeGerado, destinoEntrega);
+}
 
 const tag = `v${argVersao}`;
 execFileSync(
