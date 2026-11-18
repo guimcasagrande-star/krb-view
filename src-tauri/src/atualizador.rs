@@ -18,13 +18,32 @@ use tauri::{AppHandle, Manager};
 
 use crate::totalseg::configurar_janela_oculta;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub const REPOSITORIO_PADRAO_GITHUB: &str = "guimcasagrande-star/krb-view";
+
+fn repo_padrao() -> String {
+    REPOSITORIO_PADRAO_GITHUB.to_string()
+}
+
+fn padrao_verificar_ao_iniciar() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigAtualizador {
-    #[serde(default)]
+    #[serde(default = "repo_padrao")]
     pub repositorio: String,
-    #[serde(default)]
+    #[serde(default = "padrao_verificar_ao_iniciar")]
     pub verificar_ao_iniciar: bool,
+}
+
+impl Default for ConfigAtualizador {
+    fn default() -> Self {
+        Self {
+            repositorio: repo_padrao(),
+            verificar_ao_iniciar: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -65,7 +84,11 @@ pub fn ler_config_atualizador(caminho: &Path) -> ConfigAtualizador {
     let Ok(texto) = fs::read_to_string(caminho) else {
         return ConfigAtualizador::default();
     };
-    serde_json::from_str::<ConfigAtualizador>(&texto).unwrap_or_default()
+    let mut cfg = serde_json::from_str::<ConfigAtualizador>(&texto).unwrap_or_default();
+    if cfg.repositorio.trim().is_empty() {
+        cfg.repositorio = repo_padrao();
+    }
+    cfg
 }
 
 pub fn gravar_config_atualizador(caminho: &Path, cfg: &ConfigAtualizador) -> Result<(), String> {
@@ -279,7 +302,7 @@ pub fn atualizador_salvar_config(
     verificar_ao_iniciar: bool,
 ) -> Result<EstadoAtualizador, String> {
     let repo_limpo = if repositorio.trim().is_empty() {
-        String::new()
+        repo_padrao()
     } else {
         normalizar_repositorio_github(&repositorio)?
     };

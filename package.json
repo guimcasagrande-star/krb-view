@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "phantom": "node --experimental-strip-types scripts/gerar-phantom.ts",
     "pacs": "node --experimental-strip-types scripts/pacs.ts",
+    "lancar": "node --experimental-strip-types scripts/lancar.ts",
     "tauri": "tauri"
   },
   "dependencies": {

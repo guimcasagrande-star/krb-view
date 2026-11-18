@@ -1019,8 +1019,10 @@ interface ResultadoVerificacaoAtualizacao {
   urlRelease: string | null;
 }
 
+const REPOSITORIO_PADRAO_GITHUB = 'guimcasagrande-star/krb-view';
+
 let estadoAtualizadorCache: EstadoAtualizador | null = null;
-let rascunhoRepoAtualizador = '';
+let rascunhoRepoAtualizador = REPOSITORIO_PADRAO_GITHUB;
 let rascunhoRepoIniciado = false;
 let verificandoAtualizacao = false;
 let baixandoAtualizacao = false;
@@ -1183,7 +1185,7 @@ function abaAtualizacoes(): HTMLElement {
     linha(
       'Verificar automaticamente ao abrir o programa',
       chkAoIniciar,
-      'Desligado por padrão para não fazer conexões sem você pedir. Quando ligado, avisa discretamente se sair versão nova.',
+      'Ativado por padrão para avisar automaticamente quando uma nova versão for publicada em github.com/guimcasagrande-star/krb-view.',
     ),
     el('div', { class: 'cfg-acoes-aba' }, btnVerificar),
   );
