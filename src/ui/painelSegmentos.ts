@@ -68,7 +68,9 @@ import {
   type EstadoViewports,
   garantirSegmentacaoAtiva,
   ligarCortesProximosNoViewportAtivo,
+  pilhasDoMesmoEstudo,
   sairModoSegmentacaoUI,
+  trocarSequenciaAmbienteSegmentacao,
 } from '../viewer/viewport2d';
 import {
   abrirConfigTotalSegmentator,
@@ -502,9 +504,18 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
   blocoTituloPainel.className = 'seg-topo-textos';
   const titulo = document.createElement('h3');
   titulo.textContent = 'Segmentação da Sequência';
-  const subtituloSeriePainel = document.createElement('small');
-  subtituloSeriePainel.className = 'seg-subtitulo-serie';
-  blocoTituloPainel.append(titulo, subtituloSeriePainel);
+  const seletorSequenciaPainel = document.createElement('select');
+  seletorSequenciaPainel.className = 'seg-seletor-sequencia';
+  seletorSequenciaPainel.title = 'Trocar a sequência ativa dentro do mesmo exame';
+  seletorSequenciaPainel.setAttribute('aria-label', 'Selecionar sequência do exame');
+  seletorSequenciaPainel.addEventListener('change', () => {
+    const listaEstudo = pilhasDoMesmoEstudo(estado.pilhaAtiva);
+    const escolhida = listaEstudo.find((st) => st.id === seletorSequenciaPainel.value);
+    if (escolhida && escolhida.id !== estado.pilhaAtiva?.id) {
+      void trocarSequenciaAmbienteSegmentacao(escolhida);
+    }
+  });
+  blocoTituloPainel.append(titulo, seletorSequenciaPainel);
   cabecalhoPainel.append(blocoTituloPainel);
 
   const linhaFerramentas = document.createElement('div');
@@ -1084,19 +1095,33 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
     barraAmbiente.hidden = !visivel;
 
     if (pilha) {
-      const p0 = pilha.instances[0];
-      const resumoSerie = [
-        p0?.modality,
-        p0?.seriesDescription || (p0?.seriesNumber !== undefined ? `Série ${p0.seriesNumber}` : undefined),
-        `${pilha.instances.length} ${pilha.instances.length === 1 ? 'corte' : 'cortes'}`,
-      ]
-        .filter(Boolean)
-        .join(' · ');
+      const formatarResumoPilha = (st: typeof pilha): string => {
+        const p0 = st.instances[0];
+        return [
+          p0?.modality,
+          p0?.seriesDescription || (p0?.seriesNumber !== undefined ? `Série ${p0.seriesNumber}` : st.label),
+          `${st.instances.length} ${st.instances.length === 1 ? 'corte' : 'cortes'}`,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+      };
+      const resumoSerie = formatarResumoPilha(pilha);
       infoSerieAmbiente.textContent = resumoSerie;
-      subtituloSeriePainel.textContent = resumoSerie;
+
+      const sequenciasDoEstudo = pilhasDoMesmoEstudo(pilha);
+      seletorSequenciaPainel.replaceChildren();
+      for (const st of sequenciasDoEstudo) {
+        const opt = document.createElement('option');
+        opt.value = st.id;
+        opt.textContent = formatarResumoPilha(st);
+        opt.selected = st.id === pilha.id;
+        seletorSequenciaPainel.append(opt);
+      }
+      seletorSequenciaPainel.value = pilha.id;
+      seletorSequenciaPainel.disabled = sequenciasDoEstudo.length <= 1;
     } else {
       infoSerieAmbiente.textContent = '';
-      subtituloSeriePainel.textContent = '';
+      seletorSequenciaPainel.replaceChildren();
     }
 
     const emMpr = ultimoEstadoVp ? ultimoEstadoVp.mprAtivo : emModoMpr();

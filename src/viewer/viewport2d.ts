@@ -1093,6 +1093,73 @@ export async function definirVistaAmbienteSegmentacao(vista: 'mpr' | '2d' | '3d'
   }
 }
 
+/**
+ * Devolve todas as sequências (`StackNode`) pertencentes ao mesmo estudo (`StudyNode`) da sequência informada.
+ */
+export function pilhasDoMesmoEstudo(stack: StackNode | null | undefined): StackNode[] {
+  if (!stack) return [];
+  const estudo = estudoDaPilha(stack);
+  if (!estudo) return [stack];
+  const lista = estudo.series.flatMap((sr) => sr.stacks);
+  return lista.length > 0 ? lista : [stack];
+}
+
+/**
+ * Troca a sequência ativa dentro do Ambiente de Segmentação (mantendo o snapshot do exame de origem
+ * intacto para quando o usuário clicar em "Concluir e voltar ao exame").
+ */
+export async function trocarSequenciaAmbienteSegmentacao(novaPilha: StackNode): Promise<void> {
+  if (snapshotAmbienteSeg) {
+    snapshotAmbienteSeg.pilhaAlvo = novaPilha;
+  }
+  const tinha3d = slots.some((s) => !s.celula.hidden && s.planoSlot === '3d');
+  if (avaliarVolume(novaPilha).ok) {
+    if (mprAtivo || (!tinha3d && layoutAtual !== '1x1')) {
+      await montarLayoutMpr(novaPilha);
+      if (snapshotAmbienteSeg) {
+        estadoAntesDoMpr = [...snapshotAmbienteSeg.slotsAnteriores];
+      }
+    } else if (tinha3d) {
+      if (slots[1]) slots[1].planoSlot = 'original';
+      ativo = 0;
+      await definirLayout('1x1');
+      await abrirPilha2d(novaPilha);
+      await abrir3dParaPilhaAtiva();
+    } else {
+      ativo = 0;
+      await abrirPilha2d(novaPilha);
+    }
+  } else {
+    if (mprAtivo) {
+      estadoAntesDoMpr = [
+        {
+          pilha: novaPilha,
+          planoSlot: 'original',
+          modoSlab: 'normal',
+          slabMm: 1,
+          pilhaFusao: null,
+          fusao: { opacidade: 0.5, colormap: NOME_HOT_IRON, teto: 10, minimo: 0 },
+          corte: undefined,
+        },
+      ];
+      await sairDoMpr('1x1');
+    } else {
+      for (const s of slots) {
+        if (s.planoSlot === '3d' || s.planoSlot === 'mip-rotatorio') s.planoSlot = 'original';
+      }
+      ativo = 0;
+      if (layoutAtual !== '1x1') await definirLayout('1x1');
+      await abrirPilha2d(novaPilha);
+    }
+  }
+  const slotAlvo =
+    slots.find((s) => !s.celula.hidden && s.pilha?.id === novaPilha.id && !semCortes(s)) ??
+    slots[ativo] ??
+    slots[0];
+  await garantirSegmentacaoNoSlot(slotAlvo);
+  sincronizar();
+}
+
 function garantirSegmentacaoNoSlot(slot: Slot | undefined): Promise<void> {
   criandoSegmentacao ??= (async () => {
     const stack = slot?.pilha;

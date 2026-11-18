@@ -2102,15 +2102,27 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
 .seg-topo-textos {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+  width: 100%;
 }
-.seg-subtitulo-serie {
-  font-size: 11px;
+.seg-seletor-sequencia {
+  width: 100%;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--destaque);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  background: rgba(11, 19, 30, 0.75);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 5px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.seg-seletor-sequencia:hover:not(:disabled) {
+  border-color: var(--destaque);
+}
+.seg-seletor-sequencia:disabled {
+  cursor: default;
+  opacity: 0.9;
 }
 .seg-secao-card {
   display: flex;
