@@ -30,8 +30,13 @@ import {
   restaurar,
   teclaDaFerramenta,
 } from '../tools/grupo';
-import { EVENTO_PREFERENCIAS, salvarPreferencias, telas } from '../state/preferencias';
-import { abrirConfiguracoes } from './configuracoes';
+import { EVENTO_PREFERENCIAS, preferencias, salvarPreferencias, telas } from '../state/preferencias';
+import { autoJanelaCorteAtual, copiarMedidasSelecionadas } from '../tools/utilidadesJanelaEMedidas';
+import type { AbaConfiguracoes } from './configuracoes';
+
+function abrirConfiguracoes(aba?: AbaConfiguracoes): void {
+  void import('./configuracoes').then((m) => m.abrirConfiguracoes(aba));
+}
 import { iconeFavoritoMenu } from './menuContexto';
 import { alternarAjuda } from '../tools/atalhos';
 import { EVENTO_RECENTES, limparRecentes, listarRecentes } from '../state/recentes';
@@ -48,16 +53,39 @@ import {
   obterOpcoesSincroniaJanelas,
   segundaJanelaDisponivel,
 } from '../viewer/segundaJanela';
-import { exportarImagemAtiva } from './exportarImagem';
-import { abrirBuscarPacs, abrirExamesBaixadosPacs } from './buscarPacs';
-import { abrirServidoresPacs } from './servidoresPacs';
-import { FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
+import type { AbaPacs } from './buscarPacs';
+
+async function exportarImagemAtiva(formato: 'png' | 'jpeg'): Promise<string | null> {
+  const { exportarImagemAtiva: exportar } = await import('./exportarImagem');
+  return exportar(formato);
+}
+
+function abrirBuscarPacs(aba: AbaPacs = 'buscar'): void {
+  void import('./buscarPacs').then((m) => m.abrirBuscarPacs(aba));
+}
+
+function abrirExamesBaixadosPacs(): void {
+  void import('./buscarPacs').then((m) => m.abrirExamesBaixadosPacs());
+}
+
+function abrirServidoresPacs(): void {
+  void import('./servidoresPacs').then((m) => m.abrirServidoresPacs());
+}
+import {
+  definirModoSegmentacao,
+  emModoSegmentacao,
+  EVENTO_MODO_SEGMENTACAO,
+  FERRAMENTAS_SEGMENTACAO,
+} from '../segmentation/ferramentas';
 import {
   abrirSegmentacaoDeArquivo,
+  alternarModoSegmentacaoBarra,
   apagarSegmentacaoAtiva,
   novoSegmentoAtivo,
+  reconstruir3dDaSegmentacao,
   salvarSegmentacaoAtiva,
 } from './painelSegmentos';
+import { abrirConfigTotalSegmentator } from './configTotalSegmentator';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
@@ -98,6 +126,7 @@ import {
   type ModoSlab,
   type PlanoSlot,
   proximoLayout,
+  sairModoSegmentacaoUI,
   zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
 
@@ -220,22 +249,22 @@ const ICONES_MENU = {
 
 const ICONES_BOTAO_MOUSE: Record<Botao, string> = {
   esquerdo: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7H6A6 6 0 0 1 12 3z" fill="#38bdf8"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7H6A6 6 0 0 1 12 3z" fill="#00E5FF"/>',
   ),
   direito: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7h6A6 6 0 0 0 12 3z" fill="#38bdf8"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7h6A6 6 0 0 0 12 3z" fill="#00E5FF"/>',
   ),
   meio: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="10.6" y="4.5" width="2.8" height="5.2" rx="1" fill="#38bdf8"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="10.6" y="4.5" width="2.8" height="5.2" rx="1" fill="#00E5FF"/>',
   ),
   roda: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 4.2v5.8" stroke="#38bdf8" stroke-width="2.6"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 4.2v5.8" stroke="#00E5FF" stroke-width="2.6"/>',
   ),
   voltar: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="11.2" width="2.6" height="4.2" rx="1" fill="#38bdf8"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="11.2" width="2.6" height="4.2" rx="1" fill="#00E5FF"/>',
   ),
   avancar: svgBarra(
-    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="6.4" width="2.6" height="4.2" rx="1" fill="#38bdf8"/>',
+    '<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="3.5" y="6.4" width="2.6" height="4.2" rx="1" fill="#00E5FF"/>',
   ),
 };
 
@@ -262,11 +291,8 @@ const LEGENDAS_CURTAS_FERRAMENTA: Record<string, string> = {
   PlanarFreehandROI: 'Mão livre',
   Polyline: 'Polilinha',
   SegPincel: 'Pincel',
-  SegPincelLimiar: 'Limiar',
-  SegEsfera: 'Esfera',
-  PaintFill: 'Preencher',
-  SegBorracha: 'Borracha',
-  CrescerRegiao: 'Crescer',
+  SegBorracha: 'Corrigir',
+  SegVaso: 'Vasos',
 };
 
 function definirConteudoBotaoBarra(b: HTMLButtonElement, svg: string, legenda: string): void {
@@ -530,6 +556,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     dica: 'Abrir pasta DICOM (Ctrl+Shift+O) ou escolher arquivo/ZIP na seta ao lado',
     acaoPrincipal: () => dispararAbrirPasta(),
   });
+  menuAbrir.contentor.classList.add('menu-abrir-primario');
   menuAbrir.painel.append(
     itemMenu('Abrir pasta DICOM…', 'Ctrl+Shift+O', () => dispararAbrirPasta(), menuAbrir.fechar, ICONES_MENU.pasta),
     itemMenu('Abrir arquivos DICOM…', 'Ctrl+O', () => dispararAbrirArquivos(), menuAbrir.fechar, ICONES_MENU.arquivo),
@@ -573,7 +600,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
         svg: ICONES_MENU.baixados,
         destaque: true,
       }),
-      itemMenu('Buscar novos exames no PACS…', undefined, () => abrirBuscarPacs('buscar'), menuPacs.fechar, ICONES_MENU.buscar),
+      itemMenu('Buscar novos exames no PACS…', 'Ctrl+F', () => abrirBuscarPacs('buscar'), menuPacs.fechar, ICONES_MENU.buscar),
       divisorMenu(),
       itemMenu('Configurar servidores PACS…', undefined, () => abrirServidoresPacs(), menuPacs.fechar, ICONES_MENU.servidor),
     );
@@ -599,7 +626,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const menuLayout = criarMenuSuspenso({
     rotulo: '1x1',
     svg: ICONES_BARRA.grade,
-    dica: 'Alternar divisão de tela (tecla L)',
+    dica: 'Alternar divisão de tela (F4)',
     acaoPrincipal: () => void proximoLayout(),
   });
   // Seletor de grade: passe o mouse sobre os quadradinhos e clique para escolher linhas x colunas.
@@ -968,7 +995,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     );
     const itemAlternarTelaCheia = itemMenu(
       'Tela cheia sem bordas',
-      'F11',
+      'Shift+F11',
       () => void alternarTelaCheiaJanelaAtual(),
       mSeg.fechar,
       ICONES_MENU.telaCheia,
@@ -1044,6 +1071,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     );
   }
 
+  if (menuPacs) menuPacs.contentor.dataset.itemBarra = 'pacs';
+  menuPetCt.contentor.dataset.itemBarra = 'petct';
+  botaoLinhasRef.dataset.itemBarra = 'linhas';
+  menuComparar.contentor.dataset.itemBarra = 'comparar';
+  if (menuSegundaJanela) menuSegundaJanela.contentor.dataset.itemBarra = 'segundaTela';
+  botaoOverlay.dataset.itemBarra = 'texto';
+
   const elementosTela: HTMLElement[] = [
     ...(!secundaria ? [menuAbrir.contentor] : []),
     ...(!secundaria && menuPacs ? [menuPacs.contentor] : []),
@@ -1082,7 +1116,17 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
       const montarJanelas = (): void => {
         menuJanela.painel.replaceChildren();
-        menuJanela.painel.append(secaoMenu('Predefinições'));
+        menuJanela.painel.append(
+          itemMenu(
+            'Auto-janela neste corte',
+            '0',
+            () => void autoJanelaCorteAtual(),
+            menuJanela.fechar,
+            { svg: ICONES_MENU.janelaNivel, destaque: true },
+          ),
+          divisorMenu(),
+          secaoMenu('Predefinições'),
+        );
         predefinicoes().forEach((p, i) => {
           menuJanela.painel.append(
             itemMenu(
@@ -1127,6 +1171,10 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       );
       b.dataset.ferramenta = f.nome;
       if (f.apenasMpr) b.dataset.apenasMpr = 'true';
+      if (f.nome === 'Pan') b.dataset.itemBarra = 'pan';
+      else if (f.nome === 'Zoom') b.dataset.itemBarra = 'zoom';
+      else if (f.nome === 'Localizador3D') b.dataset.itemBarra = 'localizar';
+      else if (f.nome === 'GirarPlano') b.dataset.itemBarra = 'inclinar';
       botoesFerramenta.push(b);
       grupoNavegacao.append(b);
     }
@@ -1253,6 +1301,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const rodapeMedidas = document.createElement('div');
   rodapeMedidas.className = 'medidas-rodape';
   rodapeMedidas.append(
+    botaoRodapeMedida('Copiar selecionada', 'Ctrl+C', () => void copiarMedidasSelecionadas()),
     botaoRodapeMedida('Apagar selecionada', 'Del', () => void apagarSelecionadas()),
     botaoRodapeMedida('Aparência e texto…', undefined, () => abrirConfiguracoes('medidas')),
     botaoRodapeMedida('Apagar todas', undefined, () => void limparMedidas(), true),
@@ -1260,13 +1309,13 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   menuMedidas.painel.append(gradeMedidas, rodapeMedidas);
 
-  // 4b. Segmentação (fase 9.1): botão dividido com a última ferramenta e o menu das demais.
+  // 4b. Segmentação (fase 9.1): clique principal alterna entrada/saída do modo de segmentação; seta abre ferramentas e opções.
   let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
   const menuSegmentar = criarMenuSuspenso({
     rotulo: 'Segmentar',
     svg: iconeFavoritoMenu(ultimaSegmentacao.nome),
-    dica: 'Segmentar a série do quadro ativo (cria a segmentação no 1º uso). Seta: ferramentas e segmentos',
-    acaoPrincipal: () => escolherFerramentaPrimaria(ultimaSegmentacao.nome),
+    dica: 'Entrar ou sair do modo de segmentação (Esc também sai). Seta: ferramentas, 3D e arquivos',
+    acaoPrincipal: () => alternarModoSegmentacaoBarra(ultimaSegmentacao.nome),
   });
   menuSegmentar.painel.append(secaoMenu('Ferramentas'));
   for (const f of FERRAMENTAS_SEGMENTACAO) {
@@ -1275,6 +1324,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       undefined,
       () => {
         ultimaSegmentacao = f;
+        definirModoSegmentacao(true);
         escolherFerramentaPrimaria(f.nome);
       },
       menuSegmentar.fechar,
@@ -1285,15 +1335,44 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     botoesFerramenta.push(item);
     menuSegmentar.painel.append(item);
   }
+  const itemSairSegmentacaoMenu = itemMenu(
+    'Concluir / sair da segmentação',
+    'Esc',
+    () => sairModoSegmentacaoUI(),
+    menuSegmentar.fechar,
+    ICONES_MENU.zerar,
+  );
   menuSegmentar.painel.append(
+    itemSairSegmentacaoMenu,
     divisorMenu(),
+    itemMenu(
+      'Reconstruir 3D dos segmentos',
+      undefined,
+      () => void reconstruir3dDaSegmentacao(),
+      menuSegmentar.fechar,
+      { svg: ICONES_BARRA.cubo3d, destaque: true },
+    ),
     secaoMenu('Segmentos'),
     itemMenu('Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar, ICONES_MENU.adicionar),
     itemMenu('Salvar segmentação…', undefined, () => void salvarSegmentacaoAtiva(), menuSegmentar.fechar, ICONES_MENU.salvar),
     itemMenu('Abrir segmentação…', undefined, () => void abrirSegmentacaoDeArquivo(), menuSegmentar.fechar, ICONES_MENU.abrirSeg),
     itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar, ICONES_MENU.limpar),
+    ...(pacsDisponivel()
+      ? [
+          divisorMenu(),
+          secaoMenu('Auto-Segmentação (IA)'),
+          itemMenu(
+            'Instalar / Configurar TotalSegmentator…',
+            undefined,
+            () => abrirConfigTotalSegmentator(),
+            menuSegmentar.fechar,
+            ICONES_MENU.config,
+          ),
+        ]
+      : []),
   );
 
+  menuSegmentar.contentor.dataset.itemBarra = 'segmentar';
   grupoNavegacao.append(menuMedidas.contentor, menuSegmentar.contentor);
 
   // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
@@ -1303,27 +1382,41 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const menuTransformar = criarMenuSuspenso({
     rotulo: 'Girar',
     svg: iconeFavoritoMenu('acao:girar90'),
-    dica: 'Girar 90° no sentido horário ou abrir mais opções (espelhar, inverter, restaurar)',
-    acaoPrincipal: () => void girar90(),
+    dica: 'Girar 90° no sentido horário (Ctrl+]) ou abrir mais opções (espelhar, inverter, restaurar)',
+    acaoPrincipal: () => void girar90(1),
   });
   menuTransformar.painel.append(
     itemMenu(
-      'Girar 90° no sentido horário',
-      undefined,
-      () => void girar90(),
+      'Girar 90° horário',
+      'Ctrl+]',
+      () => void girar90(1),
+      menuTransformar.fechar,
+      iconeFavoritoMenu('acao:girar90'),
+    ),
+    itemMenu(
+      'Girar 90° anti-horário',
+      'Ctrl+[',
+      () => void girar90(-1),
       menuTransformar.fechar,
       iconeFavoritoMenu('acao:girar90'),
     ),
     itemMenu(
       'Espelhar horizontalmente',
-      undefined,
-      () => void espelhar(),
+      'Ctrl+Shift+[',
+      () => void espelhar(false),
+      menuTransformar.fechar,
+      iconeFavoritoMenu('acao:espelhar'),
+    ),
+    itemMenu(
+      'Espelhar verticalmente',
+      'Ctrl+Shift+]',
+      () => void espelhar(true),
       menuTransformar.fechar,
       iconeFavoritoMenu('acao:espelhar'),
     ),
     itemMenu(
       'Inverter preto e branco',
-      undefined,
+      'F11',
       () => void inverter(),
       menuTransformar.fechar,
       iconeFavoritoMenu('acao:inverter'),
@@ -1331,7 +1424,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     divisorMenu(),
     itemMenu(
       'Restaurar visualização inicial',
-      'Esc',
+      'Ctrl+R',
       () => {
         limparMirasLocalizador();
         void restaurar();
@@ -1343,7 +1436,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const botaoRestaurarRapido = botao(
     'Restaurar',
-    'Restaurar janela, zoom, rotação, espelhamento e limpar cruzinha',
+    'Restaurar janela, zoom, rotação, espelhamento e limpar cruzinha (Ctrl+R)',
     () => {
       limparMirasLocalizador();
       void restaurar();
@@ -1391,6 +1484,9 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     menuMouse.painel.append(linha);
   }
 
+  menuTransformar.contentor.dataset.itemBarra = 'girar';
+  botaoRestaurarRapido.dataset.itemBarra = 'restaurar';
+  menuMouse.contentor.dataset.itemBarra = 'mouse';
   grupoImagem.append(menuTransformar.contentor, botaoRestaurarRapido, menuMouse.contentor);
 
   // 6. Cine (Tocar/Pausar + Velocidade em q/s)
@@ -1400,6 +1496,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     dica: 'Tocar ou pausar o cine / rotação MIP 3D (barra de espaço)',
     acaoPrincipal: () => alternarCine(),
   });
+  menuCine.contentor.dataset.itemBarra = 'cine';
   menuCine.painel.append(secaoMenu('Velocidade'));
   const botoesFps: HTMLButtonElement[] = [];
   for (const fps of VELOCIDADES_CINE) {
@@ -1477,7 +1574,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const botaoMpr = botao(
     'MPR',
-    'Modo MPR completo: axial, coronal e sagital lado a lado (tecla R)',
+    'Modo MPR completo: axial, coronal e sagital lado a lado (F2 ou R)',
     () => void alternarMpr(),
     iconeFavoritoMenu('acao:mpr'),
   );
@@ -1490,17 +1587,24 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const botao3d = botao(
     '3D',
-    'Abrir a reconstrução 3D (renderização volumétrica) ao lado do corte 2D. No 3D: esquerdo gira, direito ou roda dão zoom, meio move',
+    'Abrir a reconstrução 3D (renderização volumétrica) ao lado do corte 2D (F3). No 3D: esquerdo gira, direito ou roda dão zoom, meio move',
     () => void alternar3d(),
     ICONES_BARRA.cubo3d,
   );
 
+  rotuloPlano.dataset.itemBarra = 'planoSelect';
+  rotuloModo.dataset.itemBarra = 'modoSlab';
+  controleSlab.dataset.itemBarra = 'modoSlab';
+  botaoMpr.dataset.itemBarra = 'mpr';
+  botaoMip3d.dataset.itemBarra = 'mip3d';
+  botao3d.dataset.itemBarra = '3d';
   grupoMpr3d.append(rotuloPlano, rotuloModo, controleSlab, botaoMpr, botaoMip3d, botao3d);
 
-  const config = botao('Ajustes', 'Configurações: medidas, atalhos e janelas', () => abrirConfiguracoes(), ICONES_BARRA.config);
+  const config = botao('Ajustes', 'Configurações: medidas, barra, 3D/GPU, atalhos e janelas', () => abrirConfiguracoes(), ICONES_BARRA.config);
   config.setAttribute('aria-label', 'Configurações');
   const ajuda = botao('Atalhos', 'Atalhos de teclado (tecla ?)', () => alternarAjuda(), ICONES_BARRA.ajuda);
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
+  ajuda.dataset.itemBarra = 'atalhos';
 
   contentor.append(
     grupoTela,
@@ -1515,6 +1619,40 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     config,
     ajuda,
   );
+
+  function aplicarPersonalizacaoBarra(): void {
+    const ocultos = new Set(preferencias().barraSuperiorOcultos);
+    for (const elItem of contentor.querySelectorAll<HTMLElement>('[data-item-barra]')) {
+      const id = elItem.dataset.itemBarra ?? '';
+      elItem.classList.toggle('oculto-barra', ocultos.has(id));
+    }
+    for (const grp of contentor.querySelectorAll<HTMLElement>(':scope > .grupo-botoes')) {
+      const algumVisivel = Array.from(grp.children).some(
+        (f) => f instanceof HTMLElement && !f.hidden && !f.classList.contains('oculto-barra'),
+      );
+      grp.classList.toggle('oculto-barra', !algumVisivel);
+    }
+    // Esconde separadores órfãos nas pontas ou duplicados
+    const filhos = Array.from(contentor.children) as HTMLElement[];
+    let houveItemVisivelAntes = false;
+    let ultimoSeparadorVisivel: HTMLElement | null = null;
+    for (const f of filhos) {
+      if (f.classList.contains('separador')) {
+        if (!houveItemVisivelAntes || ultimoSeparadorVisivel) {
+          f.classList.add('oculto-barra');
+        } else {
+          f.classList.remove('oculto-barra');
+          ultimoSeparadorVisivel = f;
+        }
+      } else if (!f.hidden && !f.classList.contains('oculto-barra')) {
+        houveItemVisivelAntes = true;
+        ultimoSeparadorVisivel = null;
+      }
+    }
+    if (ultimoSeparadorVisivel) ultimoSeparadorVisivel.classList.add('oculto-barra');
+  }
+  aplicarPersonalizacaoBarra();
+  document.addEventListener(EVENTO_PREFERENCIAS, aplicarPersonalizacaoBarra);
 
   /** Reflete na barra a ferramenta ativa do botão esquerdo e as atribuições do mouse. */
   function atualizarEstado(): void {
@@ -1542,12 +1680,14 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     if (segAtiva) {
       ultimaSegmentacao = segAtiva;
     }
+    const modoSeg = emModoSegmentacao();
+    itemSairSegmentacaoMenu.hidden = !modoSeg;
     definirConteudoBotaoBarra(
       menuSegmentar.botaoPrincipal,
       iconeFavoritoMenu(ultimaSegmentacao.nome),
-      segAtiva ? (LEGENDAS_CURTAS_FERRAMENTA[segAtiva.nome] ?? 'Segmentar') : 'Segmentar',
+      segAtiva ? (LEGENDAS_CURTAS_FERRAMENTA[segAtiva.nome] ?? 'Segmentar') : modoSeg ? 'Segmentando' : 'Segmentar',
     );
-    menuSegmentar.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(segAtiva)));
+    menuSegmentar.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(segAtiva || modoSeg)));
 
     for (const [botaoMouse, seletor] of camposMouse) {
       seletor.value = botaoAtribuido(botaoMouse);
@@ -1555,6 +1695,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   }
   atualizarEstado();
   document.addEventListener(EVENTO_BOTOES_MUDARAM, atualizarEstado);
+  document.addEventListener(EVENTO_MODO_SEGMENTACAO, atualizarEstado);
 
   function atualizarViewports(e: EstadoViewports): void {
     definirConteudoBotaoBarra(

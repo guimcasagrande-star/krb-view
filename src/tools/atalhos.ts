@@ -1,32 +1,52 @@
 /**
- * Atalhos de teclado do viewport (2D e MPR) e a tela de ajuda (tecla ?).
+ * Atalhos de teclado do viewport (2D, MPR e 3D) alinhados com o RadiAnt DICOM Viewer
+ * e tela de ajuda (tecla ?).
  */
 
+import { pacsDisponivel } from '../pacs/transporteTauri';
+import {
+  ajustarRaioPincelDelta,
+  definirModoSegmentacao,
+  ehFerramentaSegmentacao,
+  emModoSegmentacao,
+} from '../segmentation/ferramentas';
 import { preferencias } from '../state/preferencias';
 import {
   aplicarPredefinicao,
+  aplicarZoomFator,
   apagarSelecionadas,
   cancelar,
   escolherFerramentaPorTecla,
+  espelhar,
+  ferramentaPrimariaAtual,
+  girar90,
+  inverter,
   irParaCorte,
+  restaurar,
   rolarCortes,
 } from './grupo';
+import { autoJanelaCorteAtual, copiarMedidasSelecionadas } from './utilidadesJanelaEMedidas';
 import { dispararAbrirArquivos, dispararAbrirPasta } from '../ui/abrirPasta';
+import { selecionarSerieAdjacente } from '../ui/painelEstudos';
 import { alternarOverlay } from '../viewer/overlay';
 import {
   abrirCurvaPerfusaoAtiva,
+  alternar3d,
   alternarCine,
+  alternarLinhasReferencia,
   alternarMaximizado,
   alternarMpr,
+  alternarSincroniaEstudo,
   limparMirasLocalizador,
   proximoLayout,
+  selecionarPlanoOrtogonalAtivo,
 } from '../viewer/viewport2d';
 
 /** Ações com tecla própria, configuráveis (as ferramentas ficam em FERRAMENTAS_PRIMARIAS). */
 export const ACOES_ATALHO: Array<{ id: string; rotulo: string; tecla: string }> = [
-  { id: 'overlay', rotulo: 'Mostrar/esconder texto nos cantos', tecla: 'o' },
-  { id: 'layout', rotulo: 'Alternar layout (1x1, 1x2, 2x2)', tecla: 'l' },
-  { id: 'mpr', rotulo: 'Entrar/sair do MPR', tecla: 'r' },
+  { id: 'overlay', rotulo: 'Mostrar/esconder texto nos cantos (também F12)', tecla: 'o' },
+  { id: 'layout', rotulo: 'Alternar layout (1x1, 1x2, 2x2)', tecla: 'f4' },
+  { id: 'mpr', rotulo: 'Entrar/sair do MPR (também F2)', tecla: 'r' },
   { id: 'maximizar', rotulo: 'Maximizar/restaurar viewport ativo', tecla: 'f' },
 ];
 
@@ -35,32 +55,32 @@ export function teclaDaAcao(id: string): string {
 }
 
 const LINHAS_AJUDA: Array<[string, string]> = [
-  ['Ctrl+Shift+O / Ctrl+O', 'Abrir pasta DICOM / Abrir arquivo(s) DICOM'],
-  ['Botão esquerdo', 'Ferramenta escolhida na barra (padrão: passar cortes no 2D, crosshairs no MPR)'],
-  ['Botões direito, meio, laterais e roda', 'Escolhidos no menu 🖱 da barra (padrão: zoom, pan, avançar = distância, voltar = nenhum, roda = cortes)'],
-  ['S W H Z X C', 'Navegação: passar cortes, janela/nível, pan, zoom, ┼ localizar ponto, crosshairs (MPR)'],
-  ['I', 'Girar plano: arrastar inclina o plano em torno do ponto marcado (┼ Localizar, ou o centro do crosshair no MPR); clicar sem arrastar muda esse ponto; com Shift gira dentro do plano. Vale nas reconstruções'],
-  ['Clique em "Zoom" ou "Espessura" no canto', 'Zoom predefinido (100%, 125%, 150%...) e espessura do corte (média; em MIP/MinIP muda a espessura do slab)'],
-  ['Clique direito (sem arrastar)', 'Menu rápido: ferramentas, medidas, janelas, plano e apagar medida'],
-  ['Cubo no canto inferior direito', 'Mostra a orientação e o plano; clique nele para trocar de plano (axial, coronal, sagital)'],
-  ['D B Q N', 'Medidas lineares: distância, desvio linha média, proporção L1/L2 (razão), relação de estenose (%)'],
-  ['A K V T E M P', 'Ângulos e ROIs: ângulo (3 pts), ângulo de Cobb (4 pts), ângulo c/ eixo horiz./vert., seta, ROI elíptica, ROI mão livre, polilinha'],
-  ['Ctrl+Shift+E', 'Gerar curva tempo-intensidade / perfusão para as ROIs do corte'],
-  ['R', 'Entra ou sai do modo MPR (axial, coronal e sagital)'],
-  ['Ctrl + roda', 'Ajusta a espessura do slab (mm) no viewport sob o cursor'],
-  ['↑ ↓ (ou PgUp PgDn)', 'Corte anterior / próximo no viewport ativo'],
-  ['Home / End', 'Primeiro / último corte'],
-  ['Espaço', 'Toca ou pausa o cine (ou a rotação do MIP 3D, que abre parado em AP)'],
-  ['L', 'Alterna o layout 2D: 1x1, 1x2, 2x2 (outras grades: menu ⊞)'],
-  ['🖥 Abrir no outro monitor', 'Abre a 2ª janela (para outro monitor, na escala dele) com lista de séries e sincronia de rolagem, linhas de referência, janela/nível e cruzinha (┼)'],
-  ['F / 2 cliques', 'Maximiza o viewport (tela cheia da grade) e volta; com medida ativa, Shift+2 cliques'],
-  ['1 a 9', 'Janelas predefinidas, na ordem da lista (editável em ⚙ Configurações)'],
-  ['⚙', 'Configurações: aparência das medidas, mouse e zoom, atalhos e janelas'],
-  ['O', 'Mostra ou esconde o texto nos cantos (paciente, estudo, corte, janela, zoom)'],
-  ['Esc', 'Cancela a medida em andamento, limpa a cruzinha (┼) e volta à ferramenta padrão'],
-  ['Clique na medida', 'Seleciona (Shift soma). Onde o cursor vira mãozinha, arrastar move a medida'],
-  ['Delete / Backspace', 'Apaga a medida selecionada'],
-  ['?', 'Mostra ou esconde esta ajuda'],
+  ['Ctrl+O / Ctrl+Shift+O', 'Abrir arquivo(s) DICOM / Abrir pasta DICOM (padrão RadiAnt)'],
+  ['Ctrl+F', 'Buscar e baixar exames no PACS'],
+  ['B (ou S) · W · M (ou H) · Z', 'Passar cortes · Janela/nível · Pan (mover) · Zoom (padrão RadiAnt)'],
+  ['Ctrl++ / Ctrl+-', 'Aproximar / afastar o zoom do quadro ativo'],
+  ['L (ou D) · E · P · A · C · Y', 'Distância · ROI elíptica · ROI mão livre · Ângulo · Cobb · Seta (padrão RadiAnt)'],
+  ['G · Q · N · K · V · T · U · J', 'Ortogonal · Proporção · Estenose · Desvio · Âng. eixo · Polilinha · VOI 3D · Lesão PET'],
+  ['X · I', '┼ Localizar ponto sincronizado · ⟲ Girar plano oblíquo'],
+  ['F2 (ou R) · F3', 'Entrar/sair do MPR 3D · Abrir/fechar Reconstrução 3D (padrão RadiAnt)'],
+  ['Ctrl+Alt+1 / 2 / 3', 'Mudar para plano Coronal (1), Sagital (2) ou Axial (3) (padrão RadiAnt)'],
+  ['F4 · F5', 'Alternar grade (1x1, 1x2, 2x2) · Ligar/desligar sincronização entre séries (padrão RadiAnt)'],
+  ['F11 (ou Ctrl+I)', 'Inverter preto e branco / negativo (padrão RadiAnt)'],
+  ['F12 (ou O) · Ctrl+F12', 'Mostrar/esconder texto nos cantos · Mostrar/esconder linhas de referência'],
+  ['Ctrl+[ / Ctrl+]', 'Girar 90° anti-horário / horário (padrão RadiAnt)'],
+  ['Ctrl+Shift+[ / Ctrl+Shift+]', 'Espelhar horizontalmente / verticalmente (padrão RadiAnt)'],
+  ['Ctrl+R', 'Restaurar visualização inicial (janela, zoom, rotação e espelhamento)'],
+  ['↑ ↓ (ou PgUp/PgDn) · Home/End', 'Corte anterior / próximo · Primeiro / último corte'],
+  ['← / →', 'Série anterior / próxima na barra de séries (padrão RadiAnt)'],
+  ['1 a 9 · 0', 'Janelas predefinidas (1–9) · Auto-janela no corte atual (0)'],
+  ['Ctrl + roda', 'Ajustar espessura do slab (mm) no viewport sob o cursor'],
+  ['[ e ] (ou Alt + roda)', 'Diminuir / aumentar raio do pincel na segmentação (Shift+arrastar apaga)'],
+  ['Espaço', 'Tocar ou pausar o cine / rotação do MIP 3D'],
+  ['F / 2 cliques · Shift+F11', 'Maximizar viewport na grade · Tela cheia sem bordas da janela'],
+  ['Ctrl+B', 'Mostrar ou esconder a barra de séries (acoplável à esquerda ou rodapé)'],
+  ['Ctrl+C · Delete / Backspace', 'Copiar valor da medida selecionada · Apagar medida selecionada'],
+  ['Esc', 'Cancelar medida, sair do modo de segmentação e voltar à ferramenta padrão'],
+  ['?', 'Mostrar ou esconder esta ajuda'],
 ];
 
 let caixa: HTMLDialogElement | undefined;
@@ -72,7 +92,7 @@ function caixaAjuda(): HTMLDialogElement {
   d.setAttribute('aria-label', 'Atalhos de teclado');
 
   const titulo = document.createElement('h2');
-  titulo.textContent = 'Atalhos';
+  titulo.textContent = 'Atalhos de teclado (padrão RadiAnt)';
   d.append(titulo);
 
   const tabela = document.createElement('table');
@@ -133,7 +153,27 @@ export function iniciarAtalhos(): void {
   document.addEventListener('keydown', (e) => {
     if (digitandoEmCampo(e.target)) return;
 
-    // Combinações com Ctrl / Cmd:
+    // Ctrl + Alt + 1/2/3: planos ortogonais no padrão RadiAnt (1 Coronal, 2 Sagital, 3 Axial)
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
+      if (e.key === '1' || e.code === 'Digit1') {
+        e.preventDefault();
+        void selecionarPlanoOrtogonalAtivo('coronal');
+        return;
+      }
+      if (e.key === '2' || e.code === 'Digit2') {
+        e.preventDefault();
+        void selecionarPlanoOrtogonalAtivo('sagital');
+        return;
+      }
+      if (e.key === '3' || e.code === 'Digit3') {
+        e.preventDefault();
+        void selecionarPlanoOrtogonalAtivo('axial');
+        return;
+      }
+      return;
+    }
+
+    // Combinações com Ctrl / Cmd (sem Alt):
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const k = e.key.toLowerCase();
       if (k === 'o' && e.shiftKey) {
@@ -146,9 +186,63 @@ export function iniciarAtalhos(): void {
         dispararAbrirArquivos();
         return;
       }
+      if (k === 'f' && !e.shiftKey && pacsDisponivel()) {
+        e.preventDefault();
+        void import('../ui/buscarPacs').then((m) => m.abrirBuscarPacs('buscar'));
+        return;
+      }
+      if (k === 'r' && !e.shiftKey) {
+        e.preventDefault();
+        limparMirasLocalizador();
+        void restaurar();
+        return;
+      }
+      if (k === 'i' && !e.shiftKey) {
+        e.preventDefault();
+        void inverter();
+        return;
+      }
+      if (e.key === 'F12' && !e.shiftKey) {
+        e.preventDefault();
+        alternarLinhasReferencia();
+        return;
+      }
+      // Girar 90° e Espelhar no padrão RadiAnt (Ctrl+[ / Ctrl+] e Ctrl+Shift+[ / Ctrl+Shift+])
+      if (e.code === 'BracketLeft' || e.key === '[' || e.key === '{') {
+        e.preventDefault();
+        if (e.shiftKey) void espelhar(false);
+        else void girar90(-1);
+        return;
+      }
+      if (e.code === 'BracketRight' || e.key === ']' || e.key === '}') {
+        e.preventDefault();
+        if (e.shiftKey) void espelhar(true);
+        else void girar90(1);
+        return;
+      }
+      // Zoom in / out no padrão RadiAnt (Ctrl++ / Ctrl+-)
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        void aplicarZoomFator(1.18);
+        return;
+      }
+      if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        void aplicarZoomFator(1 / 1.18);
+        return;
+      }
       if (k === 'e' && e.shiftKey) {
         e.preventDefault();
         void abrirCurvaPerfusaoAtiva();
+        return;
+      }
+      if (k === 'c' && !e.shiftKey) {
+        const selecaoTexto = window.getSelection()?.toString() ?? '';
+        if (!selecaoTexto) {
+          void copiarMedidasSelecionadas().then((copiou) => {
+            if (copiou) e.preventDefault();
+          });
+        }
         return;
       }
       return;
@@ -161,10 +255,46 @@ export function iniciarAtalhos(): void {
         caixa.close();
         return;
       }
+      if (emModoSegmentacao()) {
+        definirModoSegmentacao(false);
+      }
       limparMirasLocalizador();
       void cancelar();
       return;
     }
+
+    // Teclas de função estilo RadiAnt (F2 MPR, F3 3D, F4 Grade, F5 Sincronia, F11 Inverter, F12 Overlay)
+    if (e.key === 'F2') {
+      e.preventDefault();
+      void alternarMpr();
+      return;
+    }
+    if (e.key === 'F3') {
+      e.preventDefault();
+      void alternar3d();
+      return;
+    }
+    if (e.key === 'F4' && !e.shiftKey) {
+      e.preventDefault();
+      void proximoLayout();
+      return;
+    }
+    if (e.key === 'F5') {
+      e.preventDefault();
+      alternarSincroniaEstudo();
+      return;
+    }
+    if (e.key === 'F11' && !e.shiftKey) {
+      e.preventDefault();
+      void inverter();
+      return;
+    }
+    if (e.key === 'F12' && !e.shiftKey) {
+      e.preventDefault();
+      alternarOverlay();
+      return;
+    }
+
     if (e.key === 'Delete' || e.key === 'Backspace') {
       void apagarSelecionadas();
       return;
@@ -173,6 +303,14 @@ export function iniciarAtalhos(): void {
       alternarAjuda();
       return;
     }
+
+    // Ajuste rápido do raio do pincel/corretor com [ e ] quando estiver segmentando
+    if ((e.key === '[' || e.key === ']') && (emModoSegmentacao() || ehFerramentaSegmentacao(ferramentaPrimariaAtual()))) {
+      e.preventDefault();
+      ajustarRaioPincelDelta(e.key === ']' ? 1 : -1);
+      return;
+    }
+
     const tecla = e.key.toLowerCase();
     if (tecla === teclaDaAcao('overlay')) {
       alternarOverlay();
@@ -207,12 +345,24 @@ export function iniciarAtalhos(): void {
       void rolarCortes(-1);
       return;
     }
+    if (e.key === 'ArrowLeft') {
+      if (selecionarSerieAdjacente(-1)) e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      if (selecionarSerieAdjacente(1)) e.preventDefault();
+      return;
+    }
     if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault();
       void irParaCorte(e.key === 'Home' ? 'primeiro' : 'ultimo');
       return;
     }
     if (escolherFerramentaPorTecla(tecla)) return;
+    if (e.key === '0') {
+      void autoJanelaCorteAtual();
+      return;
+    }
     if (/^[1-9]$/.test(e.key)) {
       void aplicarPredefinicao(Number(e.key) - 1);
     }

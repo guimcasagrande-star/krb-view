@@ -27,7 +27,7 @@ export interface OpcoesSincroniaJanelas {
 
 export const SINCRONIA_JANELAS_PADRAO: OpcoesSincroniaJanelas = {
   rolagem: true,
-  janela: true,
+  janela: false,
   localizador: true,
   linhas: true,
 };

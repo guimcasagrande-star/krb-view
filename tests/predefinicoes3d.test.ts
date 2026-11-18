@@ -29,17 +29,17 @@ describe('predefinições 3D', () => {
     for (const p of PREDEFINICOES_3D) expect(nomes.has(p.preset), p.preset).toBe(true);
   });
 
-  it('Osso próprio não mostra músculo nem órgãos (opacidade zero até 180 HU)', () => {
+  it('Osso 3D próprio não mostra músculo nem órgãos (opacidade zero até 150 HU)', () => {
     const osso = PRESETS_PROPRIOS.find((p) => p.name === 'Visualizador-Osso')!;
     const pontos = osso.scalarOpacity.split(' ').slice(1).map(Number);
     for (let i = 0; i < pontos.length; i += 2) {
-      if (pontos[i]! <= 180) expect(pontos[i + 1]).toBe(0);
+      if (pontos[i]! <= 150) expect(pontos[i + 1]).toBe(0);
     }
   });
 
-  it('TC abre em Osso, RM em RM padrão, PET não tem 3D', () => {
-    expect(predefinicaoPadrao('CT').rotulo).toBe('Osso');
-    expect(predefinicaoPadrao('CT').preset).toBe('Visualizador-Osso');
+  it('TC abre em Angio-TC (Vasos + Osso), RM em RM padrão, PET não tem 3D', () => {
+    expect(predefinicaoPadrao('CT').rotulo).toBe('Angio-TC (Vasos + Osso)');
+    expect(predefinicaoPadrao('CT').preset).toBe('Visualizador-Angio-VasosOsso');
     expect(predefinicaoPadrao('MR').preset).toBe('MR-Default');
     expect(modalidade3d('PT')).toBeNull();
     expect(modalidade3d('CT')).toBe('CT');

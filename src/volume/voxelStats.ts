@@ -141,24 +141,33 @@ export interface RegionGrowOptions extends ThresholdOptions {
   connectivity?: 6 | 26;
 }
 
+let bufferVisitados: Uint8Array | null = null;
+
+function obterBufferVisitados(tamanho: number): Uint8Array {
+  if (!bufferVisitados || bufferVisitados.length < tamanho) {
+    bufferVisitados = new Uint8Array(tamanho);
+  }
+  return bufferVisitados;
+}
+
 /**
- * Crescimento de região: parte da semente e inclui os voxels vizinhos
- * conectados cujo valor está na faixa. Devolve máscara vazia se a própria
- * semente estiver fora da faixa.
+ * Crescimento de região que devolve diretamente os índices lineares únicos aceitos.
+ * Usa fila dinâmica e reutiliza o buffer de visitados (limpando só os índices tocados),
+ * evitando alocar centenas de MB ou varrer o volume inteiro em TCs grandes.
  */
-export function regionGrow(volume: ScalarVolume, seedIjk: Vec3, options: RegionGrowOptions): Mask {
+export function regionGrowIndices(volume: ScalarVolume, seedIjk: Vec3, options: RegionGrowOptions): Int32Array {
   const { data, grid } = volume;
   const [nx, ny, nz] = grid.dims;
   const slice = nx * ny;
   const total = voxelCount(grid);
+  if (total === 0) return new Int32Array(0);
   const min = options.min ?? -Infinity;
   const max = options.max ?? Infinity;
-  const mask = new Uint8Array(total);
 
   const si = Math.round(seedIjk[0]);
   const sj = Math.round(seedIjk[1]);
   const sk = Math.round(seedIjk[2]);
-  if (si < 0 || sj < 0 || sk < 0 || si >= nx || sj >= ny || sk >= nz) return mask;
+  if (si < 0 || sj < 0 || sk < 0 || si >= nx || sj >= ny || sk >= nz) return new Int32Array(0);
 
   const accept = (idx: number, k: number): boolean => {
     if (options.within && options.within[idx] === 0) return false;
@@ -167,7 +176,7 @@ export function regionGrow(volume: ScalarVolume, seedIjk: Vec3, options: RegionG
   };
 
   const seed = si + sj * nx + sk * slice;
-  if (!accept(seed, sk)) return mask;
+  if (!accept(seed, sk)) return new Int32Array(0);
 
   const neighbors: [number, number, number][] = [];
   for (let dk = -1; dk <= 1; dk++) {
@@ -181,29 +190,50 @@ export function regionGrow(volume: ScalarVolume, seedIjk: Vec3, options: RegionG
     }
   }
 
-  // Fila em vetor tipado: cada voxel entra no máximo uma vez.
-  const queue = new Int32Array(total);
+  const visited = obterBufferVisitados(total);
+  let queue = new Int32Array(Math.min(total, 65536));
   let head = 0;
   let tail = 0;
-  queue[tail++] = seed;
-  mask[seed] = 1;
-  while (head < tail) {
-    const idx = queue[head++]!;
-    const k = Math.floor(idx / slice);
-    const rest = idx - k * slice;
-    const j = Math.floor(rest / nx);
-    const i = rest - j * nx;
-    for (const [di, dj, dk] of neighbors) {
-      const ni = i + di;
-      const nj = j + dj;
-      const nk = k + dk;
-      if (ni < 0 || nj < 0 || nk < 0 || ni >= nx || nj >= ny || nk >= nz) continue;
-      const nIdx = ni + nj * nx + nk * slice;
-      if (mask[nIdx] === 1 || !accept(nIdx, nk)) continue;
-      mask[nIdx] = 1;
-      queue[tail++] = nIdx;
+  try {
+    queue[tail++] = seed;
+    visited[seed] = 1;
+    while (head < tail) {
+      const idx = queue[head++]!;
+      const k = Math.floor(idx / slice);
+      const rest = idx - k * slice;
+      const j = Math.floor(rest / nx);
+      const i = rest - j * nx;
+      for (const [di, dj, dk] of neighbors) {
+        const ni = i + di;
+        const nj = j + dj;
+        const nk = k + dk;
+        if (ni < 0 || nj < 0 || nk < 0 || ni >= nx || nj >= ny || nk >= nz) continue;
+        const nIdx = ni + nj * nx + nk * slice;
+        if (visited[nIdx] === 1 || !accept(nIdx, nk)) continue;
+        visited[nIdx] = 1;
+        if (tail === queue.length) {
+          const proxima = new Int32Array(Math.min(total, queue.length * 2));
+          proxima.set(queue);
+          queue = proxima;
+        }
+        queue[tail++] = nIdx;
+      }
     }
+    return queue.slice(0, tail);
+  } finally {
+    for (let n = 0; n < tail; n++) visited[queue[n]!] = 0;
   }
+}
+
+/**
+ * Crescimento de região: parte da semente e inclui os voxels vizinhos
+ * conectados cujo valor está na faixa. Devolve máscara vazia se a própria
+ * semente estiver fora da faixa.
+ */
+export function regionGrow(volume: ScalarVolume, seedIjk: Vec3, options: RegionGrowOptions): Mask {
+  const indices = regionGrowIndices(volume, seedIjk, options);
+  const mask = new Uint8Array(voxelCount(volume.grid));
+  for (let n = 0; n < indices.length; n++) mask[indices[n]!] = 1;
   return mask;
 }
 

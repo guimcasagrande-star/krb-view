@@ -64,10 +64,50 @@ export function rotulosOrientacao(camera: Types.ICamera): RotulosOrientacao | nu
   };
 }
 
-const PASSOS_MM = [10, 20, 50, 100, 200, 500];
+const PASSOS_MM = [5, 10, 20, 50, 100, 200, 500];
+
+export interface GeometriaRegua {
+  xLinha: number;
+  topo: number;
+  yBase: number;
+  passoMm: number;
+  nMajores: number;
+}
 
 /**
- * Desenha a régua vertical no canto direito: tracinhos a cada 1/5 do passo e números em cm.
+ * Calcula a posição da régua compacta à esquerda, centralizada verticalmente e ocupando
+ * cerca de 1/3 da altura do quadro (sem encostar nos cantos superior/inferior nem na letra de orientação).
+ */
+export function calcularGeometriaRegua(
+  largura: number,
+  altura: number,
+  pxPorMm: number,
+): GeometriaRegua | null {
+  if (!(pxPorMm > 0) || largura < 120 || altura < 120) return null;
+  const comprimentoMax = Math.max(36, Math.min(Math.floor(altura / 3), altura - 104));
+  // Escolhe o passo (mm) para caber ao menos 1 divisão inteira dentro de ~1/3 da altura
+  const passoMm =
+    PASSOS_MM.find((p) => p * pxPorMm >= 28 && p * pxPorMm <= comprimentoMax) ??
+    PASSOS_MM.find((p) => p * pxPorMm <= comprimentoMax) ??
+    PASSOS_MM[0]!;
+  const nMajores = Math.floor(comprimentoMax / (passoMm * pxPorMm));
+  if (nMajores < 1) return null;
+  const comprimentoReal = nMajores * passoMm * pxPorMm;
+  const centroY = altura / 2;
+  const topo = centroY - comprimentoReal / 2;
+  const yBase = centroY + comprimentoReal / 2;
+  return {
+    xLinha: 26,
+    topo,
+    yBase,
+    passoMm,
+    nMajores,
+  };
+}
+
+/**
+ * Desenha a régua vertical compacta no lado esquerdo (centralizada, ~1/3 da altura):
+ * tracinhos a cada 1/5 do passo e números em cm.
  * `pxPorMm` vem do viewport (distância na tela de 1 mm no plano da imagem).
  */
 export function desenharRegua(
@@ -86,20 +126,14 @@ export function desenharRegua(
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
-  if (!(pxPorMm > 0) || largura < 120 || altura < 120) return;
+  const geo = calcularGeometriaRegua(largura, altura, pxPorMm);
+  if (!geo) return;
 
-  const passo = PASSOS_MM.find((p) => p * pxPorMm >= 45) ?? PASSOS_MM[PASSOS_MM.length - 1]!;
-  const xLinha = largura - 12;
-  const yBase = altura - 56;
-  const comprimentoMax = altura - 56 - 40;
-  const nMajores = Math.floor(comprimentoMax / (passo * pxPorMm));
-  if (nMajores < 1) return;
-  const topo = yBase - nMajores * passo * pxPorMm;
-
+  const { xLinha, topo, yBase, passoMm, nMajores } = geo;
   const cor = fundoClaro ? '#111111' : '#f2f5f7';
   const halo = fundoClaro ? '#ffffff' : '#000000';
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'right';
+  ctx.font = '10.5px system-ui, sans-serif';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
 
   const tracar = (corTraco: string, largLinha: number): void => {
@@ -108,12 +142,12 @@ export function desenharRegua(
     ctx.beginPath();
     ctx.moveTo(xLinha, yBase);
     ctx.lineTo(xLinha, topo);
-    const minor = passo / 5;
+    const minor = passoMm / 5;
     for (let m = 0; m <= nMajores * 5; m++) {
       const y = yBase - m * minor * pxPorMm;
       const major = m % 5 === 0;
       ctx.moveTo(xLinha, y);
-      ctx.lineTo(xLinha - (major ? 9 : 4), y);
+      ctx.lineTo(xLinha + (major ? 7 : 3.5), y);
     }
     ctx.stroke();
   };
@@ -121,17 +155,18 @@ export function desenharRegua(
   tracar(cor, 1);
 
   for (let n = 0; n <= nMajores; n++) {
-    const y = yBase - n * passo * pxPorMm;
-    const texto = String((n * passo) / 10).replace('.', ',');
+    const y = yBase - n * passoMm * pxPorMm;
+    const cm = (n * passoMm) / 10;
+    const texto = Number.isInteger(cm) ? String(cm) : cm.toFixed(1).replace('.', ',');
     ctx.lineWidth = 3;
     ctx.strokeStyle = halo;
-    ctx.strokeText(texto, xLinha - 13, y);
+    ctx.strokeText(texto, xLinha + 10, y);
     ctx.fillStyle = cor;
-    ctx.fillText(texto, xLinha - 13, y);
+    ctx.fillText(texto, xLinha + 10, y);
   }
   ctx.lineWidth = 3;
   ctx.strokeStyle = halo;
-  ctx.strokeText('cm', xLinha - 4, topo - 10);
+  ctx.strokeText('cm', xLinha, topo - 9);
   ctx.fillStyle = cor;
-  ctx.fillText('cm', xLinha - 4, topo - 10);
+  ctx.fillText('cm', xLinha, topo - 9);
 }

@@ -54,6 +54,9 @@ export interface PrefsInteracao {
 }
 
 export type ModoTelaJanela = 'normal' | 'maximizada' | 'tela-cheia';
+export type PosicaoBarraSeries = 'esquerda' | 'rodape';
+export type Qualidade3d = 'desempenho' | 'equilibrado' | 'alta';
+export type PreferenciaGpu = 'auto' | 'alto-desempenho' | 'economia';
 
 export interface PresetVisualizacao {
   id: string;
@@ -78,6 +81,14 @@ export interface PrefsTelas {
   monitorSecundaria: string;
   /** Se verdadeiro, abre a 2ª janela automaticamente ao iniciar quando houver 2º monitor. */
   abrirSecundariaAoIniciar: boolean;
+  /** Posição acoplada da barra de séries na janela principal ('esquerda' ou 'rodape'). */
+  posicaoBarraSeriesPrincipal: PosicaoBarraSeries;
+  /** Posição acoplada da barra de séries na 2ª janela ('esquerda' ou 'rodape'). */
+  posicaoBarraSeriesSecundaria: PosicaoBarraSeries;
+  /** Largura (px) da barra de séries quando acoplada à esquerda. */
+  larguraBarraEsquerda: number;
+  /** Altura (px) da barra de séries quando acoplada no rodapé. */
+  alturaBarraRodape: number;
   /** Combinações de visualização salvas pelo usuário (1 ou 2 monitores). */
   presets: PresetVisualizacao[];
 }
@@ -94,6 +105,12 @@ export interface PrefsGerais {
   mouse: Record<string, string>;
   /** 6 botões favoritos (esquemáticos) no topo do menu do botão direito. */
   favoritosMenu: string[];
+  /** Perfil de fluidez/resolução da renderização 3D. */
+  qualidade3d: Qualidade3d;
+  /** Preferência de adaptador gráfico (notebooks híbridos com GPU integrada + dedicada). */
+  preferenciaGpu: PreferenciaGpu;
+  /** IDs dos itens opcionais ocultados na barra de ferramentas superior. */
+  barraSuperiorOcultos: string[];
 }
 
 export const MEDIDAS_PADRAO: PrefsMedidas = {
@@ -151,6 +168,10 @@ export const TELAS_PADRAO: PrefsTelas = {
   monitorPrincipal: 'auto',
   monitorSecundaria: 'auto',
   abrirSecundariaAoIniciar: false,
+  posicaoBarraSeriesPrincipal: 'esquerda',
+  posicaoBarraSeriesSecundaria: 'esquerda',
+  larguraBarraEsquerda: 176,
+  alturaBarraRodape: 144,
   presets: PRESETS_VISUALIZACAO_PADRAO.map((p) => ({ ...p })),
 };
 
@@ -161,6 +182,7 @@ export const JANELAS_PADRAO: Janela[] = [
   { rotulo: 'Fígado', centro: 60, largura: 160 },
   { rotulo: 'Cérebro', centro: 40, largura: 80 },
   { rotulo: 'Mediastino', centro: 50, largura: 350 },
+  { rotulo: 'Angio / Vasos', centro: 150, largura: 600 },
 ];
 
 export const MAX_JANELAS = 9;
@@ -176,6 +198,37 @@ export const FAVORITOS_MENU_PADRAO: string[] = [
   'EllipticalROI',
 ];
 
+export interface ItemPersonalizavelBarra {
+  id: string;
+  rotulo: string;
+  /** Sugestão de ocultação no preset enxuto (modo retrato). */
+  retratoOcultar?: boolean;
+}
+
+export const ITENS_PERSONALIZAVEIS_BARRA: ReadonlyArray<ItemPersonalizavelBarra> = [
+  { id: 'pacs', rotulo: 'PACS' },
+  { id: 'petct', rotulo: 'PET/CT', retratoOcultar: true },
+  { id: 'linhas', rotulo: 'Linhas de referência' },
+  { id: 'comparar', rotulo: 'Comparar exames' },
+  { id: 'segundaTela', rotulo: '2ª Tela (outro monitor)', retratoOcultar: true },
+  { id: 'texto', rotulo: 'Texto nos cantos (O)', retratoOcultar: true },
+  { id: 'pan', rotulo: 'Mover / Pan (H)', retratoOcultar: true },
+  { id: 'zoom', rotulo: 'Zoom (Z)', retratoOcultar: true },
+  { id: 'localizar', rotulo: 'Localizar 3D (X)' },
+  { id: 'inclinar', rotulo: 'Girar plano oblíquo (I)', retratoOcultar: true },
+  { id: 'segmentar', rotulo: 'Segmentar' },
+  { id: 'girar', rotulo: 'Girar / Espelhar / Inverter' },
+  { id: 'restaurar', rotulo: 'Botão Restaurar rápido', retratoOcultar: true },
+  { id: 'mouse', rotulo: 'Menu Mouse', retratoOcultar: true },
+  { id: 'cine', rotulo: 'Cine', retratoOcultar: true },
+  { id: 'planoSelect', rotulo: 'Seletor Plano individual', retratoOcultar: true },
+  { id: 'modoSlab', rotulo: 'Modo e espessura de Slab', retratoOcultar: true },
+  { id: 'mpr', rotulo: 'MPR (R)' },
+  { id: 'mip3d', rotulo: 'MIP 3D', retratoOcultar: true },
+  { id: '3d', rotulo: '3D' },
+  { id: 'atalhos', rotulo: 'Ajuda de atalhos (?)', retratoOcultar: true },
+];
+
 const CHAVE = 'visualizador.preferencias.v1';
 export const EVENTO_PREFERENCIAS = 'preferenciasMudaram';
 
@@ -187,6 +240,18 @@ function gradeValida(v: unknown, padrao: string): string {
 
 function modoTelaValido(v: unknown, padrao: ModoTelaJanela): ModoTelaJanela {
   return v === 'normal' || v === 'maximizada' || v === 'tela-cheia' ? v : padrao;
+}
+
+function posicaoBarraValida(v: unknown, padrao: PosicaoBarraSeries): PosicaoBarraSeries {
+  return v === 'esquerda' || v === 'rodape' ? v : padrao;
+}
+
+function qualidade3dValida(v: unknown, padrao: Qualidade3d): Qualidade3d {
+  return v === 'desempenho' || v === 'equilibrado' || v === 'alta' ? v : padrao;
+}
+
+function preferenciaGpuValida(v: unknown, padrao: PreferenciaGpu): PreferenciaGpu {
+  return v === 'auto' || v === 'alto-desempenho' || v === 'economia' ? v : padrao;
 }
 
 function copiaPadrao(): PrefsGerais {
@@ -201,6 +266,9 @@ function copiaPadrao(): PrefsGerais {
     janelas: JANELAS_PADRAO.map((j) => ({ ...j })),
     mouse: {},
     favoritosMenu: [...FAVORITOS_MENU_PADRAO],
+    qualidade3d: 'equilibrado',
+    preferenciaGpu: 'alto-desempenho',
+    barraSuperiorOcultos: [],
   };
 }
 
@@ -253,6 +321,20 @@ export function sanear(bruto: unknown): PrefsGerais {
   if (typeof tl.abrirSecundariaAoIniciar === 'boolean') {
     p.telas.abrirSecundariaAoIniciar = tl.abrirSecundariaAoIniciar;
   }
+  p.telas.posicaoBarraSeriesPrincipal = posicaoBarraValida(
+    tl.posicaoBarraSeriesPrincipal,
+    p.telas.posicaoBarraSeriesPrincipal,
+  );
+  p.telas.posicaoBarraSeriesSecundaria = posicaoBarraValida(
+    tl.posicaoBarraSeriesSecundaria,
+    p.telas.posicaoBarraSeriesSecundaria,
+  );
+  p.telas.larguraBarraEsquerda = Math.round(
+    numero(tl.larguraBarraEsquerda, p.telas.larguraBarraEsquerda, 136, 380),
+  );
+  p.telas.alturaBarraRodape = Math.round(
+    numero(tl.alturaBarraRodape, p.telas.alturaBarraRodape, 84, 360),
+  );
   if (Array.isArray(tl.presets)) {
     const listaPresets: PresetVisualizacao[] = [];
     for (const item of tl.presets as Array<Record<string, unknown>>) {
@@ -312,6 +394,20 @@ export function sanear(bruto: unknown): PrefsGerais {
       if (lista.length >= MAX_JANELAS) break;
     }
     if (lista.length > 0) p.janelas = lista;
+  }
+
+  p.qualidade3d = qualidade3dValida(b.qualidade3d, p.qualidade3d);
+  p.preferenciaGpu = preferenciaGpuValida(b.preferenciaGpu, p.preferenciaGpu);
+  if (Array.isArray(b.barraSuperiorOcultos)) {
+    const ocultos: string[] = [];
+    for (const id of b.barraSuperiorOcultos) {
+      if (typeof id === 'string' && id.trim().length > 0 && id.trim().length <= 40) {
+        const limpo = id.trim();
+        if (!ocultos.includes(limpo)) ocultos.push(limpo);
+      }
+      if (ocultos.length >= 30) break;
+    }
+    p.barraSuperiorOcultos = ocultos;
   }
   return p;
 }

@@ -3,14 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Visualizador DICOM</title>
+    <meta name="application-name" content="KRB View" />
+    <meta name="theme-color" content="#0B131E" />
+    <title>KRB View</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="128x128" href="/krb-logo.png" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="app">
       <header id="barra-ferramentas" aria-label="Barra de ferramentas">
         <button id="btn-lateral" type="button" class="btn-lateral" title="Mostrar ou esconder a barra lateral de exames (Ctrl+B)" aria-label="Barra lateral" aria-pressed="true">☰</button>
-        <span class="marca">Visualizador DICOM</span>
+        <span class="marca" title="KRB View — Visualizador DICOM">
+          <img class="marca-icone" src="/krb-logo.png" alt="" width="24" height="24" />
+          <span class="marca-texto">KRB <strong>VIEW</strong></span>
+        </span>
         <div id="ferramentas"></div>
       </header>
 
@@ -30,6 +37,8 @@
         <section id="painel-segmentos" aria-label="Segmentação" hidden></section>
         <nav id="lista-estudos" aria-label="Estudos e séries"></nav>
       </aside>
+
+      <div id="gaveta-subpaineis" aria-label="Painel auxiliar" hidden></div>
 
       <main id="area-viewports">
         <div id="vazio">Nenhum exame aberto.<br /><span>Use “📂 Abrir” (pasta, arquivo ou .zip) ou arraste para cá.</span></div>

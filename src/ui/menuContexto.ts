@@ -27,9 +27,14 @@ import {
 } from '../tools/grupo';
 import { FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
 import { medidaNoPonto } from '../tools/selecao';
+import { autoJanelaCorteAtual, copiarMedidasSelecionadas } from '../tools/utilidadesJanelaEMedidas';
 import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
 import { alternarMaximizado, alternarMpr, itensMenuPlano } from '../viewer/viewport2d';
-import { abrirConfiguracoes } from './configuracoes';
+import type { AbaConfiguracoes } from './configuracoes';
+
+function abrirConfiguracoes(aba?: AbaConfiguracoes): void {
+  void import('./configuracoes').then((m) => m.abrirConfiguracoes(aba));
+}
 import {
   abrirMenuFlutuante,
   type BarraIconesMenuFlutuante,
@@ -137,6 +142,9 @@ const ICONES_ESQUEMATICOS: Record<string, string> = {
   ),
   CrescerRegiao: svgEsquematico(
     '<circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/>',
+  ),
+  SegVaso: svgEsquematico(
+    '<path d="M5 19c4-4 5-8 7-14M12 13c2-2 4-3 7-3M10 15c-2-2-3-3-6-3"/><circle cx="12" cy="11" r="1.5" fill="currentColor"/>',
   ),
 
   // Ações
@@ -358,6 +366,12 @@ function itensJanela(): EntradaMenuFlutuante[] {
     }));
   }
   return [
+    {
+      rotulo: 'Auto-janela neste corte',
+      atalho: '0',
+      acao: () => void autoJanelaCorteAtual(),
+    },
+    'divisor',
     ...predefinicoes().map<EntradaMenuFlutuante>((p, i) => ({
       rotulo: `${p.rotulo} (${p.centro} / ${p.largura})`,
       atalho: String(i + 1),
@@ -375,6 +389,11 @@ function montarItens(sobreMedida: boolean): EntradaMenuFlutuante[] {
     .filter((uid) => anotacoes.state.getAnnotation(uid)?.metadata?.toolName !== 'Crosshairs').length;
   if (sobreMedida || selecionadas > 0) {
     itens.push(
+      {
+        rotulo: selecionadas > 1 ? `Copiar ${selecionadas} medidas` : 'Copiar medida',
+        atalho: 'Ctrl+C',
+        acao: () => void copiarMedidasSelecionadas(),
+      },
       {
         rotulo: selecionadas > 1 ? `Apagar ${selecionadas} medidas selecionadas` : 'Apagar esta medida',
         atalho: 'Del',

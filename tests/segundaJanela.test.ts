@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SINCRONIA_JANELAS_PADRAO,
   caminhoSeguroInstancia,
   cantosMundoDaInstancia,
   decidirSincRolagemSlot,
@@ -358,5 +359,14 @@ describe('segundaJanelaLogica', () => {
       Array.from({ length: 25 }, (_, i) => i + 1),
     );
     expect(exibicao[0]!.geometry.issues).toEqual([]);
+  });
+
+  it('mantém apenas rolagem, localizador e linhas de referência ligados por padrão (sem janela automática)', () => {
+    expect(SINCRONIA_JANELAS_PADRAO).toEqual({
+      rolagem: true,
+      janela: false,
+      localizador: true,
+      linhas: true,
+    });
   });
 });

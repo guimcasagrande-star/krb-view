@@ -19,6 +19,8 @@ export interface SegmentoSalvo {
   cor: [number, number, number];
   visivel: boolean;
   bloqueado: boolean;
+  visivel3d?: boolean;
+  opacidade3d?: number;
 }
 
 /** Grade da máscara (a mesma do volume da série). */

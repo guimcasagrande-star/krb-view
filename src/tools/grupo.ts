@@ -62,27 +62,27 @@ export interface FerramentaPrimaria {
 }
 
 export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
-  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 's', categoria: 'navegacao' },
+  { nome: StackScrollTool.toolName, rotulo: 'Passar cortes', tecla: 'b', categoria: 'navegacao' },
   { nome: WindowLevelTool.toolName, rotulo: 'Janela/nível', tecla: 'w', categoria: 'navegacao' },
-  { nome: PanTool.toolName, rotulo: 'Pan', tecla: 'h', categoria: 'navegacao' },
+  { nome: PanTool.toolName, rotulo: 'Pan', tecla: 'm', categoria: 'navegacao' },
   { nome: ZoomTool.toolName, rotulo: 'Zoom', tecla: 'z', categoria: 'navegacao' },
   { nome: FERRAMENTA_LOCALIZADOR_3D, rotulo: '┼ Localizar', tecla: 'x', categoria: 'navegacao' },
   { nome: NOME_GIRAR_PLANO, rotulo: '⟲ Girar plano', tecla: 'i', categoria: 'navegacao' },
   { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true, categoria: 'navegacao' },
-  { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'd', categoria: 'medida' },
+  { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'l', categoria: 'medida' },
   { nome: MedidasOrtogonaisTool.toolName, rotulo: 'Medidas ortogonais', tecla: 'g', categoria: 'medida' },
-  { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'b', categoria: 'medida' },
+  { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'k', categoria: 'medida' },
   { nome: ProporcaoLinearTool.toolName, rotulo: 'Proporção linear', tecla: 'q', categoria: 'medida' },
   { nome: EstenoseTool.toolName, rotulo: 'Relação de estenose', tecla: 'n', categoria: 'medida' },
   { nome: AngleTool.toolName, rotulo: 'Ângulo', tecla: 'a', categoria: 'medida' },
-  { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb', tecla: 'k', categoria: 'medida' },
+  { nome: AnguloCobbTool.toolName, rotulo: 'Ângulo de Cobb', tecla: 'c', categoria: 'medida' },
   { nome: AnguloReferenciaTool.toolName, rotulo: 'Ângulo com eixo', tecla: 'v', categoria: 'medida' },
-  { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 't', categoria: 'medida' },
+  { nome: SetaTool.toolName, rotulo: 'Seta', tecla: 'y', categoria: 'medida' },
   { nome: VoiEsferaTool.toolName, rotulo: 'ROI volumétrica', tecla: 'u', categoria: 'medida' },
   { nome: LesaoPetTool.toolName, rotulo: 'Lesão PET · MTV / TLG', tecla: 'j', categoria: 'medida' },
   { nome: EllipticalROITool.toolName, rotulo: 'ROI elíptica', tecla: 'e', categoria: 'medida' },
-  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'm', categoria: 'medida' },
-  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 'p', categoria: 'medida' },
+  { nome: PlanarFreehandROITool.toolName, rotulo: 'ROI à mão livre', tecla: 'p', categoria: 'medida' },
+  { nome: PolilinhaTool.toolName, rotulo: 'Polilinha', tecla: 't', categoria: 'medida' },
   // Segmentação (fase 9.1): sem tecla padrão; dá para escolher uma nas configurações.
   ...FERRAMENTAS_SEGMENTACAO.map<FerramentaPrimaria>((f) => ({
     nome: f.nome,
@@ -425,17 +425,32 @@ export function inverter(): Promise<void> {
 }
 
 // Rotação e espelhamento passam por setViewPresentation.
-export function girar90(): Promise<void> {
+export function girar90(sentido: 1 | -1 = 1): Promise<void> {
   return comViewport((v) => {
     const atual = v.getViewPresentation();
-    v.setViewPresentation({ rotation: ((atual.rotation ?? 0) + 90) % 360 });
+    const passo = sentido === -1 ? 270 : 90;
+    v.setViewPresentation({ rotation: ((atual.rotation ?? 0) + passo) % 360 });
   });
 }
 
-export function espelhar(): Promise<void> {
+export function espelhar(vertical = false): Promise<void> {
   return comViewport((v) => {
     const atual = v.getViewPresentation();
-    v.setViewPresentation({ flipHorizontal: !(atual.flipHorizontal ?? false) });
+    if (vertical) {
+      v.setViewPresentation({ flipVertical: !(atual.flipVertical ?? false) });
+    } else {
+      v.setViewPresentation({ flipHorizontal: !(atual.flipHorizontal ?? false) });
+    }
+  });
+}
+
+/** Zoom por teclado (Ctrl + '+' / Ctrl + '-' no estilo RadiAnt). */
+export function aplicarZoomFator(fator: number): Promise<void> {
+  if (!Number.isFinite(fator) || fator <= 0) return Promise.resolve();
+  return comViewport((v) => {
+    const atual = v.getZoom();
+    const novo = Math.min(20, Math.max(0.15, atual * fator));
+    v.setZoom(novo);
   });
 }
 
@@ -543,11 +558,32 @@ async function redesenhar(): Promise<void> {
   if (ids.length > 0) utilities.triggerAnnotationRenderForViewportIds(ids);
 }
 
+const APELIDOS_TECLAS_SECUNDARIAS: Readonly<Record<string, string>> = {
+  s: StackScrollTool.toolName,
+  d: LengthTool.toolName,
+  h: PanTool.toolName,
+};
+
 /** Escolhe a ferramenta do botão esquerdo pela tecla de atalho. Devolve se achou. */
 export function escolherFerramentaPorTecla(tecla: string): boolean {
-  const f = FERRAMENTAS_PRIMARIAS.find((p) => teclaDaFerramenta(p) === tecla);
-  if (!f) return false;
-  if (f.apenasMpr && !modoMprAtivo) return false;
-  escolherFerramentaPrimaria(f.nome);
-  return true;
+  if (modoMprAtivo) {
+    const fMpr = FERRAMENTAS_PRIMARIAS.find((p) => p.apenasMpr && teclaDaFerramenta(p) === tecla);
+    if (fMpr) {
+      escolherFerramentaPrimaria(fMpr.nome);
+      return true;
+    }
+  }
+  const f = FERRAMENTAS_PRIMARIAS.find(
+    (p) => (!p.apenasMpr || modoMprAtivo) && teclaDaFerramenta(p) === tecla,
+  );
+  if (f) {
+    escolherFerramentaPrimaria(f.nome);
+    return true;
+  }
+  const apelido = APELIDOS_TECLAS_SECUNDARIAS[tecla];
+  if (apelido) {
+    escolherFerramentaPrimaria(apelido);
+    return true;
+  }
+  return false;
 }

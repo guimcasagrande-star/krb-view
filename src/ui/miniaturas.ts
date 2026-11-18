@@ -10,8 +10,8 @@ import type { StackNode } from '../io/organize';
 import { estado } from '../state/store';
 import { iniciarCornerstone } from '../viewer/iniciar';
 
-/** Lado da miniatura em pixels do canvas (o CSS mostra menor, para ficar nítida). */
-const LADO = 80;
+/** Lado da miniatura em pixels do canvas (o CSS mostra em cartão maior, nítido mesmo ao ampliar a barra). */
+const LADO = 240;
 const GERACOES_SIMULTANEAS = 2;
 
 export interface ObservadorMiniaturas {

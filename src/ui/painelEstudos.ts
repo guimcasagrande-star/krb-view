@@ -103,14 +103,27 @@ function criarLinha(
   const botao = el('button', nivelPilha ? 'serie pilha' : 'serie');
   botao.type = 'button';
   botao.dataset.pilhaId = pilha.id;
-  const linha = el('span', 'linha');
-  // Miniatura: só é gerada quando a linha aparece na área visível do painel.
+
+  const cartao = el('span', 'cartao-serie');
+  const envoltorioMini = el('span', 'mini-envoltorio');
+  // Miniatura: só é gerada quando o cartão aparece na área visível do painel.
   const mini = el('span', 'mini');
   miniaturas?.observar(mini, pilha);
-  linha.append(mini, el('span', 'num', numero), el('span', 'titulo', titulo));
+  envoltorioMini.append(mini);
+
+  if (numero) {
+    envoltorioMini.append(el('span', 'selo-serie selo-num', numero));
+  }
   const aviso = iconeAviso(pilha);
-  if (aviso) linha.append(aviso);
-  linha.append(el('span', 'quant', plural(quantidade, 'img', 'imgs')));
+  if (aviso) {
+    aviso.classList.add('selo-serie', 'selo-aviso');
+    envoltorioMini.append(aviso);
+  }
+  // Quantidade de imagens escrita dentro da miniatura (canto inferior direito).
+  const seloQuant = el('span', 'selo-serie selo-quant', String(quantidade));
+  seloQuant.title = plural(quantidade, 'imagem', 'imagens');
+  envoltorioMini.append(seloQuant);
+
   const podeEnviarOutraJanela = segundaJanelaDisponivel() && !ehJanelaSecundaria();
   if (podeEnviarOutraJanela) {
     const enviar = el('span', 'enviar-outra-janela', '↗');
@@ -130,7 +143,7 @@ function criarLinha(
         void enviarPilhaParaOutraJanela(pilha);
       }
     });
-    linha.append(enviar);
+    envoltorioMini.append(enviar);
     botao.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -139,9 +152,13 @@ function criarLinha(
       ]);
     });
   }
-  botao.append(linha);
+
+  const legenda = el('span', 'titulo', titulo);
+  cartao.append(envoltorioMini, legenda);
+  botao.append(cartao);
   botao.draggable = true;
-  botao.title = 'Clique para abrir no quadro selecionado ou arraste para qualquer quadro da grade';
+  const resumoPilha = `${numero ? `${numero} · ` : ''}${titulo} (${plural(quantidade, 'imagem', 'imagens')})`;
+  botao.title = `${resumoPilha}\nClique para abrir no quadro selecionado ou arraste para qualquer quadro da grade`;
   botao.addEventListener('dragstart', (ev) => {
     if (!ev.dataTransfer) return;
     const primeira = pilha.instances[0];
@@ -174,30 +191,30 @@ function criarSerie(
 
   // Série sem pilhas (SEG, RTSTRUCT, laudo, documento): só informativa.
   if (pilhas.length === 0) {
-    const botao = el('button', 'serie');
+    const botao = el('button', 'serie sem-imagem');
     botao.type = 'button';
     botao.disabled = true;
     const linha = el('span', 'linha');
+    if (numero) linha.append(el('span', 'num', numero));
     linha.append(
-      el('span', 'num', numero),
       el('span', 'titulo', rotulo),
-      el('span', 'quant', serie.kind === 'segmentacao' ? 'segmentação' : 'sem imagens'),
+      el('span', 'quant', serie.kind === 'segmentacao' ? 'SEG' : 'doc'),
     );
+    botao.title = `${numero ? `${numero} ` : ''}${rotulo} (${serie.kind === 'segmentacao' ? 'segmentação' : 'sem imagens'})`;
     botao.append(linha);
     return [botao];
   }
 
-  // Uma pilha unificada (toda a sequência no mesmo plano): a própria linha da série abre tudo junto.
+  // Uma pilha unificada (toda a sequência no mesmo plano): o próprio cartão da série abre tudo junto.
   if (pilhas.length === 1) {
     const unica = pilhas[0]!;
     return [criarLinha(unica, false, numero, rotulo, unica.instances.length, aoEscolher)];
   }
 
-  const titulo = el('span', 'titulo-serie', `${numero} ${rotulo}`.trim());
-  const linhas = pilhas.map((pilha, n) =>
-    criarLinha(pilha, true, '', pilha.label ?? `Pilha ${n + 1}`, pilha.instances.length, aoEscolher),
-  );
-  return [titulo, ...linhas];
+  return pilhas.map((pilha, n) => {
+    const subRotulo = `${rotulo} · ${pilha.label ?? `Pilha ${n + 1}`}`;
+    return criarLinha(pilha, true, numero, subRotulo, pilha.instances.length, aoEscolher);
+  });
 }
 
 function criarEstudo(
@@ -207,11 +224,14 @@ function criarEstudo(
   const detalhes = el('details', 'estudo');
   detalhes.open = true;
   const resumo = el('summary');
+  resumo.title = `${formatDatePtBr(estudo.date) || 'sem data'}${estudo.description ? ` · ${estudo.description}` : ''}`;
   resumo.append(el('span', 'data', formatDatePtBr(estudo.date) || 'sem data'));
-  if (estudo.description) resumo.append(el('span', 'detalhe', ` · ${estudo.description}`));
-  if (estudo.modalities.length > 0) resumo.append(el('span', 'mod', estudo.modalities.join(', ')));
+  if (estudo.modalities.length > 0) resumo.append(el('span', 'mod', estudo.modalities.join('/')));
+  if (estudo.description) resumo.append(el('span', 'detalhe', estudo.description));
   detalhes.append(resumo);
-  for (const serie of estudo.series) detalhes.append(...criarSerie(serie, aoEscolher));
+  const gradeSeries = el('div', 'grade-series-estudo');
+  for (const serie of estudo.series) gradeSeries.append(...criarSerie(serie, aoEscolher));
+  detalhes.append(gradeSeries);
   return detalhes;
 }
 
@@ -220,6 +240,26 @@ export function marcarPilhaAtiva(container: HTMLElement, pilhaId: string | null)
   for (const b of container.querySelectorAll<HTMLButtonElement>('button.serie')) {
     b.classList.toggle('ativa', pilhaId !== null && b.dataset.pilhaId === pilhaId);
   }
+}
+
+/**
+ * Navega para a série anterior (`-1`) ou próxima (`+1`) na barra de séries (setas ← / → no estilo RadiAnt).
+ */
+export function selecionarSerieAdjacente(delta: -1 | 1): boolean {
+  const container = document.getElementById('lista-estudos');
+  if (!container) return false;
+  const botoes = Array.from(container.querySelectorAll<HTMLButtonElement>('button.serie:not(:disabled)'));
+  if (botoes.length === 0) return false;
+  const idxAtual = botoes.findIndex((b) => b.classList.contains('ativa'));
+  const proximoIdx =
+    idxAtual < 0
+      ? 0
+      : Math.min(botoes.length - 1, Math.max(0, idxAtual + delta));
+  if (proximoIdx === idxAtual) return false;
+  const alvo = botoes[proximoIdx]!;
+  alvo.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  alvo.click();
+  return true;
 }
 
 /** Desenha o índice em `container`, substituindo o conteúdo anterior. */

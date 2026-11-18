@@ -19,7 +19,7 @@ import { DistanciaTool } from '../tools/estiloMedidas';
 import { PolilinhaTool } from '../tools/polilinha';
 import { SetaTool } from '../tools/seta';
 import { LesaoPetTool, VoiEsferaTool } from '../tools/voiEsfera';
-import { BrushTool, CrescerRegiaoTool, PaintFillTool } from '../segmentation/ferramentas';
+import { BrushTool, VasoTool } from '../segmentation/ferramentas';
 import {
   addTool,
   AngleTool,
@@ -36,6 +36,7 @@ import {
 } from '@cornerstonejs/tools';
 
 import { GirarPlanoTool } from '../tools/girarPlano';
+import { preferencias, type PreferenciaGpu } from '../state/preferencias';
 
 export const ID_MOTOR = 'motor';
 /** Máximo de viewports na grade (grade personalizada de até 5x5). */
@@ -52,10 +53,46 @@ export function idElemento(i: number): string {
 }
 
 let promessa: Promise<RenderingEngine> | undefined;
+let contextoWebglConfigurado = false;
+
+interface TauriGpuBridge {
+  core?: { invoke: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T> };
+}
+
+/** Grava a preferência de GPU para o WebView2 nativo usar na próxima inicialização (em notebooks híbridos). */
+export function sincronizarPreferenciaGpuNativa(modo: PreferenciaGpu): void {
+  const t = (globalThis as { __TAURI__?: TauriGpuBridge }).__TAURI__;
+  if (!t?.core?.invoke) return;
+  void t.core.invoke('gpu_definir_preferencia', { modo }).catch(() => undefined);
+}
+
+function instalarPreferenciaWebgl(): void {
+  if (contextoWebglConfigurado || typeof HTMLCanvasElement === 'undefined') return;
+  contextoWebglConfigurado = true;
+  const original = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (
+    this: HTMLCanvasElement,
+    contextId: string,
+    options?: unknown,
+  ): RenderingContext | null {
+    if (contextId === 'webgl2' || contextId === 'webgl' || contextId === 'experimental-webgl') {
+      const pref = preferencias().preferenciaGpu;
+      const powerPreference: WebGLPowerPreference | undefined =
+        pref === 'alto-desempenho' ? 'high-performance' : pref === 'economia' ? 'low-power' : undefined;
+      if (powerPreference) {
+        const base = options && typeof options === 'object' ? (options as WebGLContextAttributes) : {};
+        return original.call(this, contextId as 'webgl2', { ...base, powerPreference });
+      }
+    }
+    return original.call(this, contextId as never, options as never);
+  } as typeof HTMLCanvasElement.prototype.getContext;
+}
 
 /** Inicializa tudo uma vez e devolve o único RenderingEngine do app. */
 export function iniciarCornerstone(): Promise<RenderingEngine> {
   promessa ??= (async () => {
+    instalarPreferenciaWebgl();
+    sincronizarPreferenciaGpuNativa(preferencias().preferenciaGpu);
     await iniciarCore();
     iniciarLoader({ maxWebWorkers: Math.max(1, Math.min(4, (navigator.hardwareConcurrency ?? 4) - 1)) });
     iniciarTools();
@@ -85,8 +122,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       TrackballRotateTool,
       VolumeCroppingTool,
       BrushTool,
-      PaintFillTool,
-      CrescerRegiaoTool,
+      VasoTool,
     ]) {
       addTool(ferramenta);
     }

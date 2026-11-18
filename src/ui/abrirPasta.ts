@@ -185,12 +185,28 @@ export interface ElementosAbrirPasta {
 
 function mostrarResumo(resumo: HTMLElement, r: ResultadoAbertura): void {
   resumo.replaceChildren();
-  const linha = document.createElement('div');
-  linha.textContent = `${r.lidos} ${r.lidos === 1 ? 'arquivo lido' : 'arquivos lidos'} · ${r.ignorados.length} ${
+  const cabecalho = document.createElement('div');
+  cabecalho.className = 'resumo-cabecalho';
+  const linha = document.createElement('span');
+  linha.textContent = `${r.lidos} ${r.lidos === 1 ? 'lido' : 'lidos'} · ${r.ignorados.length} ${
     r.ignorados.length === 1 ? 'ignorado' : 'ignorados'
   }`;
-  resumo.append(linha);
-  if (r.ignorados.length === 0) return;
+  const btnFechar = document.createElement('button');
+  btnFechar.type = 'button';
+  btnFechar.className = 'resumo-fechar';
+  btnFechar.textContent = '×';
+  btnFechar.title = 'Ocultar aviso de importação';
+  btnFechar.setAttribute('aria-label', 'Ocultar aviso de importação');
+  btnFechar.addEventListener('click', () => resumo.replaceChildren());
+  cabecalho.append(linha, btnFechar);
+  resumo.append(cabecalho);
+  if (r.ignorados.length === 0) {
+    // Sem arquivos ignorados: recolhe automaticamente após alguns segundos para liberar espaço.
+    window.setTimeout(() => {
+      if (resumo.contains(cabecalho)) resumo.replaceChildren();
+    }, 3500);
+    return;
+  }
 
   // Agrupa por motivo; cada grupo abre a lista dos arquivos.
   const porMotivo = new Map<string, string[]>();
