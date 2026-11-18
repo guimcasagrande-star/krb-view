@@ -489,7 +489,7 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
     'btn-sair-ambiente-topo',
   );
 
-  barraAmbiente.append(seloAmbiente, grupoVistasAmbiente, grupoNavAmbiente, btnSairAmbienteTopo);
+  barraAmbiente.append(btnSairAmbienteTopo, seloAmbiente, grupoVistasAmbiente, grupoNavAmbiente);
   const headerPrincipal = document.getElementById('barra-ferramentas');
   if (headerPrincipal) {
     headerPrincipal.append(barraAmbiente);
@@ -505,13 +505,7 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
   const subtituloSeriePainel = document.createElement('small');
   subtituloSeriePainel.className = 'seg-subtitulo-serie';
   blocoTituloPainel.append(titulo, subtituloSeriePainel);
-  const botaoSairPainel = botao(
-    '← Voltar ao exame',
-    'Sair do ambiente de segmentação e voltar à visualização do exame (Esc) — os segmentos continuam salvos',
-    () => sairModoSegmentacaoUI(),
-    'btn-concluir-seg',
-  );
-  cabecalhoPainel.append(blocoTituloPainel, botaoSairPainel);
+  cabecalhoPainel.append(blocoTituloPainel);
 
   const linhaFerramentas = document.createElement('div');
   linhaFerramentas.className = 'seg-ferramentas';
@@ -703,17 +697,32 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
     const b = botao(rotulo, dica, () => definirModoExibicao3d(m));
     botoesModo3d.push({ modo: m, botao: b });
   }
+  const mostrarTodasEstruturasNo3d = (): void => {
+    const pilhaId = estado.pilhaAtiva?.id;
+    if (!pilhaId) return;
+    if (modoExibicao3d() === 'volume') {
+      definirModoExibicao3d('ambos');
+    }
+    definirVisivel3dTodos(pilhaId, true);
+    void abrir3dParaPilhaAtiva();
+  };
+
   const botaoReconstruir3d = botao(
     '🧊 Reconstruir 3D',
     'Abrir a janela de reconstrução 3D ao lado da imagem 2D com as superfícies segmentadas visíveis',
     () => void reconstruir3dDaSegmentacao(),
     'primario btn-reconstruir-3d-seg',
   );
+  const botaoMostrarTodos3d = botao(
+    'Mostrar todas 3D',
+    'Ativar a superfície 3D de todas as estruturas desta série e abrir o 3D',
+    mostrarTodasEstruturasNo3d,
+  );
   const botaoOcultarTodos3d = botao('Ocultar 3D', 'Desativar a superfície 3D de todos os segmentos desta série', () => {
     const pilhaId = estado.pilhaAtiva?.id;
     if (pilhaId) definirVisivel3dTodos(pilhaId, false);
   });
-  linha3d.append(botaoReconstruir3d, ...botoesModo3d.map((x) => x.botao), botaoOcultarTodos3d);
+  linha3d.append(botaoReconstruir3d, ...botoesModo3d.map((x) => x.botao), botaoMostrarTodos3d, botaoOcultarTodos3d);
 
   const lista = document.createElement('ul');
   lista.className = 'seg-lista';
@@ -891,13 +900,32 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
   topoSecaoLista.className = 'seg-secao-topo';
   const tituloLista = document.createElement('strong');
   tituloLista.textContent = '📋 Estruturas e Volumetria';
+  const acoesTopoLista = document.createElement('div');
+  acoesTopoLista.className = 'seg-acoes-topo-lista';
+  const botaoTodas3dLista = botao(
+    '🧊 Todas no 3D',
+    'Colocar todas as estruturas no 3D de uma vez (ou ocultar todas se já estiverem todas no 3D)',
+    () => {
+      const pilhaId = estado.pilhaAtiva?.id;
+      const seg = segmentacaoDaPilha(pilhaId);
+      if (!pilhaId || !seg || seg.segmentos.length === 0) return;
+      const todasVisiveis = seg.segmentos.every((s) => s.visivel3d);
+      if (todasVisiveis) {
+        definirVisivel3dTodos(pilhaId, false);
+      } else {
+        mostrarTodasEstruturasNo3d();
+      }
+    },
+    'btn-todas-3d-lista',
+  );
   const botaoNovoSeg = botao(
     '+ Novo segmento',
     'Criar outro segmento manual (passa a ser o ativo)',
     () => void novoSegmentoAtivo(),
     'btn-novo-seg-topo',
   );
-  topoSecaoLista.append(tituloLista, botaoNovoSeg);
+  acoesTopoLista.append(botaoTodas3dLista, botaoNovoSeg);
+  topoSecaoLista.append(tituloLista, acoesTopoLista);
 
   const campoFiltro = document.createElement('input');
   campoFiltro.type = 'search';
@@ -1109,14 +1137,27 @@ export function iniciarPainelSegmentos(painel: HTMLElement): void {
       lista.replaceChildren();
       campoFiltro.hidden = true;
       tituloLista.textContent = '📋 Estruturas e Volumetria';
+      botaoMostrarTodos3d.disabled = true;
       botaoOcultarTodos3d.disabled = true;
+      botaoTodas3dLista.disabled = true;
+      botaoTodas3dLista.setAttribute('aria-pressed', 'false');
+      botaoTodas3dLista.textContent = '🧊 Todas no 3D';
       botaoCsv.disabled = true;
       estadoCalculo.textContent = visivel ? 'Preparando máscara da série…' : '';
       return;
     }
     tituloLista.textContent = `📋 Estruturas (${seg.segmentos.length})`;
     campoFiltro.hidden = seg.segmentos.length <= 5;
-    botaoOcultarTodos3d.disabled = !seg.segmentos.some((s) => s.visivel3d);
+    const algumNo3d = seg.segmentos.some((s) => s.visivel3d);
+    const todasNo3d = seg.segmentos.length > 0 && seg.segmentos.every((s) => s.visivel3d);
+    botaoMostrarTodos3d.disabled = todasNo3d || seg.segmentos.length === 0;
+    botaoOcultarTodos3d.disabled = !algumNo3d;
+    botaoTodas3dLista.disabled = seg.segmentos.length === 0;
+    botaoTodas3dLista.setAttribute('aria-pressed', String(todasNo3d));
+    botaoTodas3dLista.textContent = todasNo3d ? '🧊 Ocultar todas 3D' : '🧊 Todas no 3D';
+    botaoTodas3dLista.title = todasNo3d
+      ? 'Ocultar a superfície 3D de todas as estruturas desta série'
+      : 'Colocar todas as estruturas no 3D de uma vez';
 
     const { volumetria, calculando } = volumetriaDa(pilhaId);
     estadoCalculo.textContent = calculando

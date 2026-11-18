@@ -283,7 +283,6 @@ interface Slot {
   avisoCobertura: HTMLDivElement;
   botaoDadosPet: HTMLButtonElement;
   botaoVoltar: HTMLButtonElement;
-  botaoSairSeg: HTMLButtonElement;
   scrubber: HTMLDivElement;
   scrubberPino: HTMLDivElement;
   canvasMira: HTMLCanvasElement;
@@ -2462,6 +2461,7 @@ export async function abrir3dParaPilhaAtiva(): Promise<void> {
 
 function slotMostraBotaoVoltar(slot: Slot): boolean {
   if (slot.celula.hidden || !slot.habilitado || !slot.pilha) return false;
+  if (emModoSegmentacao()) return false;
   if (mprAtivo) return slot.indice === 0;
   if (slot.planoSlot === '3d' || slot.planoSlot === 'mip-rotatorio') return true;
   if (slot.planoSlot !== 'original' && !emFusao(slot)) return true;
@@ -2471,15 +2471,6 @@ function slotMostraBotaoVoltar(slot: Slot): boolean {
 function atualizarBotaoVoltarSlot(slot: Slot): void {
   const visivel = slotMostraBotaoVoltar(slot);
   slot.botaoVoltar.hidden = !visivel;
-  const mostrarSairSeg =
-    emModoSegmentacao() &&
-    !slot.celula.hidden &&
-    slot.habilitado &&
-    Boolean(slot.pilha) &&
-    !semCortes(slot) &&
-    slot.indice === ativo;
-  slot.botaoSairSeg.hidden = !mostrarSairSeg;
-  slot.botaoSairSeg.classList.toggle('abaixo-voltar', visivel);
   if (!visivel) return;
   if (mprAtivo) {
     slot.botaoVoltar.title = 'Sair do MPR e retornar à imagem original (F2 ou R)';
@@ -4080,17 +4071,6 @@ function criarSlot(indice: number): Slot {
     void voltarDaReconstrucaoSlot(indice);
   });
 
-  const botaoSairSeg = document.createElement('button');
-  botaoSairSeg.type = 'button';
-  botaoSairSeg.className = 'btn-sair-segmentacao-vp';
-  botaoSairSeg.textContent = '✓ Concluir segmentação';
-  botaoSairSeg.title = 'Sair do modo de segmentação e voltar a rolar cortes (Esc) — mantém os segmentos salvos';
-  botaoSairSeg.hidden = true;
-  botaoSairSeg.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    sairModoSegmentacaoUI();
-  });
-
   const scrubber = document.createElement('div');
   scrubber.className = 'scrubber-cortes';
   scrubber.hidden = true;
@@ -4109,7 +4089,6 @@ function criarSlot(indice: number): Slot {
     avisoCobertura,
     botaoDadosPet,
     botaoVoltar,
-    botaoSairSeg,
     scrubber,
   );
 
@@ -4126,7 +4105,6 @@ function criarSlot(indice: number): Slot {
     avisoCobertura,
     botaoDadosPet,
     botaoVoltar,
-    botaoSairSeg,
     scrubber,
     scrubberPino,
     canvasMira,

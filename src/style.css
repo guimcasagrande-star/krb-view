@@ -2079,7 +2079,6 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   font-weight: 600;
 }
 #barra-ambiente-seg .btn-sair-ambiente-topo {
-  margin-left: auto;
   padding: 5px 13px;
   font-weight: 700;
   border-radius: 999px;
@@ -2165,11 +2164,23 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   font-size: 12px;
   padding: 4px 8px;
 }
+.seg-acoes-topo-lista {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.btn-todas-3d-lista,
 .btn-novo-seg-topo {
   padding: 2px 8px;
   font-size: 11.5px;
   color: var(--destaque);
   border-color: var(--borda-controle);
+}
+.btn-todas-3d-lista[aria-pressed='true'] {
+  background: var(--item-ativo);
+  border-color: var(--destaque);
+  font-weight: 600;
 }
 
 /* Licenças individuais por tarefa no modal do TotalSegmentator */

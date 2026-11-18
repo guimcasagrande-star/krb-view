@@ -72,20 +72,11 @@ function abrirServidoresPacs(): void {
   void import('./servidoresPacs').then((m) => m.abrirServidoresPacs());
 }
 import {
-  definirModoSegmentacao,
   emModoSegmentacao,
   EVENTO_MODO_SEGMENTACAO,
   FERRAMENTAS_SEGMENTACAO,
 } from '../segmentation/ferramentas';
-import {
-  abrirSegmentacaoDeArquivo,
-  alternarModoSegmentacaoBarra,
-  apagarSegmentacaoAtiva,
-  novoSegmentoAtivo,
-  reconstruir3dDaSegmentacao,
-  salvarSegmentacaoAtiva,
-} from './painelSegmentos';
-import { abrirConfigTotalSegmentator } from './configTotalSegmentator';
+import { alternarModoSegmentacaoBarra } from './painelSegmentos';
 import {
   dispararAbrirArquivos,
   dispararAbrirPasta,
@@ -126,7 +117,6 @@ import {
   type ModoSlab,
   type PlanoSlot,
   proximoLayout,
-  sairModoSegmentacaoUI,
   zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
 
@@ -241,9 +231,6 @@ const ICONES_MENU = {
     '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   ),
   perfusao: svgBarra('<path d="M3 19h18M4 16l4-5 4 2 4-7 4 4"/>'),
-  abrirSeg: svgBarra(
-    '<path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/>',
-  ),
   velocidade: svgBarra('<circle cx="12" cy="12" r="8"/><path d="M12 12l4-4M12 7v1"/>'),
 };
 
@@ -1309,71 +1296,16 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   menuMedidas.painel.append(gradeMedidas, rodapeMedidas);
 
-  // 4b. Segmentação (fase 9.1): clique principal alterna entrada/saída do modo de segmentação; seta abre ferramentas e opções.
+  // 4b. Segmentação: botão direto que abre o ambiente dedicado de segmentação da sequência ativa.
   let ultimaSegmentacao = FERRAMENTAS_SEGMENTACAO[0]!;
-  const menuSegmentar = criarMenuSuspenso({
-    rotulo: 'Segmentar',
-    svg: iconeFavoritoMenu(ultimaSegmentacao.nome),
-    dica: 'Entrar ou sair do modo de segmentação (Esc também sai). Seta: ferramentas, 3D e arquivos',
-    acaoPrincipal: () => alternarModoSegmentacaoBarra(ultimaSegmentacao.nome),
-  });
-  menuSegmentar.painel.append(secaoMenu('Ferramentas'));
-  for (const f of FERRAMENTAS_SEGMENTACAO) {
-    const item = itemMenu(
-      f.rotulo,
-      undefined,
-      () => {
-        ultimaSegmentacao = f;
-        definirModoSegmentacao(true);
-        escolherFerramentaPrimaria(f.nome);
-      },
-      menuSegmentar.fechar,
-      iconeFavoritoMenu(f.nome),
-    );
-    item.title = f.dica;
-    item.dataset.ferramenta = f.nome;
-    botoesFerramenta.push(item);
-    menuSegmentar.painel.append(item);
-  }
-  const itemSairSegmentacaoMenu = itemMenu(
-    'Concluir / sair da segmentação',
-    'Esc',
-    () => sairModoSegmentacaoUI(),
-    menuSegmentar.fechar,
-    ICONES_MENU.zerar,
+  const botaoSegmentar = botao(
+    'Segmentar',
+    'Abrir o ambiente dedicado de segmentação da sequência selecionada (Esc para sair)',
+    () => alternarModoSegmentacaoBarra(ultimaSegmentacao.nome),
+    iconeFavoritoMenu(ultimaSegmentacao.nome),
   );
-  menuSegmentar.painel.append(
-    itemSairSegmentacaoMenu,
-    divisorMenu(),
-    itemMenu(
-      'Reconstruir 3D dos segmentos',
-      undefined,
-      () => void reconstruir3dDaSegmentacao(),
-      menuSegmentar.fechar,
-      { svg: ICONES_BARRA.cubo3d, destaque: true },
-    ),
-    secaoMenu('Segmentos'),
-    itemMenu('Novo segmento', undefined, () => void novoSegmentoAtivo(), menuSegmentar.fechar, ICONES_MENU.adicionar),
-    itemMenu('Salvar segmentação…', undefined, () => void salvarSegmentacaoAtiva(), menuSegmentar.fechar, ICONES_MENU.salvar),
-    itemMenu('Abrir segmentação…', undefined, () => void abrirSegmentacaoDeArquivo(), menuSegmentar.fechar, ICONES_MENU.abrirSeg),
-    itemMenu('Apagar segmentação da série…', undefined, apagarSegmentacaoAtiva, menuSegmentar.fechar, ICONES_MENU.limpar),
-    ...(pacsDisponivel()
-      ? [
-          divisorMenu(),
-          secaoMenu('Auto-Segmentação (IA)'),
-          itemMenu(
-            'Instalar / Configurar TotalSegmentator…',
-            undefined,
-            () => abrirConfigTotalSegmentator(),
-            menuSegmentar.fechar,
-            ICONES_MENU.config,
-          ),
-        ]
-      : []),
-  );
-
-  menuSegmentar.contentor.dataset.itemBarra = 'segmentar';
-  grupoNavegacao.append(menuMedidas.contentor, menuSegmentar.contentor);
+  botaoSegmentar.dataset.itemBarra = 'segmentar';
+  grupoNavegacao.append(menuMedidas.contentor, botaoSegmentar);
 
   // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
   const grupoImagem = document.createElement('div');
@@ -1681,13 +1613,12 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
       ultimaSegmentacao = segAtiva;
     }
     const modoSeg = emModoSegmentacao();
-    itemSairSegmentacaoMenu.hidden = !modoSeg;
     definirConteudoBotaoBarra(
-      menuSegmentar.botaoPrincipal,
+      botaoSegmentar,
       iconeFavoritoMenu(ultimaSegmentacao.nome),
-      segAtiva ? (LEGENDAS_CURTAS_FERRAMENTA[segAtiva.nome] ?? 'Segmentar') : modoSeg ? 'Segmentando' : 'Segmentar',
+      modoSeg ? 'Segmentando' : 'Segmentar',
     );
-    menuSegmentar.botaoPrincipal.setAttribute('aria-pressed', String(Boolean(segAtiva || modoSeg)));
+    botaoSegmentar.setAttribute('aria-pressed', String(Boolean(segAtiva || modoSeg)));
 
     for (const [botaoMouse, seletor] of camposMouse) {
       seletor.value = botaoAtribuido(botaoMouse);
