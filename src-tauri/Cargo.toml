@@ -1,6 +1,6 @@
 [package]
 name = "visualizador-dicom"
-version = "0.1.1"
+version = "0.1.2"
 description = "KRB View — Visualizador DICOM pessoal (uso pessoal/estudo; não validado para diagnóstico)"
 edition = "2021"
 

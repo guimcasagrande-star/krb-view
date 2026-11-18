@@ -11,7 +11,7 @@
  * 4. Publica a Release e anexa os instaladores diretamente na API do GitHub (usando a credencial do Git).
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, execSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -45,14 +45,19 @@ const cargoNovo = cargoTxt.replace(/^version\s*=\s*"[^"]+"/m, `version = "${argV
 writeFileSync(cargoPath, cargoNovo, 'utf8');
 
 console.log(`✓ Versão atualizada para ${argVersao}. Compilando instaladores...`);
-execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'tauri', 'build'], {
-  stdio: 'inherit',
-});
+execSync('npm run tauri build', { stdio: 'inherit' });
 
 const tag = `v${argVersao}`;
 execFileSync(
   'git',
-  ['add', 'package.json', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock'],
+  [
+    'add',
+    'package.json',
+    'src-tauri/tauri.conf.json',
+    'src-tauri/Cargo.toml',
+    'src-tauri/Cargo.lock',
+    'scripts/lancar.ts',
+  ],
   { stdio: 'inherit' },
 );
 execFileSync('git', ['commit', '-m', `chore(release): ${tag}`], { stdio: 'inherit' });
