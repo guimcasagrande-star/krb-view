@@ -7,7 +7,7 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::Serialize;
@@ -305,6 +305,182 @@ pub fn exames_limpar_cache(
     )
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaidaTotalSegmentator {
+    pub sessao_saida: String,
+    pub nomes: Vec<String>,
+}
+
+struct LimpaDirTemp(Option<PathBuf>);
+impl LimpaDirTemp {
+    fn desarmar(&mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for LimpaDirTemp {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = fs::remove_dir_all(p);
+        }
+    }
+}
+
+fn dir_temp_sessao(prefixo: &str, sessao: &str) -> Result<PathBuf, String> {
+    if sessao.is_empty()
+        || !sessao
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Identificador de sessão temporária inválido.".into());
+    }
+    Ok(std::env::temp_dir().join(format!("{prefixo}_{sessao}")))
+}
+
+fn limpar_sessoes_ts_antigas() {
+    let temp = std::env::temp_dir();
+    let Ok(itens) = fs::read_dir(&temp) else { return };
+    let agora = SystemTime::now();
+    let max_idade = std::time::Duration::from_secs(24 * 60 * 60);
+    for item in itens.flatten() {
+        let nome = item.file_name().to_string_lossy().into_owned();
+        if !nome.starts_with("visu_ts_in_") && !nome.starts_with("visu_ts_out_") {
+            continue;
+        }
+        let caminho = item.path();
+        if !caminho.is_dir() {
+            continue;
+        }
+        let expirado = item
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| agora.duration_since(m).ok())
+            .is_some_and(|idade| idade > max_idade);
+        if expirado {
+            let _ = fs::remove_dir_all(&caminho);
+        }
+    }
+}
+
+fn listar_niftis_nao_vazios(pasta: &Path) -> Result<Vec<String>, String> {
+    let mut nomes = Vec::new();
+    let itens =
+        fs::read_dir(pasta).map_err(|e| format!("Falha ao ler saída do TotalSegmentator: {e}"))?;
+    for item in itens.flatten() {
+        let caminho = item.path();
+        if !caminho.is_file() {
+            continue;
+        }
+        let nome = item.file_name().to_string_lossy().into_owned();
+        let lower = nome.to_ascii_lowercase();
+        if !lower.ends_with(".nii") && !lower.ends_with(".nii.gz") {
+            continue;
+        }
+        let meta = fs::metadata(&caminho).map_err(|e| e.to_string())?;
+        if meta.len() == 0 {
+            continue;
+        }
+        nomes.push(nome);
+    }
+    nomes.sort();
+    Ok(nomes)
+}
+
+#[tauri::command]
+pub async fn exames_gravar_temp(request: Request<'_>) -> Result<String, String> {
+    let sessao = cabecalho(request.headers(), "x-ts-sessao")?;
+    let nome = cabecalho(request.headers(), "x-ts-nome")?;
+    let base = dir_temp_sessao("visu_ts_in", &sessao)?;
+    let destino = juntar(&base.to_string_lossy(), &nome)?;
+    let bytes = match request.body() {
+        InvokeBody::Raw(b) => b.clone(),
+        InvokeBody::Json(_) => return Err("Corpo binário bruto esperado em exames_gravar_temp.".into()),
+    };
+    if let Some(pai) = destino.parent() {
+        tokio::fs::create_dir_all(pai)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tokio::fs::write(destino, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(base.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn exames_limpar_temp(sessao: String) -> Result<(), String> {
+    let base = dir_temp_sessao("visu_ts_in", &sessao)?;
+    if base.exists() {
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn exames_rodar_totalsegmentator(
+    app: AppHandle,
+    pasta_serie: String,
+    tarefa: Option<String>,
+    orgaos: Vec<String>,
+    modo_rapido: bool,
+) -> Result<SaidaTotalSegmentator, String> {
+    tokio::task::spawn_blocking(move || {
+        limpar_sessoes_ts_antigas();
+        let entrada = Path::new(&pasta_serie);
+        if !entrada.is_dir() {
+            return Err(format!("Pasta da série não encontrada: {pasta_serie}"));
+        }
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let sessao_saida = format!("{}_{}", std::process::id(), ts);
+        let pasta_saida = dir_temp_sessao("visu_ts_out", &sessao_saida)?;
+        fs::create_dir_all(&pasta_saida)
+            .map_err(|e| format!("Falha ao criar pasta temporária: {e}"))?;
+        let mut guard = LimpaDirTemp(Some(pasta_saida.clone()));
+
+        crate::totalseg::executar_totalsegmentator_em_pasta(
+            &app,
+            &pasta_serie,
+            &pasta_saida,
+            tarefa.as_deref(),
+            &orgaos,
+            modo_rapido,
+        )?;
+        let nomes = listar_niftis_nao_vazios(&pasta_saida)?;
+        guard.desarmar();
+
+        Ok(SaidaTotalSegmentator {
+            sessao_saida,
+            nomes,
+        })
+    })
+    .await
+    .map_err(|e| format!("Falha interna ao aguardar TotalSegmentator: {e}"))?
+}
+
+#[tauri::command]
+pub async fn exames_ler_saida_ts(sessao: String, nome: String) -> Result<Response, String> {
+    let base = dir_temp_sessao("visu_ts_out", &sessao)?;
+    let caminho = juntar(&base.to_string_lossy(), &nome)?;
+    let bytes = tokio::fs::read(caminho)
+        .await
+        .map_err(|e| format!("Falha ao ler {nome}: {e}"))?;
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn exames_limpar_saida_ts(sessao: String) -> Result<(), String> {
+    let base = dir_temp_sessao("visu_ts_out", &sessao)?;
+    if base.exists() {
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
@@ -393,5 +569,26 @@ mod testes {
         assert_eq!(res.total_restante, 1000);
         assert!(tmp.0.join("estudo_a").exists());
         assert!(tmp.0.join("estudo_b").exists());
+    }
+
+    #[test]
+    fn lista_apenas_niftis_nao_vazios_ordenados() {
+        let tmp = PastaTemp::nova("ts_nifti");
+        fs::write(tmp.0.join("liver.nii.gz"), vec![1u8; 32]).unwrap();
+        fs::write(tmp.0.join("aorta.nii"), vec![2u8; 16]).unwrap();
+        fs::write(tmp.0.join("vazio.nii.gz"), Vec::<u8>::new()).unwrap();
+        fs::write(tmp.0.join("log.txt"), b"ignorar").unwrap();
+
+        let nomes = listar_niftis_nao_vazios(&tmp.0).unwrap();
+        assert_eq!(nomes, vec!["aorta.nii", "liver.nii.gz"]);
+    }
+
+    #[test]
+    fn valida_sessao_temp_e_impede_traversal() {
+        assert!(dir_temp_sessao("visu_ts_out", "1234_abc").is_ok());
+        assert!(dir_temp_sessao("visu_ts_out", "../fora").is_err());
+        let base = dir_temp_sessao("visu_ts_out", "1234_abc").unwrap();
+        assert!(juntar(&base.to_string_lossy(), "liver.nii.gz").is_ok());
+        assert!(juntar(&base.to_string_lossy(), "../segredo.nii.gz").is_err());
     }
 }

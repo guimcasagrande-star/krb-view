@@ -14,13 +14,28 @@ import {
   imageLoader,
   setVolumesForViewports,
   type Types,
-  utilities as utilitariosCore,
 } from '@cornerstonejs/core';
 import { wadouri } from '@cornerstonejs/dicom-image-loader';
 import type { StackNode, StudyNode } from '../io/organize';
-import { gridFromVolumeProps } from '../io/geometry';
+import {
+  aplicarFusao,
+  corrigirOpacidadePeloSlab,
+  criarLegendaFusao,
+  emFusao,
+  ligarArrastoRegistroPet,
+  montarControlesFusao,
+  NOME_HOT_IRON,
+  ocultarFusaoVisual,
+  type OpcoesControlesFusao,
+} from './fusaoUi';
+import {
+  carregarVoxels,
+  invalidarCacheVoxels,
+  textoDoErro,
+  valorNoPonto,
+} from './voxelsCache';
 import { ajustarZoomAoConteudo, exibicaoPadraoPet } from './exibicaoInicial';
-import { SynchronizerManager, synchronizers } from '@cornerstonejs/tools';
+import { SynchronizerManager, synchronizers, ToolGroupManager } from '@cornerstonejs/tools';
 import { nearestIndex } from '../compare/sync';
 import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
 import {
@@ -36,17 +51,18 @@ import { worldToVoxel } from '../io/geometry';
 import {
   adicionarViewportAoGrupo,
   centroCrosshair,
+  escolherFerramentaPrimaria,
   moverCentroCrosshair,
   definirLinhasReferencia,
   botaoAtribuido,
   EVENTO_BOTOES_MUDARAM,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
+  ID_GRUPO,
   predefinicoes,
   definirModoMprFerramentas,
   removerViewportDoGrupo,
 } from '../tools/grupo';
-import { abrirDialogoCurvaPerfusao } from '../tools/curvaPerfusao';
 import { definirApoioGirarPlano, esquecerPlanoGirado, restaurarPlanoGirado } from '../tools/girarPlano';
 import { desenharMiraNoCanvas, FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
 import {
@@ -59,39 +75,55 @@ import {
   apagarSegmentacao,
   apagarTodasSegmentacoes,
   aplicarSegmentacaoSalva,
+  autoLigarCortesPincel,
   criarSegmentacao,
+  definirResolvedorCriacaoSegmentacao,
+  definirResolvedorRecalculoVaso,
   definirResolvedorValores,
+  definirCorSegmento,
   geometriaDaSegmentacao,
   temVoxelsPintados,
-  faixaSegmentacao,
   mostrarNosViewports,
   buracosDoCorte,
   corteDaMascara,
   type CorteDaMascara,
-  desfazerPintura,
   ligarCortesProximos,
   pintarIndices,
-  type PinturaDesfazivel,
   preencherBuracosNovos,
+  prepararSegmentoVaso,
+  reaplicarIndicesNoSegmento,
+  registrarUltimaSementeVaso,
   segmentacaoDaPilha,
+  ultimaSementeVasoDa,
+  vasoConfig,
 } from '../segmentation/segmentacao';
 import {
-  definirResolvedorCrescer,
+  ajustarRaioPincelDelta,
+  definirModoSegmentacao,
+  definirResolvedorVaso,
   ehFerramentaSegmentacao,
+  emModoSegmentacao,
   EVENTO_MENSAGEM_SEGMENTACAO,
+  EVENTO_MODO_SEGMENTACAO,
   NOME_PINCEL,
-  type SessaoCrescer,
 } from '../segmentation/ferramentas';
-import { crescerNaEsfera, faixaPelaSemente } from '../segmentation/mascaras';
+import { calcularFaixaInteligenteVaso, crescerVaso } from '../segmentation/vaso';
+import { descartarVolumeDoWorker } from '../workers/computeClient';
 import { conferirSegmentacao, lerSegmentacao } from '../segmentation/arquivoSegmentacao';
-import {
-  adicionarAoGrupo3d,
-  type Controlador3d,
-  montar3d,
-  pontoVisivelNoClique,
-  removerDoGrupo3d,
-  rotuloPredefinicao3d,
-} from '../render3d/viewport3d';
+import type { Controlador3d } from '../render3d/viewport3d';
+
+type Modulo3d = typeof import('../render3d/viewport3d');
+let modulo3dCache: Modulo3d | undefined;
+let promessaModulo3d: Promise<Modulo3d> | undefined;
+
+async function carregarModulo3d(): Promise<Modulo3d> {
+  if (modulo3dCache) return modulo3dCache;
+  promessaModulo3d ??= import('../render3d/viewport3d').then((m) => {
+    modulo3dCache = m;
+    return m;
+  });
+  return promessaModulo3d;
+}
 import {
   calcularCorteSincronizado,
   calcularRotulosParaSlots,
@@ -103,8 +135,6 @@ import {
   recalcularVinculoPorPosicoesAtuais,
   sincronizarParCornerstone,
   transformarPontoEntrePilhas,
-  mesmaModalidade,
-  mesmoEstudo,
 } from '../compare/modoComparar';
 import { invertLink, mapPosition, type ScrollLink } from '../compare/sync';
 import {
@@ -124,7 +154,7 @@ import {
   temPilhaEmArraste,
 } from '../ui/painelEstudos';
 import { estado } from '../state/store';
-import { adquirirVolume, descartarVolume, liberarVolume } from '../volume/montarVolume';
+import { adquirirVolume, descartarVolume, idVolumeParaPilha, liberarVolume } from '../volume/montarVolume';
 import { avaliarVolume } from '../volume/validarVolume';
 import { cineTocando, definirFps, fpsAtual, pararCine, pararTodosCines, tocarCine } from './cine';
 import { idElemento, ID_MOTOR, idViewport, iniciarCornerstone, MAX_VIEWPORTS } from './iniciar';
@@ -252,6 +282,10 @@ interface Slot {
   etiquetaComparacao: HTMLDivElement;
   avisoCobertura: HTMLDivElement;
   botaoDadosPet: HTMLButtonElement;
+  botaoVoltar: HTMLButtonElement;
+  botaoSairSeg: HTMLButtonElement;
+  scrubber: HTMLDivElement;
+  scrubberPino: HTMLDivElement;
   canvasMira: HTMLCanvasElement;
   pontoMiraMundo: Types.Point3 | null;
   controladorMip?: ControladorMipRotatorio;
@@ -307,8 +341,11 @@ export function obterLayoutAtual(): Layout {
   return layoutAtual;
 }
 
-// Sincronia automática entre séries do mesmo estudo (fora do modo Comparar).
+// Sincronia automática entre séries do mesmo estudo (fora do modo Comparar):
+// por padrão sincroniza apenas posição/rolagem; janela/nível e zoom/pan são opcionais.
 let sincroniaEstudoLigada = true;
+let janelaEstudoLigada = false;
+let zoomPanEstudoLigado = false;
 let assinaturaSincroniaEstudo = '';
 let sincronizandoEstudo = false;
 const indicesImpostosPorEstudo = new Map<number, number>();
@@ -394,23 +431,13 @@ function liberarIds(stackId: string | undefined): void {
   r.refs--;
   if (r.refs > 0) return;
   registro.delete(stackId);
-  cacheVoxels.delete(stackId);
+  invalidarCacheVoxels(stackId);
+  descartarVolumeDoWorker(stackId);
   esquecerSuvDaPilha(stackId);
   removerArquivos(r.ids);
 }
 
 // ---------- mensagens e utilidades ----------
-
-function textoDoErro(e: unknown): string {
-  if (e instanceof Error && e.message) return e.message;
-  if (typeof e === 'string' && e) return e;
-  if (e && typeof e === 'object') {
-    const o = e as { message?: unknown; error?: unknown };
-    if (typeof o.message === 'string' && o.message) return o.message;
-    if (o.error !== undefined) return textoDoErro(o.error);
-  }
-  return 'erro desconhecido';
-}
 
 function mostrarMensagem(slot: Slot, titulo: string, detalhe?: string, erro = false): void {
   slot.mensagem.hidden = false;
@@ -501,11 +528,11 @@ function estadoAtual(): EstadoViewports {
     linhasReferencia: linhasReferenciaLigadas,
     comparacao: {
       ativo: compararAtivo,
-      rolagemLigada: rolagemCompararLigada && linkRolagemComparar !== null,
+      rolagemLigada: compararAtivo ? rolagemCompararLigada && linkRolagemComparar !== null : sincroniaEstudoLigada,
       deslocamentoMm: linkRolagemComparar?.offsetMm ?? null,
       erroVinculo: erroVinculoComparar,
-      janelaLigada: janelaCompararLigada,
-      zoomPanLigado: zoomPanCompararLigado,
+      janelaLigada: compararAtivo ? janelaCompararLigada : janelaEstudoLigada,
+      zoomPanLigado: compararAtivo ? zoomPanCompararLigado : zoomPanEstudoLigado,
     },
   };
 }
@@ -513,23 +540,6 @@ function estadoAtual(): EstadoViewports {
 // ---------- sincronia automática entre séries do mesmo estudo ----------
 
 const ID_SYNC_ESTUDO_VOI = 'sync-estudo-voi';
-
-/** O slot mostra a fusão PET/TC: tem PET associado e está num plano de volume (axial, coronal, sagital). */
-function emFusao(s: Slot): boolean {
-  return !!s.pilhaFusao && (s.planoSlot === 'axial' || s.planoSlot === 'coronal' || s.planoSlot === 'sagital');
-}
-
-/** Esconde controles e legenda da fusão (o PET continua associado ao slot para voltar depois). */
-function ocultarFusaoVisual(s: Slot): void {
-  s.controlesFusao.hidden = true;
-  s.controlesFusao.replaceChildren();
-  s.legendaFusao?.remove();
-  s.legendaFusao = undefined;
-  s.atualizarLegendaFusao = undefined;
-  s.reaplicarFusao = undefined;
-  s.celula.classList.remove('modo-registro');
-  s.registro.ativo = false;
-}
 
 /** Viewports 2D (pilha) visíveis agrupados por estudo + referencial; só grupos com 2 ou mais. */
 function gruposSincroniaEstudo(): Slot[][] {
@@ -561,7 +571,7 @@ const chaveDoGrupo = (g: Slot[]): string => g.map((s) => s.idViewport).join(',')
  * demais células do grupo. Precisa de uma imagem já carregada: fica pendente e é tentado de novo.
  */
 function tentarZoomDoGrupo(): void {
-  if (zoomsPendentes.size === 0) return;
+  if (!zoomPanEstudoLigado || zoomsPendentes.size === 0) return;
   for (const grupo of gruposSincroniaEstudo()) {
     const chave = chaveDoGrupo(grupo);
     if (!zoomsPendentes.has(chave)) continue;
@@ -581,41 +591,47 @@ function tentarZoomDoGrupo(): void {
   }
 }
 
-/** Refaz os sincronizadores de janela (um por estudo/modalidade) e alinha o zoom físico (mm) quando os grupos mudam. */
+/** Refaz os sincronizadores opcionais de janela e zoom físico quando os grupos ou opções mudam. */
 function atualizarSincroniaEstudo(): void {
   const grupos = sincroniaEstudoLigada ? gruposSincroniaEstudo() : [];
-  const assinatura = grupos
-    .map((g) => g.map((s) => `${s.idViewport}:${s.pilha?.id}`).join(','))
-    .join('|');
+  const assinatura =
+    grupos.map((g) => g.map((s) => `${s.idViewport}:${s.pilha?.id}`).join(',')).join('|') +
+    `|j=${janelaEstudoLigada}|z=${zoomPanEstudoLigado}`;
   if (assinatura === assinaturaSincroniaEstudo) {
     tentarZoomDoGrupo();
     return;
   }
   assinaturaSincroniaEstudo = assinatura;
   zoomsPendentes.clear();
-  for (const g of grupos) zoomsPendentes.add(chaveDoGrupo(g));
+  if (zoomPanEstudoLigado) {
+    for (const g of grupos) zoomsPendentes.add(chaveDoGrupo(g));
+  }
 
   for (const id of idsSincronizadoresEstudo) SynchronizerManager.destroySynchronizer(id);
   idsSincronizadoresEstudo = [];
-  if (grupos.length === 0) return;
+  if (grupos.length === 0 || (!janelaEstudoLigada && !zoomPanEstudoLigado)) return;
 
   grupos.forEach((grupo, n) => {
-    for (const s of grupo) {
-      try {
-        s.viewport?.resetCamera();
-        s.viewport?.render();
-      } catch {
-        /* viewport ainda sem imagem */
+    if (zoomPanEstudoLigado) {
+      for (const s of grupo) {
+        try {
+          s.viewport?.resetCamera();
+          s.viewport?.render();
+        } catch {
+          /* viewport ainda sem imagem */
+        }
       }
     }
-    const idVoi = `${ID_SYNC_ESTUDO_VOI}-${n}`;
-    idsSincronizadoresEstudo.push(idVoi);
-    const voi = synchronizers.createVOISynchronizer(idVoi, { syncInvertState: true, syncColormap: true });
-    // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
-    const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
-    const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
-    if (mesmas.length >= 2) {
-      for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+    if (janelaEstudoLigada) {
+      const idVoi = `${ID_SYNC_ESTUDO_VOI}-${n}`;
+      idsSincronizadoresEstudo.push(idVoi);
+      const voi = synchronizers.createVOISynchronizer(idVoi, { syncInvertState: true, syncColormap: true });
+      // Janela só entre séries da mesma modalidade (PET em SUV e TC em HU não compartilham janela).
+      const modalidade = grupo[0]!.pilha?.instances[0]?.modality;
+      const mesmas = grupo.filter((s) => s.planoSlot === 'original' && s.pilha?.instances[0]?.modality === modalidade);
+      if (mesmas.length >= 2) {
+        for (const s of mesmas) voi.add({ renderingEngineId: ID_MOTOR, viewportId: s.idViewport });
+      }
     }
   });
   tentarZoomDoGrupo();
@@ -875,7 +891,7 @@ function aoMudarCameraEstudo(origem: number): void {
     }
     return;
   }
-  if (!sincroniaEstudoLigada || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
+  if (!sincroniaEstudoLigada || !zoomPanEstudoLigado || sincronizandoCameraEstudo || compararAtivo || mprAtivo) return;
   const so = slots[origem];
   if (!so?.viewport || !so.pilha || semCortes(so)) return;
   const grupo = gruposSincroniaEstudo().find((g) => g.includes(so));
@@ -928,6 +944,8 @@ function sincronizar(): void {
   for (const x of slots) {
     x.cubo.atualizar();
     x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
+    atualizarBotaoVoltarSlot(x);
+    atualizarScrubberSlot(x);
   }
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
@@ -957,12 +975,123 @@ function atualizarMascaras(): void {
 
 let criandoSegmentacao: Promise<void> | null = null;
 
+interface SnapshotAmbienteSegmentacao {
+  layoutAnterior: Layout;
+  mprAnterior: boolean;
+  slotsAnteriores: typeof estadoAntesDoMpr;
+  pilhaAlvo: StackNode;
+}
+let snapshotAmbienteSeg: SnapshotAmbienteSegmentacao | null = null;
+
+function capturarSnapshotSlots(): typeof estadoAntesDoMpr {
+  return slots.map((s) => ({
+    pilha: s.pilha,
+    planoSlot: s.planoSlot,
+    modoSlab: s.modoSlab,
+    slabMm: s.slabMm,
+    pilhaFusao: s.pilhaFusao,
+    fusao: { ...s.fusao },
+    corte:
+      s.tipoViewport === Enums.ViewportType.STACK && s.viewport && 'getCurrentImageIdIndex' in s.viewport
+        ? s.viewport.getCurrentImageIdIndex()
+        : s.corteSalvo,
+  }));
+}
+
 /**
- * Cria a segmentação da série do quadro ativo, se ainda não houver. Usa o volume da série
- * (montado se preciso) e guarda uma referência a ele enquanto a segmentação existir.
+ * Entra no ambiente dedicado de segmentação (colocando a sequência selecionada em MPR se
+ * ela suportar volume) e cria a segmentação da série, se ainda não houver.
  */
-export function garantirSegmentacaoAtiva(): Promise<void> {
-  return garantirSegmentacaoNoSlot(slots[ativo]);
+export async function garantirSegmentacaoAtiva(): Promise<void> {
+  const slotInicial =
+    (slots[ativo] && !slots[ativo]!.celula.hidden && slots[ativo]!.pilha ? slots[ativo] : undefined) ??
+    slots.find((s) => !s.celula.hidden && s.pilha && !semCortes(s)) ??
+    slots.find((s) => s.pilha !== null);
+  const stack = slotInicial?.pilha ?? null;
+  if (!slotInicial || !stack) return;
+
+  if (emModoSegmentacao() && !snapshotAmbienteSeg) {
+    snapshotAmbienteSeg = {
+      layoutAnterior: layoutAtual,
+      mprAnterior: mprAtivo,
+      slotsAnteriores: mprAtivo && estadoAntesDoMpr.length > 0 ? [...estadoAntesDoMpr] : capturarSnapshotSlots(),
+      pilhaAlvo: stack,
+    };
+
+    if (!mprAtivo) {
+      desmaximizar();
+      if (compararAtivo) desativarComparacaoInterno();
+      if (avaliarVolume(stack).ok) {
+        await montarLayoutMpr(
+          stack,
+          slotInicial.pilhaFusao ? { pet: slotInicial.pilhaFusao, config: { ...slotInicial.fusao } } : undefined,
+        );
+      } else if (layoutAtual !== '1x1') {
+        ativo = 0;
+        if (slotInicial.indice !== 0) {
+          await abrirPilha2d(stack);
+        }
+        await definirLayout('1x1');
+      }
+    }
+  }
+
+  const slotAlvo =
+    slots.find((s) => !s.celula.hidden && s.pilha?.id === stack.id && !semCortes(s)) ??
+    slots[ativo] ??
+    slots[0];
+  await garantirSegmentacaoNoSlot(slotAlvo);
+}
+
+/**
+ * Alterna a disposição visual dentro do Ambiente de Segmentação sem sair dele:
+ * - `'mpr'`: Axial + Coronal + Sagital sincronizados da sequência ativa;
+ * - `'2d'`: Corte 2D grande (`1x1`) da sequência ativa;
+ * - `'3d'`: Corte 2D + Reconstrução 3D lado a lado (`1x2`).
+ */
+export async function definirVistaAmbienteSegmentacao(vista: 'mpr' | '2d' | '3d'): Promise<void> {
+  const stack = snapshotAmbienteSeg?.pilhaAlvo ?? slots[ativo]?.pilha ?? slots[0]?.pilha ?? null;
+  if (!stack) return;
+
+  if (vista === 'mpr') {
+    if (mprAtivo) return;
+    if (avaliarVolume(stack).ok) {
+      await montarLayoutMpr(stack);
+      if (snapshotAmbienteSeg) {
+        estadoAntesDoMpr = [...snapshotAmbienteSeg.slotsAnteriores];
+      }
+    }
+    return;
+  }
+
+  if (vista === '2d') {
+    if (mprAtivo) {
+      estadoAntesDoMpr = [
+        {
+          pilha: stack,
+          planoSlot: 'original',
+          modoSlab: 'normal',
+          slabMm: 1,
+          pilhaFusao: null,
+          fusao: { opacidade: 0.5, colormap: NOME_HOT_IRON, teto: 10, minimo: 0 },
+          corte: undefined,
+        },
+      ];
+      await sairDoMpr('1x1');
+      return;
+    }
+    if (layoutAtual !== '1x1' || slots[0]?.planoSlot === '3d' || slots[0]?.planoSlot === 'mip-rotatorio') {
+      if (slots[1]) slots[1].planoSlot = 'original';
+      if (slots[0]) slots[0].planoSlot = 'original';
+      ativo = 0;
+      await definirLayout('1x1');
+    }
+    return;
+  }
+
+  if (vista === '3d') {
+    await abrir3dParaPilhaAtiva();
+  }
 }
 
 function garantirSegmentacaoNoSlot(slot: Slot | undefined): Promise<void> {
@@ -1018,7 +1147,9 @@ export async function abrirSegmentacaoSalva(bytes: Uint8Array): Promise<string> 
   if (jaTinha && temVoxelsPintados(stack.id)) {
     if (!window.confirm('Esta série já tem uma segmentação. Substituir pela do arquivo?')) return 'Nada foi alterado.';
   }
-  if (!jaTinha) await garantirSegmentacaoNoSlot(slot);
+  definirModoSegmentacao(true);
+  ativarViewport(slot.indice);
+  await garantirSegmentacaoAtiva();
   const geometria = geometriaDaSegmentacao(stack.id);
   if (!geometria) return 'Não foi possível preparar a segmentação desta série.';
   const motivo = conferirSegmentacao(cabecalho, { serieUid: stack.instances[0]?.seriesInstanceUid, geometria });
@@ -1027,21 +1158,69 @@ export async function abrirSegmentacaoSalva(bytes: Uint8Array): Promise<string> 
     return `Segmentação não aplicada: ${motivo}`;
   }
   aplicarSegmentacaoSalva(stack.id, cabecalho.segmentos, cabecalho.ativo, rotulos);
-  ativarViewport(slot.indice);
   sincronizar();
   const n = cabecalho.segmentos.length;
   return `Segmentação reaberta: ${n} segmento${n === 1 ? '' : 's'}.`;
 }
 
-/** Crescer região: cresce em 3D a partir do ponto, pela faixa do painel, no segmento ativo. */
-async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number]): Promise<SessaoCrescer | string> {
+/**
+ * Sai do ambiente dedicado de segmentação: restaura a disposição anterior dos quadros
+ * (mantendo os segmentos já pintados visíveis na série) e devolve o botão esquerdo para a navegação.
+ */
+export function sairModoSegmentacaoUI(): void {
+  definirModoSegmentacao(false);
+  const snap = snapshotAmbienteSeg;
+  snapshotAmbienteSeg = null;
+
+  void (async () => {
+    if (snap) {
+      if (snap.mprAnterior) {
+        if (!mprAtivo && avaliarVolume(snap.pilhaAlvo).ok) {
+          await montarLayoutMpr(snap.pilhaAlvo);
+        }
+        estadoAntesDoMpr = [...snap.slotsAnteriores];
+      } else if (mprAtivo) {
+        estadoAntesDoMpr = [...snap.slotsAnteriores];
+        await sairDoMpr(snap.layoutAnterior);
+      } else {
+        // Caso o usuário tenha alternado para 2D (1x1) ou 2D+3D (1x2) dentro do ambiente de segmentação
+        for (const s of slots) {
+          if (s.planoSlot === '3d' || s.planoSlot === 'mip-rotatorio') {
+            s.planoSlot = 'original';
+          }
+        }
+        if (layoutAtual !== snap.layoutAnterior) {
+          await definirLayout(snap.layoutAnterior);
+        } else if (slots[0]?.planoSlot !== (snap.slotsAnteriores[0]?.planoSlot ?? 'original')) {
+          await definirPlanoSlotAtivo(snap.slotsAnteriores[0]?.planoSlot ?? 'original');
+        }
+      }
+    }
+    if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) {
+      escolherFerramentaPrimaria(mprAtivo ? 'Crosshairs' : 'StackScroll');
+    }
+    sincronizar();
+  })();
+}
+
+/**
+ * Vaso (fase 10.2): a partir de um clique 2D/MPR, cresce de forma contígua em 3D pela faixa
+ * configurável `[huReferencia + deltaMin, huReferencia + deltaMax]` (padrão -80 a +300 HU)
+ * e cria um novo segmento ("Vaso N") ou aplica no segmento ativo.
+ */
+async function vasoNoPonto(idVp: string, mundo: [number, number, number]): Promise<string> {
   const slot = slots.find((s) => s.idViewport === idVp);
   const stack = slot?.pilha;
   if (!slot || !stack) return 'Série não encontrada no quadro.';
-  if (!segmentacaoDaPilha(stack.id)) await garantirSegmentacaoAtiva();
+  if (!segmentacaoDaPilha(stack.id)) await garantirSegmentacaoNoSlot(slot);
   const seg = segmentacaoDaPilha(stack.id);
   if (!seg) return 'Crie a segmentação antes (Novo segmento).';
-  if (seg.segmentos.find((x) => x.indice === seg.ativo)?.bloqueado) return 'O segmento ativo está bloqueado.';
+
+  const cfg = vasoConfig();
+  if (!cfg.novoSegmento && seg.segmentos.find((x) => x.indice === seg.ativo)?.bloqueado) {
+    return 'O segmento ativo está bloqueado.';
+  }
+
   const v = await carregarVoxels(stack, slot.ids);
   if ('erro' in v) return v.erro;
   const ijk = worldToVoxel(v.grid, mundo);
@@ -1050,40 +1229,102 @@ async function crescerRegiaoNoPonto(idVp: string, mundo: [number, number, number
   const semente: [number, number, number] = [Math.round(ijk[0]), Math.round(ijk[1]), Math.round(ijk[2])];
   const [i, j, k] = semente;
   if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 'O ponto está fora do volume.';
-  const valor = v.data[i + j * nx + k * nx * ny]!;
-  const modalidade = stack.instances[0]?.modality;
+
+  const volEscalar = { data: v.data, grid: v.grid };
+  const ehTc = stack.instances[0]?.modality === 'CT';
+  const huCentro = v.data[i + j * nx + k * nx * ny]!;
+  const faixaInteligente = calcularFaixaInteligenteVaso(huCentro, cfg.modo, cfg.alcancePct, ehTc);
+
+  const res = crescerVaso(volEscalar, semente, {
+    deltaMin: faixaInteligente.deltaMin,
+    deltaMax: faixaInteligente.deltaMax,
+    ...(faixaInteligente.pisoMin !== undefined ? { pisoMin: faixaInteligente.pisoMin } : {}),
+    ...(faixaInteligente.tetoMax !== undefined ? { tetoMax: faixaInteligente.tetoMax } : {}),
+  });
+  if (res.indices.length === 0) return 'Nenhum voxel conectado encontrado na faixa do vaso.';
+
+  const alvo = cfg.novoSegmento
+    ? prepararSegmentoVaso(stack.id, faixaInteligente.modoEfetivo)
+    : seg.segmentos.find((x) => x.indice === seg.ativo);
+  if (!alvo) return 'Não foi possível criar um novo segmento (limite de 255 segmentos).';
+
+  const pintura = pintarIndices(stack.id, res.indices, nx * ny);
+  registrarUltimaSementeVaso(stack.id, {
+    seedIjk: res.semente,
+    segmentoIndice: alvo.indice,
+    indicesPintados: pintura.indices,
+  });
+
+  return textoStatusVaso(stack, alvo.nome, res);
+}
+
+function textoStatusVaso(
+  stack: StackNode,
+  nomeSegmento: string,
+  res: { indices: Int32Array; min: number; max: number; huReferencia: number; volumeMl: number },
+): string {
   const ehPet = stack.instances.some((x) => x.modality === 'PT');
-  const volume = { data: v.data, grid: v.grid };
-  // Sem faixa no painel: a faixa vem dos valores em volta do clique (ver faixaPelaSemente).
-  const auto = faixaPelaSemente(volume, semente, ehPet ? 'pet' : modalidade === 'CT' ? 'tc' : 'outro');
-  const f = faixaSegmentacao();
-  const min = f.min ?? auto.min;
-  const max = f.max ?? auto.max;
   const un = unidadeDaSerie(stack);
-  const n = (x: number): string => formatarValor(x, ehPet ? 2 : 0);
-  const faixaTexto = `${n(min)} a ${Number.isFinite(max) ? n(max) : '∞'}${un ? ' ' + un : ''}`;
-  if (valor < min || valor > max) return `O valor do clique (${n(valor)}) está fora da faixa ${faixaTexto}.`;
-  const pilhaId = stack.id;
-  const porCorte = nx * ny;
-  let pintura: PinturaDesfazivel | null = null;
-  return {
-    crescer: (raioMm) => {
-      // Cada raio novo refaz a pintura a partir do que havia antes do clique.
-      if (pintura) desfazerPintura(pilhaId, pintura, porCorte);
-      const regiao = crescerNaEsfera(volume, semente, { min, max, raioMm });
-      pintura = pintarIndices(pilhaId, regiao.indices, porCorte);
-      return `Crescer região: raio ${raioMm} mm, ${regiao.indices.length.toLocaleString('pt-BR')} voxels (faixa ${faixaTexto}). Arraste para longe do clique para crescer mais.`;
-    },
-  };
+  const casas = ehPet ? 2 : 0;
+  const fmt = (x: number): string => formatarValor(x, casas);
+  const faixaTexto = `${fmt(res.min)} a ${fmt(res.max)}${un ? ' ' + un : ''}`;
+  const volTexto =
+    res.volumeMl > 0
+      ? ` · ${res.volumeMl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} mL`
+      : '';
+  return `Vaso ("${nomeSegmento}"): ${res.indices.length.toLocaleString('pt-BR')} voxels${volTexto} (ref. ${fmt(res.huReferencia)}${un ? ' ' + un : ''}, faixa ${faixaTexto}).`;
+}
+
+async function recalcularVasoDaPilha(
+  pilhaId: string,
+  cor?: [number, number, number],
+): Promise<string | undefined> {
+  const ultima = ultimaSementeVasoDa(pilhaId);
+  const seg = segmentacaoDaPilha(pilhaId);
+  const slot = slots.find((s) => s.pilha?.id === pilhaId);
+  const stack = slot?.pilha;
+  if (!ultima || !seg || !slot || !stack) return undefined;
+  const alvo = seg.segmentos.find((x) => x.indice === ultima.segmentoIndice);
+  if (!alvo || alvo.bloqueado) return undefined;
+
+  const v = await carregarVoxels(stack, slot.ids);
+  if ('erro' in v) return v.erro;
+  if (cor) definirCorSegmento(pilhaId, alvo.indice, cor);
+
+  const cfg = vasoConfig();
+  const volEscalar = { data: v.data, grid: v.grid };
+  const ehTc = stack.instances[0]?.modality === 'CT';
+  const [nx, ny] = v.grid.dims;
+  const [si, sj, sk] = ultima.seedIjk;
+  const huCentro = v.data[si + sj * nx + sk * nx * ny]!;
+  const faixaInteligente = calcularFaixaInteligenteVaso(huCentro, cfg.modo, cfg.alcancePct, ehTc);
+
+  const res = crescerVaso(volEscalar, ultima.seedIjk, {
+    deltaMin: faixaInteligente.deltaMin,
+    deltaMax: faixaInteligente.deltaMax,
+    ...(faixaInteligente.pisoMin !== undefined ? { pisoMin: faixaInteligente.pisoMin } : {}),
+    ...(faixaInteligente.tetoMax !== undefined ? { tetoMax: faixaInteligente.tetoMax } : {}),
+  });
+  ultima.indicesPintados = reaplicarIndicesNoSegmento(
+    pilhaId,
+    alvo.indice,
+    ultima.indicesPintados,
+    res.indices,
+    nx * ny,
+  );
+  return textoStatusVaso(stack, alvo.nome, res);
 }
 
 /** Distância máxima (mm) entre dois cortes pintados para o pincel preencher os cortes entre eles. */
 const LIMITE_LIGAR_CORTES_MM = 20;
 
-// Pincel: ao soltar o botão, o miolo de um contorno fechado pela pincelada é preenchido e o
-// corte é ligado aos cortes pintados próximos (os vazios entre eles recebem formas intermediárias).
+// Pincel: ao soltar o botão, o miolo de um contorno fechado pela pincelada é preenchido e
+// os cortes pintados próximos (até 20 mm) são ligados quando "Auto-ligar cortes" está ativo (padrão).
+// Segurar Shift com o Pincel apaga temporariamente como borracha sem precisar trocar de ferramenta.
 function iniciarPreenchimentoDoPincel(): void {
   let pincelada: { pilhaId: string; corte: CorteDaMascara; antes: Set<number> } | null = null;
+  let apagandoComShift = false;
+
   grade.addEventListener(
     'mousedown',
     (ev) => {
@@ -1092,6 +1333,16 @@ function iniciarPreenchimentoDoPincel(): void {
       const slot = slots.find((s) => s.elemento.contains(ev.target as Node));
       const v = slot?.viewport;
       if (!slot?.pilha || !v || semCortes(slot) || !segmentacaoDaPilha(slot.pilha.id)) return;
+
+      if (ev.shiftKey) {
+        const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+        if (grupo?.hasTool(NOME_PINCEL)) {
+          grupo.setToolConfiguration(NOME_PINCEL, { activeStrategy: 'ERASE_INSIDE_CIRCLE' });
+          apagandoComShift = true;
+        }
+        return;
+      }
+
       const camera = v.getCamera();
       if (!camera.viewPlaneNormal || !camera.focalPoint) return;
       const fp = camera.focalPoint;
@@ -1104,17 +1355,25 @@ function iniciarPreenchimentoDoPincel(): void {
   window.addEventListener(
     'mouseup',
     () => {
+      if (apagandoComShift) {
+        apagandoComShift = false;
+        const grupo = ToolGroupManager.getToolGroup(ID_GRUPO);
+        if (grupo?.hasTool(NOME_PINCEL)) {
+          grupo.setToolConfiguration(NOME_PINCEL, { activeStrategy: 'FILL_INSIDE_CIRCLE' });
+        }
+      }
       const p = pincelada;
       pincelada = null;
       // Depois de o pincel do Cornerstone terminar a pincelada deste mesmo mouseup.
       if (!p) return;
       setTimeout(() => {
         preencherBuracosNovos(p.pilhaId, p.corte, p.antes);
+        if (!autoLigarCortesPincel()) return;
         const ligados = ligarCortesProximos(p.pilhaId, p.corte, LIMITE_LIGAR_CORTES_MM);
         if (ligados > 0) {
           document.dispatchEvent(
             new CustomEvent(EVENTO_MENSAGEM_SEGMENTACAO, {
-              detail: `Pincel: ${ligados} ${ligados === 1 ? 'corte vazio preenchido' : 'cortes vazios preenchidos'} entre os cortes pintados.`,
+              detail: `Pincel: ${ligados} ${ligados === 1 ? 'corte intermediário ligado' : 'cortes intermediários ligados'} automaticamente.`,
             }),
           );
         }
@@ -1122,6 +1381,19 @@ function iniciarPreenchimentoDoPincel(): void {
     },
     true,
   );
+}
+
+/** Liga manualmente o corte visível no viewport ativo aos cortes próximos pintados no segmento ativo. */
+export function ligarCortesProximosNoViewportAtivo(): number {
+  const slot = slots[ativo];
+  const v = slot?.viewport;
+  if (!slot?.pilha || !v || semCortes(slot) || !segmentacaoDaPilha(slot.pilha.id)) return 0;
+  const camera = v.getCamera();
+  if (!camera.viewPlaneNormal || !camera.focalPoint) return 0;
+  const fp = camera.focalPoint;
+  const corte = corteDaMascara(slot.pilha.id, camera.viewPlaneNormal, [fp[0], fp[1], fp[2]]);
+  if (!corte) return 0;
+  return ligarCortesProximos(slot.pilha.id, corte, LIMITE_LIGAR_CORTES_MM);
 }
 
 export function ativarViewport(indice: number): void {
@@ -1184,7 +1456,7 @@ async function garantirViewportMpr(
 }
 
 async function garantirViewport3d(slot: Slot): Promise<Types.IVolumeViewport> {
-  const motor = await iniciarCornerstone();
+  const [motor, mod3d] = await Promise.all([iniciarCornerstone(), carregarModulo3d()]);
   if (slot.habilitado) {
     await desabilitar(slot, false);
   }
@@ -1199,7 +1471,7 @@ async function garantirViewport3d(slot: Slot): Promise<Types.IVolumeViewport> {
       background: [0, 0, 0],
     },
   });
-  adicionarAoGrupo3d(slot.idViewport);
+  mod3d.adicionarAoGrupo3d(slot.idViewport);
   slot.viewport = motor.getViewport<Types.IVolumeViewport>(slot.idViewport);
   slot.habilitado = true;
   return slot.viewport as Types.IVolumeViewport;
@@ -1228,7 +1500,7 @@ async function desabilitar(slot: Slot, cancelarGeracao = true): Promise<void> {
   }
   const motor = await iniciarCornerstone();
   removerViewportDoGrupo(slot.idViewport);
-  removerDoGrupo3d(slot.idViewport);
+  modulo3dCache?.removerDoGrupo3d(slot.idViewport);
   motor.disableElement(slot.idViewport);
   esquecerPlanoGirado(slot.idViewport);
   slot.viewport = undefined;
@@ -1271,27 +1543,6 @@ function aplicarSlabAoViewport(vp: Types.IVolumeViewport, modo: ModoSlab, mm: nu
     vp.setBlendMode(blendMode);
   }
   corrigirOpacidadePeloSlab(vp);
-}
-
-/**
- * Faz a opacidade dos volumes sobrepostos (o PET da fusão) valer o que foi pedido.
- *
- * O vtk.js trata a opacidade como "por unidade de distância": o que aparece na tela é
- * 1 - (1 - opacidade)^(percurso do raio / unidade). Num corte fino o raio percorre ~0,125 mm e a
- * unidade padrão é 1 mm, então 50% pedidos viravam ~9% na tela (fusão desbotada). Igualando a
- * unidade ao percurso do raio no slab, o expoente vira 1 e 50% são 50%.
- *
- * Percurso medido no navegador (Cornerstone 5.17.1): 2 × slab + 0,025 mm
- * (0,125 mm no slab mínimo de 0,05; 2,0 em 1 mm; 10 em 5 mm).
- */
-function corrigirOpacidadePeloSlab(vp: Types.IVolumeViewport): void {
-  const percurso = 2 * vp.getSlabThickness() + 0.025;
-  for (const entrada of vp.getActors().slice(1)) {
-    const prop = (entrada.actor as { getProperty?: () => unknown }).getProperty?.() as
-      | { setScalarOpacityUnitDistance?: (componente: number, mm: number) => void }
-      | undefined;
-    prop?.setScalarOpacityUnitDistance?.(0, percurso);
-  }
 }
 
 /**
@@ -1687,101 +1938,31 @@ function saltarParaPontoMundo(origemIndice: number, ponto: Types.Point3): void {
   aplicarLocalizador3d(origemIndice, ponto);
 }
 
-/**
- * Hot iron: preto, vermelho escuro, vermelho, laranja, amarelo e branco (como em outros
- * visualizadores). Registrado no Cornerstone com este nome.
- */
-const NOME_HOT_IRON = 'Hot iron';
-utilitariosCore.colormap.registerColormap({
-  ColorSpace: 'RGB',
-  Name: NOME_HOT_IRON,
-  RGBPoints: [
-    0, 0, 0, 0,
-    0.18, 0.4, 0, 0,
-    0.38, 0.9, 0.05, 0,
-    0.58, 1, 0.45, 0,
-    0.78, 1, 0.92, 0.1,
-    1, 1, 1, 0.95,
-  ],
-} as never);
-
-/** Nomes dos colormaps usados na fusão (Hot iron é o nosso; os demais, do vtk.js). */
-const COLORMAPS_FUSAO: Array<[string, string]> = [
-  [NOME_HOT_IRON, 'Hot iron (ferro quente)'],
-  ['jet', 'Arco-íris (jet)'],
-  ['Inverted-Grayscale', 'Cinza invertido'],
-  ['Grayscale', 'Cinza'],
-];
-
-/** CSS de gradiente (de baixo para cima) do colormap, para a legenda. */
-function gradienteDoColormap(nome: string): string {
-  const cm = utilitariosCore.colormap.resolveColormap(nome) as { RGBPoints?: number[] } | undefined;
-  const pts = cm?.RGBPoints;
-  if (!pts || pts.length < 8) return 'linear-gradient(to top, #000, #fff)';
-  const paradas: string[] = [];
-  for (let i = 0; i + 3 < pts.length; i += 4) {
-    const c = [pts[i + 1]!, pts[i + 2]!, pts[i + 3]!].map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255));
-    paradas.push(`rgb(${c[0]}, ${c[1]}, ${c[2]}) ${(pts[i]! * 100).toFixed(1)}%`);
-  }
-  return `linear-gradient(to top, ${paradas.join(', ')})`;
-}
-
-function unidadeLegenda(stack: StackNode | null): string {
-  const un = stack ? unidadeDaPilha(stack.id) : 'SUVbw';
-  return un === 'SUVbw' || un === 'SUL' ? `${un} (g/ml)` : un === 'SUVbsa' ? `${un} (cm²/ml)` : un;
-}
-
-
-/** Aplica opacidade, colormap e teto de SUV ao PET da fusão (independentes da janela da TC). */
-function aplicarFusao(slot: Slot, volumeCtId: string, volumePetId: string): void {
-  const vp = slot.viewport as Types.IVolumeViewport | undefined;
-  if (!vp) return;
-  const { opacidade, colormap, teto, minimo } = slot.fusao;
-  const piso = Math.min(minimo, teto * 0.9);
-  vp.setProperties(
-    {
-      voiRange: { lower: 0, upper: teto },
-      colormap: {
-        name: colormap,
-        // Fundo (SUV baixo) transparente; a captação aparece com a opacidade escolhida.
-        opacity: [
-          // Sem SUV mínimo (0): opacidade constante em toda a faixa, como nos visualizadores de PET/CT
-          // (fundo escuro-avermelhado em todo o corpo). Com mínimo: transparente abaixo dele e a
-          // opacidade sobe até o valor escolhido em ~25% da faixa.
-          ...(piso <= 0
-            ? [
-                { value: 0, opacity: opacidade },
-                { value: Math.max(teto, 0.01), opacity: opacidade },
-              ]
-            : [
-                { value: 0, opacity: 0 },
-                { value: piso, opacity: 0 },
-                { value: piso + (teto - piso) * 0.25, opacity: opacidade },
-                { value: Math.max(teto, piso + 0.01), opacity: opacidade },
-              ]),
-        ],
-      },
-    },
-    volumePetId,
-  );
-  void volumeCtId;
-  corrigirOpacidadePeloSlab(vp);
-  slot.atualizarLegendaFusao?.();
-  aplicarRegistroPet(slot, volumePetId);
-  vp.render();
-  // O colormap/opacidade do segundo volume só aparece depois de um render do motor inteiro.
+function renderizarMotor(): void {
   void iniciarCornerstone().then((m) => m.render());
 }
 
-/** Translada o PET sobre a TC (registro manual) deslocando o ator do volume. */
-function aplicarRegistroPet(slot: Slot, volumePetId: string): void {
-  const vp = slot.viewport as Types.IVolumeViewport | undefined;
-  const ator = vp?.getActors().find((a) => a.referencedId === volumePetId)?.actor as
-    | { setPosition?: (x: number, y: number, z: number) => void }
-    | undefined;
-  const d = slot.registro.deslocamento;
-  ator?.setPosition?.(d[0], d[1], d[2]);
+function opcoesControlesFusao(
+  slot: Slot,
+  alvos?: Slot[],
+  mpr?: boolean,
+): OpcoesControlesFusao {
+  return {
+    mpr,
+    obterAlvos: () =>
+      alvos ??
+      (compararAtivo && emFusao(slots[0]!) && emFusao(slots[1]!) && (slot === slots[0] || slot === slots[1])
+        ? [slots[0]!, slots[1]!]
+        : [slot]),
+    estudoDaPilha,
+    nomeDaSerie,
+    trocarSeries: (anat, pet, sameFrame) => {
+      void configurarFusaoNoSlot(slot, anat, pet, sameFrame);
+    },
+    renderizarMotor,
+  };
 }
+
 
 function estudoDaPilha(stack: StackNode): StudyNode | undefined {
   for (const p of estado.resultado?.index.patients ?? []) {
@@ -1814,224 +1995,6 @@ async function configurarFusaoNoSlot(
   }
   ativo = anteriorAtivo;
   sincronizar();
-}
-
-function criarLegendaFusao(slot: Slot): void {
-  // Legenda da escala (como nos visualizadores de PET): opacidade, barra de cores, máx, 0 e unidade.
-  slot.legendaFusao?.remove();
-  const legenda = document.createElement('div');
-  legenda.className = 'legenda-fusao';
-  const legOp = document.createElement('div');
-  legOp.className = 'leg-op';
-  const legCorpo = document.createElement('div');
-  legCorpo.className = 'leg-corpo';
-  const legBarra = document.createElement('div');
-  legBarra.className = 'leg-barra';
-  const legRot = document.createElement('div');
-  legRot.className = 'leg-rotulos';
-  const legMax = document.createElement('span');
-  const legMin = document.createElement('span');
-  legRot.append(legMax, legMin);
-  legCorpo.append(legBarra, legRot);
-  const legUn = document.createElement('div');
-  legUn.className = 'leg-un';
-  legenda.append(legOp, legCorpo, legUn);
-  slot.celula.append(legenda);
-  slot.legendaFusao = legenda;
-  slot.atualizarLegendaFusao = () => {
-    const f = slot.fusao;
-    const num = (n: number): string => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    legOp.textContent = `${Math.round(f.opacidade * 100)}%`;
-    legBarra.style.background = gradienteDoColormap(f.colormap);
-    legMax.textContent = num(f.teto);
-    legMin.textContent = num(0);
-    legUn.textContent = unidadeLegenda(slot.pilhaFusao);
-  };
-  slot.atualizarLegendaFusao();
-}
-
-/**
- * Controles e legenda da fusão. No MPR (`mpr: true`) há uma só barra, no 1º plano, que reaplica o
- * ajuste aos três planos (`alvos`); o registro manual e a troca de séries ficam só na fusão axial.
- */
-function montarControlesFusao(
-  slot: Slot,
-  volumeCtId: string,
-  volumePetId: string,
-  opcoes: { alvos?: Slot[]; mpr?: boolean } = {},
-): void {
-  slot.volumesFusao = { ct: volumeCtId, pet: volumePetId };
-  criarLegendaFusao(slot);
-
-  const c = slot.controlesFusao;
-  c.replaceChildren();
-  c.hidden = false;
-  const reaplicar = (): void => {
-    // MPR: os três planos; comparação de dois PET/CT: as duas fusões (mesma escala nos dois lados).
-    const alvos =
-      opcoes.alvos ??
-      (compararAtivo && emFusao(slots[0]!) && emFusao(slots[1]!) && (slot === slots[0] || slot === slots[1])
-        ? [slots[0]!, slots[1]!]
-        : [slot]);
-    for (const a of alvos) {
-      const v = a.volumesFusao ?? { ct: volumeCtId, pet: volumePetId };
-      aplicarFusao(a, v.ct, v.pet);
-    }
-  };
-  slot.reaplicarFusao = reaplicar;
-
-  const opac = document.createElement('input');
-  opac.type = 'range';
-  opac.min = '0';
-  opac.max = '100';
-  opac.value = String(Math.round(slot.fusao.opacidade * 100));
-  opac.title = 'Opacidade do PET';
-  opac.addEventListener('input', () => {
-    slot.fusao.opacidade = Number(opac.value) / 100;
-    reaplicar();
-  });
-
-  const cor = document.createElement('select');
-  cor.title = 'Colormap do PET';
-  for (const [v, t] of COLORMAPS_FUSAO) {
-    const o = document.createElement('option');
-    o.value = v;
-    o.textContent = t;
-    cor.append(o);
-  }
-  cor.value = slot.fusao.colormap;
-  cor.addEventListener('change', () => {
-    slot.fusao.colormap = cor.value;
-    reaplicar();
-  });
-
-  const teto = document.createElement('input');
-  teto.type = 'number';
-  teto.min = '0.5';
-  teto.step = '0.5';
-  teto.value = String(slot.fusao.teto);
-  teto.title = 'Teto de SUV do PET (a janela do PET vai de 0 até aqui)';
-  teto.addEventListener('change', () => {
-    const v = Number(teto.value.replace(',', '.'));
-    if (v > 0) {
-      slot.fusao.teto = v;
-      reaplicar();
-    }
-  });
-
-  const minimo = document.createElement('input');
-  minimo.type = 'number';
-  minimo.min = '0';
-  minimo.step = '0.5';
-  minimo.value = String(slot.fusao.minimo);
-  minimo.title = 'SUV mínimo: abaixo disso o PET fica transparente';
-  minimo.addEventListener('change', () => {
-    const v = Number(minimo.value.replace(',', '.'));
-    if (v >= 0) {
-      slot.fusao.minimo = v;
-      reaplicar();
-    }
-  });
-
-  const rot = (t: string, el: HTMLElement): HTMLElement => {
-    const l = document.createElement('label');
-    l.textContent = t;
-    l.append(el);
-    return l;
-  };
-  // Registro manual: arrastar o PET sobre a TC (translação), com o deslocamento em mm.
-  const mover = document.createElement('button');
-  mover.type = 'button';
-  mover.textContent = 'Mover PET';
-  mover.title = 'Arraste no viewport para deslocar o PET sobre a TC (corrige movimento do paciente)';
-  const leitura = document.createElement('span');
-  const restaurar = document.createElement('button');
-  restaurar.type = 'button';
-  restaurar.textContent = 'Restaurar';
-  const atualizarLeitura = (): void => {
-    const d = slot.registro.deslocamento;
-    const nulo = d[0] === 0 && d[1] === 0 && d[2] === 0;
-    leitura.textContent = nulo ? 'Δ 0 mm' : `Δ ${d.map((v) => v.toFixed(1).replace('.', ',')).join(' · ')} mm`;
-    restaurar.disabled = nulo;
-    mover.setAttribute('aria-pressed', String(slot.registro.ativo));
-    slot.celula.classList.toggle('modo-registro', slot.registro.ativo);
-  };
-  const passoZ = (delta: number): HTMLButtonElement => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = delta > 0 ? 'z+' : 'z−';
-    b.title = `Desloca o PET ${Math.abs(delta)} mm na direção cabeça-pés`;
-    b.addEventListener('click', () => {
-      slot.registro.deslocamento[2] += delta;
-      aplicarRegistroPet(slot, volumePetId);
-      atualizarLeitura();
-      void iniciarCornerstone().then((m) => m.render());
-    });
-    return b;
-  };
-  mover.addEventListener('click', () => {
-    slot.registro.ativo = !slot.registro.ativo;
-    atualizarLeitura();
-  });
-  restaurar.addEventListener('click', () => {
-    slot.registro.deslocamento = [0, 0, 0];
-    aplicarRegistroPet(slot, volumePetId);
-    atualizarLeitura();
-    void iniciarCornerstone().then((m) => m.render());
-  });
-  atualizarLeitura();
-  slot.atualizarLeituraRegistro = atualizarLeitura;
-  // Escolha das séries da fusão (as candidatas do estudo): PET e TC/RM.
-  const estudo = slot.pilha ? estudoDaPilha(slot.pilha) : undefined;
-  const pares = estudo ? findFusionCandidates(estudo) : [];
-  const unicos = (pegar: (c: FusionCandidate) => StackNode): StackNode[] => {
-    const m = new Map<string, StackNode>();
-    for (const c of pares) m.set(pegar(c).id, pegar(c));
-    return [...m.values()];
-  };
-  const seletorSerie = (rotulo: string, opcoes: StackNode[], atual: string | undefined, aoEscolher: (st: StackNode) => void): HTMLElement => {
-    const sel = document.createElement('select');
-    sel.title = rotulo;
-    for (const st of opcoes) {
-      const o = document.createElement('option');
-      o.value = st.id;
-      const n = st.instances.length;
-      o.textContent = `${nomeDaSerie(st)} (${n})`;
-      sel.append(o);
-    }
-    if (atual) sel.value = atual;
-    sel.disabled = opcoes.length < 2;
-    sel.addEventListener('change', () => {
-      const st = opcoes.find((x) => x.id === sel.value);
-      if (st) aoEscolher(st);
-    });
-    return rot(`${rotulo} `, sel);
-  };
-  const trocarSeries = (pet: StackNode, anat: StackNode): void => {
-    const par = pares.find((c) => c.pet.id === pet.id && c.anatomic.id === anat.id);
-    void configurarFusaoNoSlot(slot, anat, pet, par ? par.sameFrame : false);
-  };
-  const seriesFusao = document.createElement('div');
-  seriesFusao.className = 'series-fusao';
-  seriesFusao.append(
-    seletorSerie('PET', unicos((c) => c.pet), slot.pilhaFusao?.id, (st) => slot.pilha && trocarSeries(st, slot.pilha)),
-    seletorSerie('TC/RM', unicos((c) => c.anatomic), slot.pilha?.id, (st) => slot.pilhaFusao && trocarSeries(slot.pilhaFusao, st)),
-  );
-
-  const painel = document.createElement('div');
-  painel.className = 'painel-fusao';
-  painel.hidden = true;
-  if (opcoes.mpr) painel.append(rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto));
-  else painel.append(seriesFusao, rot('PET ', opac), rot('', cor), rot('SUV mín ', minimo), rot('máx ', teto), mover, passoZ(-2), passoZ(2), leitura, restaurar);
-  const abrir = document.createElement('button');
-  abrir.type = 'button';
-  abrir.className = 'btn-fusao';
-  abrir.textContent = '⚙ Fusão';
-  abrir.title = 'Opacidade, colormap, SUV mín/máx e ajuste do registro do PET';
-  abrir.addEventListener('click', () => {
-    painel.hidden = !painel.hidden;
-  });
-  c.append(abrir, painel);
 }
 
 function salvarEstadoVisualSlot(slot: Slot): {
@@ -2115,7 +2078,7 @@ async function exibirSlot(
     mostrarMensagem(slot, `Montando o 3D de ${nome}…`);
     sincronizar();
     try {
-      const motor = await iniciarCornerstone();
+      const [motor, modulo3d] = await Promise.all([iniciarCornerstone(), carregarModulo3d()]);
       const vp = await garantirViewport3d(slot);
       slot.montandoVolume = true;
       if (minhaGeracao !== slot.geracao) return;
@@ -2123,13 +2086,14 @@ async function exibirSlot(
       if (minhaGeracao !== slot.geracao) return;
       await setVolumesForViewports(motor, [{ volumeId }], [slot.idViewport], true);
       if (minhaGeracao !== slot.geracao) return;
-      slot.controlador3d = montar3d({
+      slot.controlador3d = modulo3d.montar3d({
         contentor: slot.celula,
         modalidade: mod3d,
         obterViewport: () =>
           slot.tipoViewport === Enums.ViewportType.VOLUME_3D
             ? (slot.viewport as Types.IVolumeViewport | undefined)
             : undefined,
+        obterPilhaId: () => slot.pilha?.id,
         aoMudar: () => slot.overlay.atualizar(),
         // Clique no 3D: leva os cortes 2D ao primeiro tecido visível na linha do clique.
         aoClicar: (canvas) => {
@@ -2138,7 +2102,7 @@ async function exibirSlot(
             if (!v3 || slot.tipoViewport !== Enums.ViewportType.VOLUME_3D) return;
             const voxels = await carregarVoxels(stack, ids);
             if ('erro' in voxels) return;
-            const ponto = pontoVisivelNoClique(v3, canvas, (p) => valorNoPonto(voxels, [p[0], p[1], p[2]]));
+            const ponto = modulo3d.pontoVisivelNoClique(v3, canvas, (p) => valorNoPonto(voxels, [p[0], p[1], p[2]]));
             if (ponto) saltarParaPontoMundo(slot.indice, ponto);
           })();
         },
@@ -2193,8 +2157,8 @@ async function exibirSlot(
       await setVolumesForViewports(motor, entradas, [slot.idViewport], true);
       if (minhaGeracao !== slot.geracao) return;
       if (volumePetId) {
-        montarControlesFusao(slot, volumeId, volumePetId);
-        aplicarFusao(slot, volumeId, volumePetId);
+        montarControlesFusao(slot, volumeId, volumePetId, opcoesControlesFusao(slot));
+        aplicarFusao(slot, volumeId, volumePetId, renderizarMotor);
       }
 
       if (slot.planoSlot === 'original' && corteInicial !== undefined) {
@@ -2477,9 +2441,167 @@ export function alternar3d(): Promise<void> {
   return alternarPlanoAoLado('3d');
 }
 
+/**
+ * Garante que a reconstrução 3D esteja visível para a série ativa (sem fechá-la caso já esteja aberta),
+ * usado pelo botão "🧊 Reconstruir 3D" da segmentação.
+ */
+export async function abrir3dParaPilhaAtiva(): Promise<void> {
+  const slotAtivo = slots[ativo] ?? slots[0];
+  const stack = slotAtivo?.pilha ?? slots[0]?.pilha ?? null;
+  if (!stack) return;
+  const jaAberto = slots.find(
+    (s) => !s.celula.hidden && s.planoSlot === '3d' && s.pilha?.id === stack.id,
+  );
+  if (jaAberto) {
+    jaAberto.viewport?.render();
+    sincronizar();
+    return;
+  }
+  await alternarPlanoAoLado('3d');
+}
+
+function slotMostraBotaoVoltar(slot: Slot): boolean {
+  if (slot.celula.hidden || !slot.habilitado || !slot.pilha) return false;
+  if (mprAtivo) return slot.indice === 0;
+  if (slot.planoSlot === '3d' || slot.planoSlot === 'mip-rotatorio') return true;
+  if (slot.planoSlot !== 'original' && !emFusao(slot)) return true;
+  return false;
+}
+
+function atualizarBotaoVoltarSlot(slot: Slot): void {
+  const visivel = slotMostraBotaoVoltar(slot);
+  slot.botaoVoltar.hidden = !visivel;
+  const mostrarSairSeg =
+    emModoSegmentacao() &&
+    !slot.celula.hidden &&
+    slot.habilitado &&
+    Boolean(slot.pilha) &&
+    !semCortes(slot) &&
+    slot.indice === ativo;
+  slot.botaoSairSeg.hidden = !mostrarSairSeg;
+  slot.botaoSairSeg.classList.toggle('abaixo-voltar', visivel);
+  if (!visivel) return;
+  if (mprAtivo) {
+    slot.botaoVoltar.title = 'Sair do MPR e retornar à imagem original (F2 ou R)';
+  } else if (slot.planoSlot === '3d') {
+    slot.botaoVoltar.title = 'Fechar o 3D e retornar à imagem 2D de origem (F3)';
+  } else if (slot.planoSlot === 'mip-rotatorio') {
+    slot.botaoVoltar.title = 'Fechar o MIP 3D e retornar à imagem 2D de origem';
+  } else {
+    slot.botaoVoltar.title = 'Retornar ao plano de aquisição original';
+  }
+}
+
+/**
+ * Atalho estilo RadiAnt (Ctrl+Alt+1 Coronal, Ctrl+Alt+2 Sagital, Ctrl+Alt+3 Axial):
+ * muda o plano do quadro ativo (tanto em 2D quanto dentro do MPR).
+ */
+export async function selecionarPlanoOrtogonalAtivo(plano: 'coronal' | 'sagital' | 'axial'): Promise<void> {
+  const slot = slots[ativo];
+  if (!slot?.pilha || !slot.habilitado || semCortes(slot)) return;
+  if (mprAtivo) {
+    trocarPlanoMpr(slot, plano);
+    return;
+  }
+  await definirPlanoSlotAtivo(plano);
+}
+
+async function voltarDaReconstrucaoSlot(indice: number): Promise<void> {
+  if (mprAtivo) {
+    await sairDoMpr();
+    return;
+  }
+  const slot = slots[indice];
+  if (!slot?.pilha) return;
+  if (slot.planoSlot === '3d' || slot.planoSlot === 'mip-rotatorio') {
+    if (
+      layoutAtual === '1x2' &&
+      indice === 1 &&
+      slots[0]?.pilha?.id === slot.pilha.id &&
+      slots[1]?.pilha?.id === slot.pilha.id
+    ) {
+      await alternarPlanoAoLado(slot.planoSlot);
+      return;
+    }
+    ativarViewport(indice);
+    await definirPlanoSlotAtivo('original');
+    return;
+  }
+  if (slot.planoSlot !== 'original') {
+    ativarViewport(indice);
+    await definirPlanoSlotAtivo('original');
+  }
+}
+
+function obterCorteETotalSlot(slot: Slot): { indice: number; total: number } | null {
+  const vp = slot.viewport;
+  if (!slot.habilitado || !vp || !slot.pilha || semCortes(slot) || !slot.mensagem.hidden) {
+    return null;
+  }
+  try {
+    if ('setImageIdIndex' in vp) {
+      const total = vp.getImageIds().length || slot.pilha.instances.length;
+      const idx = vp.getCurrentImageIdIndex() ?? 0;
+      return { indice: Math.min(Math.max(idx, 0), Math.max(0, total - 1)), total };
+    }
+    const total = vp.getNumberOfSlices() || slot.pilha.instances.length;
+    const idx = vp.getSliceIndex() ?? 0;
+    return { indice: Math.min(Math.max(idx, 0), Math.max(0, total - 1)), total };
+  } catch {
+    return null;
+  }
+}
+
+function atualizarScrubberSlot(slot: Slot): void {
+  const info = obterCorteETotalSlot(slot);
+  if (!info || info.total <= 1) {
+    slot.scrubber.hidden = true;
+    return;
+  }
+  slot.scrubber.hidden = false;
+  const frac = info.indice / (info.total - 1);
+  const altPct = Math.max(6, Math.min(35, 100 / info.total));
+  const topoPct = frac * (100 - altPct);
+  slot.scrubberPino.style.height = `${altPct.toFixed(2)}%`;
+  slot.scrubberPino.style.top = `${topoPct.toFixed(2)}%`;
+  slot.scrubber.title = `Corte ${info.indice + 1} / ${info.total} — clique ou arraste para navegar`;
+}
+
+function pularParaFracaoScrubber(slot: Slot, fracao: number): void {
+  const info = obterCorteETotalSlot(slot);
+  const vp = slot.viewport;
+  if (!info || info.total <= 1 || !vp) return;
+  const f = Math.min(1, Math.max(0, fracao));
+  const alvo = Math.round(f * (info.total - 1));
+  if (alvo === info.indice) return;
+  try {
+    if ('setImageIdIndex' in vp) {
+      void vp.setImageIdIndex(alvo);
+    } else {
+      vp.scroll(alvo - info.indice);
+    }
+  } catch {
+    /* ignora durante transição */
+  }
+}
+
 async function alternarPlanoAoLado(plano: 'mip-rotatorio' | '3d'): Promise<void> {
   if (mprAtivo) {
-    await sairDoMpr('1x2');
+    const stackMpr = slots[0]?.pilha ?? null;
+    if (stackMpr) {
+      estadoAntesDoMpr = [
+        {
+          pilha: stackMpr,
+          planoSlot: 'original',
+          modoSlab: 'normal',
+          slabMm: 1,
+          pilhaFusao: null,
+          fusao: { opacidade: 0.5, colormap: NOME_HOT_IRON, teto: 10, minimo: 0 },
+          corte: undefined,
+        },
+      ];
+    }
+    await sairDoMpr('1x1');
   }
 
   const slot0 = slots[0];
@@ -2850,9 +2972,17 @@ async function montarLayoutMpr(
       for (let i = 0; i < 3; i++) {
         const sl = slots[i]!;
         sl.volumesFusao = { ct: resVol.volumeId, pet: resPet.volumeId };
-        if (i === 0) montarControlesFusao(sl, resVol.volumeId, resPet.volumeId, { alvos: [slots[0]!, slots[1]!, slots[2]!], mpr: true });
-        else criarLegendaFusao(sl);
-        aplicarFusao(sl, resVol.volumeId, resPet.volumeId);
+        if (i === 0) {
+          montarControlesFusao(
+            sl,
+            resVol.volumeId,
+            resPet.volumeId,
+            opcoesControlesFusao(sl, [slots[0]!, slots[1]!, slots[2]!], true),
+          );
+        } else {
+          criarLegendaFusao(sl);
+        }
+        aplicarFusao(sl, resVol.volumeId, resPet.volumeId, renderizarMotor);
       }
     }
 
@@ -3044,18 +3174,16 @@ function atualizarEtiquetasComparacao(): void {
 }
 
 /**
- * Padrão da sincronia ao formar o par: se os dois lados são do mesmo estudo, zoom e pan ficam
- * ligados (e a rolagem por posição, que já é o padrão); a janela só quando a modalidade é a mesma
- * (PET em SUV e TC em HU não compartilham janela). Estudos diferentes: tudo como antes.
+ * Padrão da sincronia ao formar o par: mantém apenas a rolagem por posição (mm) ligada por padrão;
+ * zoom/pan e janela/nível ficam desligados (exceto escala de SUV em PET × PET).
  */
 function definirPadroesSincroniaComparar(): void {
   const a = slots[0]?.pilha ?? null;
   const b = slots[1]?.pilha ?? null;
-  const mesmo = mesmoEstudo(a, b);
-  zoomPanCompararLigado = mesmo;
+  zoomPanCompararLigado = false;
   // PET x PET (mesmo estudo ou não): a mesma escala de SUV nos dois lados.
   const ambosPet = !!a?.instances.some((i) => i.modality === 'PT') && !!b?.instances.some((i) => i.modality === 'PT');
-  janelaCompararLigada = (mesmo && mesmaModalidade(a, b)) || ambosPet;
+  janelaCompararLigada = ambosPet;
 }
 
 function atualizarSincronizadoresCornerstoneComparar(): void {
@@ -3251,7 +3379,10 @@ export async function alternarModoComparar(): Promise<void> {
  * o alinhamento anatômico escolhido manualmente pelo usuário.
  */
 export function alternarCadeadoRolagemComparar(): void {
-  if (!compararAtivo) return;
+  if (!compararAtivo) {
+    alternarSincroniaEstudo();
+    return;
+  }
   const s0 = slots[0];
   const s1 = slots[1];
   if (!s0?.pilha || !s1?.pilha) return;
@@ -3293,17 +3424,27 @@ export function zerarVinculoRolagemComparar(): void {
   recalcularVinculoInicialComparacao();
 }
 
-/** Liga ou desliga a sincronização de janela/nível entre os dois exames (4.3). */
+/** Liga ou desliga a sincronização de janela/nível (no modo Comparar ou entre séries do estudo). */
 export function alternarSincronizacaoJanelaComparar(): void {
-  if (!compararAtivo) return;
+  if (!compararAtivo) {
+    janelaEstudoLigada = !janelaEstudoLigada;
+    atualizarSincroniaEstudo();
+    sincronizar();
+    return;
+  }
   janelaCompararLigada = !janelaCompararLigada;
   atualizarSincronizadoresCornerstoneComparar();
   sincronizar();
 }
 
-/** Liga ou desliga a sincronização de zoom/pan entre os dois exames (4.3). */
+/** Liga ou desliga a sincronização de zoom/pan (no modo Comparar ou entre séries do estudo). */
 export function alternarSincronizacaoZoomPanComparar(): void {
-  if (!compararAtivo) return;
+  if (!compararAtivo) {
+    zoomPanEstudoLigado = !zoomPanEstudoLigado;
+    atualizarSincroniaEstudo();
+    sincronizar();
+    return;
+  }
   zoomPanCompararLigado = !zoomPanCompararLigado;
   atualizarSincronizadoresCornerstoneComparar();
   sincronizar();
@@ -3332,6 +3473,7 @@ export async function abrirCurvaPerfusaoAtiva(): Promise<void> {
     }
   }
 
+  const { abrirDialogoCurvaPerfusao } = await import('../tools/curvaPerfusao');
   await abrirDialogoCurvaPerfusao({
     elementoViewport: slot.elemento,
     pilhaAtiva: slot.pilha,
@@ -3521,6 +3663,11 @@ async function redimensionarMotor(manterCamera = false, tentativa = 0): Promise<
   });
 }
 
+/** Redimensiona os viewports ativos quando o painel de séries muda de tamanho ou posição. */
+export function redimensionarViewports(): void {
+  void redimensionarMotor(true);
+}
+
 /** Volta da tela cheia de um viewport para a grade anterior. */
 function desmaximizar(redimensionar = false): void {
   if (maximizado === null || !gradeAntesDeMaximizar) return;
@@ -3587,56 +3734,6 @@ export async function definirLayout(novo: Layout): Promise<void> {
   }
 }
 
-/** Espera o streaming do volume terminar (todos os cortes decodificados). */
-async function aguardarVolumeCompleto(vol: Types.IImageVolume): Promise<void> {
-  const completo = (): boolean => (vol.loadStatus as { loaded?: boolean } | undefined)?.loaded === true;
-  const limite = Date.now() + 180_000;
-  while (!completo()) {
-    if (Date.now() > limite) throw new Error('Tempo esgotado carregando o volume.');
-    await new Promise((r) => setTimeout(r, 150));
-  }
-}
-
-interface Voxels {
-  data: ArrayLike<number>;
-  grid: ReturnType<typeof gridFromVolumeProps>;
-}
-
-/** Voxels já copiados por pilha (evita remontar o volume a cada medida). Invalidado ao recalcular o SUV. */
-const cacheVoxels = new Map<string, Voxels>();
-
-/**
- * Copia os voxels e a grade do volume da pilha (monta o volume se preciso e solta a referência
- * ao terminar).
- */
-async function carregarVoxels(stack: StackNode, ids: string[]): Promise<Voxels | { erro: string }> {
-  const guardado = cacheVoxels.get(stack.id);
-  if (guardado) return guardado;
-  const res = adquirirVolume(stack, ids);
-  if (!res.ok) return { erro: `Medida volumétrica indisponível: ${res.mensagens.join(' · ')}` };
-  try {
-    const vol = (await res.promessa) as Types.IImageVolume;
-    await aguardarVolumeCompleto(vol);
-    const dados = vol.voxelManager?.getCompleteScalarDataArray?.();
-    if (!dados) return { erro: 'Não foi possível ler os voxels do volume.' };
-    const v: Voxels = {
-      data: dados,
-      grid: gridFromVolumeProps({
-        dimensions: vol.dimensions,
-        spacing: vol.spacing,
-        origin: vol.origin,
-        direction: vol.direction,
-      }),
-    };
-    cacheVoxels.set(stack.id, v);
-    return v;
-  } catch (e) {
-    return { erro: textoDoErro(e) };
-  } finally {
-    liberarVolume(stack.id);
-  }
-}
-
 function unidadeDaSerie(stack: StackNode): string {
   if (stack.instances.some((i) => i.modality === 'PT')) return unidadeDaPilha(stack.id);
   return stack.instances.some((i) => i.modality === 'CT') ? 'HU' : '';
@@ -3660,15 +3757,6 @@ async function volumeParaVoi(idVp: string): Promise<RespostaResolvedor> {
     ehPet,
     ...(naFusao ? { deslocamentoMm: [...slot.registro.deslocamento] as [number, number, number] } : {}),
   };
-}
-
-function valorNoPonto(v: Voxels, mundo: [number, number, number]): number | undefined {
-  const ijk = worldToVoxel(v.grid, mundo);
-  if (!ijk) return undefined;
-  const [i, j, k] = [Math.round(ijk[0]), Math.round(ijk[1]), Math.round(ijk[2])];
-  const [nx, ny, nz] = v.grid.dims;
-  if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return undefined;
-  return v.data[i + j * nx + k * nx * ny];
 }
 
 function formatarValor(n: number, casas: number): string {
@@ -3710,7 +3798,8 @@ export async function aplicarCorrecoesPet(stack: StackNode, correcoes: Correcoes
   const ids = registro.get(stack.id)?.ids;
   if (!ids) return;
   definirCorrecoesDaPilha(stack.id, correcoes);
-  cacheVoxels.delete(stack.id);
+  invalidarCacheVoxels(stack.id);
+  descartarVolumeDoWorker(stack.id);
   registrarSuvDaPilha(stack, ids);
 
   const afetados = slots.filter((s) => s.pilha?.id === stack.id);
@@ -3793,7 +3882,6 @@ export async function compararPetCt(): Promise<void> {
   slots[1]!.fusao = slots[0]!.fusao;
   await configurarFusaoNoSlot(slots[0]!, parA.anatomic, parA.pet, parA.sameFrame);
   await configurarFusaoNoSlot(slots[1]!, parB.anatomic, parB.pet, parB.sameFrame);
-  zoomPanCompararLigado = true;
   sincronizar();
 }
 
@@ -3981,7 +4069,49 @@ function criarSlot(indice: number): Slot {
   botaoDadosPet.textContent = 'Dados PET';
   botaoDadosPet.title = 'Ver e corrigir peso, altura, dose e horários usados no cálculo do SUV';
   botaoDadosPet.hidden = true;
-  celula.append(elemento, canvasMira, mensagem, avisoVolume, controlesMip, controlesFusao, etiquetaComparacao, avisoCobertura, botaoDadosPet);
+
+  const botaoVoltar = document.createElement('button');
+  botaoVoltar.type = 'button';
+  botaoVoltar.className = 'btn-voltar-reconstrucao';
+  botaoVoltar.textContent = '← Voltar';
+  botaoVoltar.hidden = true;
+  botaoVoltar.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    void voltarDaReconstrucaoSlot(indice);
+  });
+
+  const botaoSairSeg = document.createElement('button');
+  botaoSairSeg.type = 'button';
+  botaoSairSeg.className = 'btn-sair-segmentacao-vp';
+  botaoSairSeg.textContent = '✓ Concluir segmentação';
+  botaoSairSeg.title = 'Sair do modo de segmentação e voltar a rolar cortes (Esc) — mantém os segmentos salvos';
+  botaoSairSeg.hidden = true;
+  botaoSairSeg.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    sairModoSegmentacaoUI();
+  });
+
+  const scrubber = document.createElement('div');
+  scrubber.className = 'scrubber-cortes';
+  scrubber.hidden = true;
+  const scrubberPino = document.createElement('div');
+  scrubberPino.className = 'scrubber-pino';
+  scrubber.append(scrubberPino);
+
+  celula.append(
+    elemento,
+    canvasMira,
+    mensagem,
+    avisoVolume,
+    controlesMip,
+    controlesFusao,
+    etiquetaComparacao,
+    avisoCobertura,
+    botaoDadosPet,
+    botaoVoltar,
+    botaoSairSeg,
+    scrubber,
+  );
 
   const slot: Slot = {
     indice,
@@ -3995,6 +4125,10 @@ function criarSlot(indice: number): Slot {
     etiquetaComparacao,
     avisoCobertura,
     botaoDadosPet,
+    botaoVoltar,
+    botaoSairSeg,
+    scrubber,
+    scrubberPino,
     canvasMira,
     pontoMiraMundo: null,
     tipoViewport: Enums.ViewportType.STACK,
@@ -4026,8 +4160,8 @@ function criarSlot(indice: number): Slot {
     },
     rotulo3d: () => {
       const m = modalidade3d(slot.pilha?.instances[0]?.modality);
-      return slot.tipoViewport === Enums.ViewportType.VOLUME_3D && slot.habilitado && m
-        ? rotuloPredefinicao3d(slot.idViewport, m)
+      return slot.tipoViewport === Enums.ViewportType.VOLUME_3D && slot.habilitado && m && modulo3dCache
+        ? modulo3dCache.rotuloPredefinicao3d(slot.idViewport, m)
         : undefined;
     },
   });
@@ -4046,9 +4180,41 @@ function criarSlot(indice: number): Slot {
     atualizar: () => {
       overlayBase.atualizar();
       slot.cubo.atualizar();
+      atualizarBotaoVoltarSlot(slot);
+      atualizarScrubberSlot(slot);
     },
   };
   slot.overlay.ligar(elemento);
+
+  scrubber.addEventListener('mousedown', (ev) => {
+    ev.stopPropagation();
+  });
+  scrubber.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ativarViewport(indice);
+    scrubber.setPointerCapture(ev.pointerId);
+    scrubber.classList.add('arrastando');
+    const aplicar = (clientY: number): void => {
+      const r = scrubber.getBoundingClientRect();
+      if (r.height <= 0) return;
+      pularParaFracaoScrubber(slot, (clientY - r.top) / r.height);
+      atualizarScrubberSlot(slot);
+    };
+    aplicar(ev.clientY);
+    const aoMover = (m: PointerEvent): void => aplicar(m.clientY);
+    const encerrar = (): void => {
+      scrubber.classList.remove('arrastando');
+      scrubber.removeEventListener('pointermove', aoMover);
+      scrubber.removeEventListener('pointerup', encerrar);
+      scrubber.removeEventListener('pointercancel', encerrar);
+    };
+    scrubber.addEventListener('pointermove', aoMover);
+    scrubber.addEventListener('pointerup', encerrar);
+    scrubber.addEventListener('pointercancel', encerrar);
+  });
+
   elemento.addEventListener(Enums.Events.VOI_MODIFIED, () => {
     sincronizarVoiMpr(indice);
     emitirJanelaSegundaJanela(indice);
@@ -4059,17 +4225,20 @@ function criarSlot(indice: number): Slot {
     aoRolarSlotEstudo(indice);
     emitirRolagemSegundaJanela(indice);
     atualizarMiraSlot(slot);
+    atualizarScrubberSlot(slot);
   });
   elemento.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, () => {
     aoRolarSlotComparar(indice);
     aoRolarSlotEstudo(indice);
     emitirRolagemSegundaJanela(indice);
     atualizarMiraSlot(slot);
+    atualizarScrubberSlot(slot);
   });
   elemento.addEventListener(Enums.Events.CAMERA_MODIFIED, () => {
     aoMudarCameraEstudo(indice);
     atualizarMiraSlot(slot);
     slot.cubo.atualizar();
+    atualizarScrubberSlot(slot);
   });
   celula.addEventListener('mousedown', () => ativarViewport(indice), true);
   // Arrastar e soltar uma série da barra lateral diretamente sobre este quadro:
@@ -4109,40 +4278,7 @@ function criarSlot(indice: number): Slot {
     true,
   );
   // Registro manual: com "Mover PET" ligado, arrastar na fusão desloca o PET (no plano da imagem).
-  celula.addEventListener(
-    'mousedown',
-    (ev) => {
-      const v = slot.viewport;
-      if (ev.button !== 0 || !slot.registro.ativo || !emFusao(slot) || !v || !slot.volumesFusao) return;
-      if (ev.target instanceof Element && ev.target.closest('.controles-fusao')) return;
-      const rect = elemento.getBoundingClientRect();
-      const mundoInicial = v.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
-      const base = [...slot.registro.deslocamento] as [number, number, number];
-      const aoMover = (m: MouseEvent): void => {
-        const atual = v.canvasToWorld([m.clientX - rect.left, m.clientY - rect.top]);
-        // Só no plano da imagem: tira do deslocamento a componente ao longo da normal do corte
-        // (o ajuste na direção cabeça-pés é feito pelos botões z− e z+).
-        const dx = atual[0] - mundoInicial[0];
-        const dy = atual[1] - mundoInicial[1];
-        const dz = atual[2] - mundoInicial[2];
-        const n = v.getCamera().viewPlaneNormal ?? [0, 0, 1];
-        const ao = dx * n[0] + dy * n[1] + dz * n[2];
-        slot.registro.deslocamento = [base[0] + dx - ao * n[0], base[1] + dy - ao * n[1], base[2] + dz - ao * n[2]];
-        aplicarRegistroPet(slot, slot.volumesFusao!.pet);
-        slot.atualizarLeituraRegistro?.();
-        void iniciarCornerstone().then((mot) => mot.render());
-      };
-      const aoSoltar = (): void => {
-        window.removeEventListener('mousemove', aoMover, true);
-        window.removeEventListener('mouseup', aoSoltar, true);
-      };
-      window.addEventListener('mousemove', aoMover, true);
-      window.addEventListener('mouseup', aoSoltar, true);
-      ev.stopPropagation();
-      ev.preventDefault();
-    },
-    true,
-  );
+  ligarArrastoRegistroPet(celula, elemento, slot, renderizarMotor);
   botaoDadosPet.addEventListener('click', () => {
     if (slot.pilha) document.dispatchEvent(new CustomEvent(EVENTO_DADOS_PET, { detail: slot.pilha }));
   });
@@ -4189,10 +4325,24 @@ function criarSlot(indice: number): Slot {
 
       atualizarPorEvento(e);
 
-      const aoMover = (ev: MouseEvent) => atualizarPorEvento(ev);
+      let eventoPendente: MouseEvent | null = null;
+      let rafLoc = 0;
+      const aoMover = (ev: MouseEvent) => {
+        eventoPendente = ev;
+        if (rafLoc) return;
+        rafLoc = requestAnimationFrame(() => {
+          rafLoc = 0;
+          if (eventoPendente) atualizarPorEvento(eventoPendente);
+        });
+      };
       const aoSoltar = () => {
         window.removeEventListener('mousemove', aoMover, true);
         window.removeEventListener('mouseup', aoSoltar, true);
+        if (rafLoc) {
+          cancelAnimationFrame(rafLoc);
+          rafLoc = 0;
+          if (eventoPendente) atualizarPorEvento(eventoPendente);
+        }
       };
       window.addEventListener('mousemove', aoMover, true);
       window.addEventListener('mouseup', aoSoltar, true);
@@ -4203,6 +4353,12 @@ function criarSlot(indice: number): Slot {
   celula.addEventListener(
     'wheel',
     (e) => {
+      if (e.altKey && !e.ctrlKey && ehFerramentaSegmentacao(ferramentaPrimariaAtual())) {
+        e.preventDefault();
+        e.stopPropagation();
+        ajustarRaioPincelDelta(e.deltaY < 0 ? 1 : -1);
+        return;
+      }
       if (!e.ctrlKey) return;
       e.preventDefault();
       e.stopPropagation();
@@ -4221,7 +4377,14 @@ function criarSlot(indice: number): Slot {
 export function configurarViewport2d(elementos: ElementosViewport2d): void {
   definirResolvedorVoi(volumeParaVoi);
   definirResolvedorSonda(valoresNoPonto);
-  definirResolvedorCrescer(crescerRegiaoNoPonto);
+  definirResolvedorVaso(vasoNoPonto);
+  definirResolvedorRecalculoVaso(recalcularVasoDaPilha);
+  definirResolvedorCriacaoSegmentacao(async (pilhaId) => {
+    const slot =
+      slots.find((s) => !s.celula.hidden && s.pilha?.id === pilhaId && !semCortes(s)) ??
+      slots.find((s) => s.pilha?.id === pilhaId);
+    await garantirSegmentacaoNoSlot(slot);
+  });
   // Volumetria: valores da série (HU ou SUV) na mesma grade da máscara.
   definirResolvedorValores(async (pilhaId) => {
     const slot = slots.find((s) => s.pilha?.id === pilhaId);
@@ -4236,9 +4399,16 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
       ehPet: stack.instances.some((x) => x.modality === 'PT'),
     };
   });
-  // Ferramenta de segmentação escolhida (barra, painel ou tecla): cria a segmentação da série ativa.
+  // Ferramenta de segmentação escolhida (barra, painel ou tecla): abre o modo segmentação e cria a máscara da série ativa.
   document.addEventListener(EVENTO_BOTOES_MUDARAM, () => {
-    if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) void garantirSegmentacaoAtiva();
+    if (ehFerramentaSegmentacao(ferramentaPrimariaAtual())) {
+      definirModoSegmentacao(true);
+      void garantirSegmentacaoAtiva();
+    }
+    for (const s of slots) atualizarBotaoVoltarSlot(s);
+  });
+  document.addEventListener(EVENTO_MODO_SEGMENTACAO, () => {
+    for (const s of slots) atualizarBotaoVoltarSlot(s);
   });
   iniciarVoiEsfera();
   // Girar plano: o ponto fixo é o centro do crosshair (MPR) ou a cruzinha do ┼ Localizar.
@@ -4270,29 +4440,39 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
   });
   grade = document.createElement('div');
   grade.id = 'grade';
+  let rafRedimensionar = 0;
   const observadorTamanho = new ResizeObserver(() => {
-    void redimensionarMotor(false);
+    if (slots.every((s) => !s.habilitado) || rafRedimensionar) return;
+    rafRedimensionar = requestAnimationFrame(() => {
+      rafRedimensionar = 0;
+      void redimensionarMotor(false);
+    });
   });
+  observadorTamanho.observe(grade);
   for (let i = 0; i < MAX_VIEWPORTS; i++) {
     const slot = criarSlot(i);
     slots.push(slot);
     grade.append(slot.celula);
-    observadorTamanho.observe(slot.elemento);
   }
   elementos.contentor.append(grade);
   iniciarPreenchimentoDoPincel();
-  eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, () => {
+  eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, (ev: unknown) => {
+    const volumeId = (ev as CustomEvent<{ volumeId?: string }> | undefined)?.detail?.volumeId;
     for (const slot of slots) {
-      if (slot.habilitado && slot.tipoViewport === Enums.ViewportType.ORTHOGRAPHIC) {
-        slot.reaplicarFusao?.();
-        // Fusão: aproxima o zoom ao corpo (como nas outras células), uma vez, com a TC já carregada.
-        if (emFusao(slot) && !slot.zoomFusaoAjustado && slot.viewport && slot.ids.length > 0) {
-          slot.zoomFusaoAjustado = true;
-          ajustarZoomAoConteudo(slot.viewport, slot.ids[Math.floor(slot.ids.length / 2)]!, slot.pilha?.instances[0]?.modality);
-        }
-        slot.viewport?.render();
-        slot.overlay.atualizar();
+      if (!slot.habilitado || slot.tipoViewport !== Enums.ViewportType.ORTHOGRAPHIC) continue;
+      if (volumeId) {
+        const ehPilha = slot.pilha !== null && idVolumeParaPilha(slot.pilha.id) === volumeId;
+        const ehFusao = slot.pilhaFusao !== null && idVolumeParaPilha(slot.pilhaFusao.id) === volumeId;
+        if (!ehPilha && !ehFusao) continue;
       }
+      slot.reaplicarFusao?.();
+      // Fusão: aproxima o zoom ao corpo (como nas outras células), uma vez, com a TC já carregada.
+      if (emFusao(slot) && !slot.zoomFusaoAjustado && slot.viewport && slot.ids.length > 0) {
+        slot.zoomFusaoAjustado = true;
+        ajustarZoomAoConteudo(slot.viewport, slot.ids[Math.floor(slot.ids.length / 2)]!, slot.pilha?.instances[0]?.modality);
+      }
+      slot.viewport?.render();
+      slot.overlay.atualizar();
     }
   });
   void definirLayout(elementos.layoutInicial ?? '1x1');
