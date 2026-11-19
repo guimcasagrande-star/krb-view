@@ -121,14 +121,51 @@ export function desenharTracinhos(
   drawing.drawLine(svg, uid, `${id}-b`, [b[0] - px, b[1] - py], [b[0] + px, b[1] + py], opcoes);
 }
 
-/** Distância nativa (LengthTool) com os tracinhos das extremidades. Mantém o nome `Length`. */
+/** Distância mínima (px na tela) para o soltar do 1º clique da Distância contar como arrasto real. */
+const DISTANCIA_ARRASTE_PX = 10;
+
+/** Distância nativa (LengthTool) com os tracinhos das extremidades e proteção contra micro-tremor no 1º clique. */
 export class DistanciaTool extends LengthTool {
+  private inicioCanvasNovo: Ponto2 | null = null;
+  private liberouPrimeiroClique = false;
+
   constructor(...args: ConstructorParameters<typeof LengthTool>) {
     super(...args);
-    // No LengthTool `renderAnnotation` é um campo (função de seta), não um método: embrulha-se aqui.
-    const original = this.renderAnnotation;
+    // No LengthTool os callbacks são campos (funções de seta), não métodos: embrulha-se aqui.
+    const originalAdd = this.addNewAnnotation;
+    this.addNewAnnotation = (evt) => {
+      const c = evt.detail?.currentPoints?.canvas;
+      this.inicioCanvasNovo = c ? [c[0], c[1]] : null;
+      this.liberouPrimeiroClique = false;
+      return originalAdd(evt);
+    };
+
+    const self = this as unknown as {
+      _endCallback: (evt: Types.EventTypes.InteractionEventType) => void;
+      editData: { newAnnotation?: boolean; hasMoved?: boolean } | null;
+    };
+    const originalEnd = self._endCallback;
+    self._endCallback = (evt) => {
+      if (self.editData?.newAnnotation && !this.liberouPrimeiroClique) {
+        const c = evt.detail?.currentPoints?.canvas;
+        const distPx =
+          c && this.inicioCanvasNovo
+            ? Math.hypot(c[0] - this.inicioCanvasNovo[0], c[1] - this.inicioCanvasNovo[1])
+            : 0;
+        // Se foi só um clique (ou micro-tremor < 10 px) — ou modo "só cliques" — não encerra no 1º soltar.
+        if (medidas().modoClique === 'clicar' || distPx < DISTANCIA_ARRASTE_PX) {
+          this.liberouPrimeiroClique = true;
+          return;
+        }
+      }
+      this.inicioCanvasNovo = null;
+      this.liberouPrimeiroClique = false;
+      originalEnd(evt);
+    };
+
+    const originalRender = this.renderAnnotation;
     this.renderAnnotation = (enabledElement, svgDrawingHelper) => {
-      const resultado = original(enabledElement, svgDrawingHelper);
+      const resultado = originalRender(enabledElement, svgDrawingHelper);
       this.desenharTracinhosDasDistancias(enabledElement, svgDrawingHelper);
       return resultado;
     };

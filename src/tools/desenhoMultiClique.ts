@@ -22,8 +22,13 @@ import { AnnotationTool, annotation as anotacoes, state as estadoTools, utilitie
 
 export type Ponto = [number, number, number];
 
-/** Distância mínima (mm) para um ponto contar como "movido" em relação ao anterior. */
+/** Distância mínima (mm) para um ponto contar como válido em relação ao anterior. */
 const DISTANCIA_MINIMA_MM = 0.5;
+/**
+ * Distância mínima em pixels na tela para o soltar do 1º clique (`mouseup`) contar como
+ * arrasto intencional ("clicar, arrastar e soltar") em vez de um clique com micro-tremor da mão.
+ */
+const DISTANCIA_ARRASTE_PX = 10;
 
 export function distancia3(a: Ponto, b: Ponto): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -37,8 +42,12 @@ interface RascunhoMultiClique {
   indice: number;
   /** Verdadeiro quando o próximo ponto inicia um segmento novo e ainda não foi clicado. */
   aguardandoInicio: boolean;
-  /** O ponto corrente já se afastou do anterior (pode ser fixado ao soltar). */
+  /** O ponto corrente já se afastou do anterior em mm (válido para fechar no 2º clique). */
   moveu: boolean;
+  /** Posição na tela (px) onde o segmento atual começou, para distinguir clique com tremor de arrasto real. */
+  origemCanvas: [number, number];
+  /** Verdadeiro quando o ponto atual já foi arrastado >= DISTANCIA_ARRASTE_PX na tela. */
+  arrastouNaTela: boolean;
 }
 
 export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
@@ -79,6 +88,8 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
 
     const { element } = detalhe;
     const mundo = [...detalhe.currentPoints.world] as Ponto;
+    const canvas = detalhe.currentPoints.canvas;
+    const origemCanvas: [number, number] = [canvas[0], canvas[1]];
     const ann = this.createAnnotation(evt, [mundo, [...mundo]] as never) as Types.Annotation;
     this.aoCriarAnotacao(ann, detalhe.viewportId);
     anotacoes.state.addAnnotation(ann, element);
@@ -89,6 +100,8 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
       indice: 1,
       aguardandoInicio: false,
       moveu: false,
+      origemCanvas,
+      arrastouNaTela: false,
     };
     this.ativarDesenho();
     evt.preventDefault();
@@ -100,15 +113,20 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     return this.rascunho!.annotation.data.handles!.points as Ponto[];
   }
 
+  private canvasDoEvento(ev: MouseEvent): [number, number] {
+    const rect = this.rascunho!.element.getBoundingClientRect();
+    return [ev.clientX - rect.left, ev.clientY - rect.top];
+  }
+
   /** Converte a posição do mouse para coordenadas do paciente no viewport do rascunho. */
   private mundoDoEvento(ev: MouseEvent): Ponto | null {
     const r = this.rascunho;
     if (!r) return null;
     const viewport = getEnabledElement(r.element)?.viewport;
     if (!viewport) return null;
-    const rect = r.element.getBoundingClientRect();
+    const canvas = this.canvasDoEvento(ev);
     try {
-      const w = viewport.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
+      const w = viewport.canvasToWorld(canvas);
       if (!w || !Number.isFinite(w[0]) || !Number.isFinite(w[1]) || !Number.isFinite(w[2])) return null;
       return [w[0], w[1], w[2]];
     } catch {
@@ -121,12 +139,15 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     return mundo;
   }
 
-  private posicionarPontoCorrente(mundoBruto: Ponto): void {
+  private posicionarPontoCorrente(mundoBruto: Ponto, canvas?: [number, number]): void {
     const r = this.rascunho!;
     const pontos = this.pontos();
     const mundo = this.ajustarPontoCorrente(r.indice, mundoBruto, pontos);
     pontos[r.indice] = mundo;
     r.moveu = distancia3(pontos[r.indice - 1]!, mundo) >= DISTANCIA_MINIMA_MM;
+    if (canvas && Math.hypot(canvas[0] - r.origemCanvas[0], canvas[1] - r.origemCanvas[1]) >= DISTANCIA_ARRASTE_PX) {
+      r.arrastouNaTela = true;
+    }
     r.annotation.invalidated = true;
   }
 
@@ -136,6 +157,7 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     if (!(ev.target instanceof Node) || !r.element.contains(ev.target)) return;
     const mundo = this.mundoDoEvento(ev);
     if (!mundo) return;
+    const canvas = this.canvasDoEvento(ev);
     this.cliquesConsumidos.add(ev);
     const pontos = this.pontos();
 
@@ -146,14 +168,17 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
       r.indice += 1;
       r.aguardandoInicio = false;
       r.moveu = false;
+      r.origemCanvas = canvas;
+      r.arrastouNaTela = false;
       r.annotation.invalidated = true;
     } else {
-      this.posicionarPontoCorrente(mundo);
-      // Modo "clicar": o clique já fixa o ponto e avança (o soltar é ignorado).
-      if (medidas().modoClique === 'clicar') {
-        if (r.moveu) this.avancar();
-        else return;
+      this.posicionarPontoCorrente(mundo, canvas);
+      // 2º clique explícito fecha o segmento imediatamente (funciona tanto em "clicar" quanto em "arrastar", inclusive para lesões pequenas).
+      if (r.moveu) {
+        this.avancar();
+        return;
       }
+      return;
     }
     this.renderizar();
   };
@@ -163,7 +188,7 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     if (!r || r.aguardandoInicio) return;
     const mundo = this.mundoDoEvento(ev);
     if (!mundo) return;
-    this.posicionarPontoCorrente(mundo);
+    this.posicionarPontoCorrente(mundo, this.canvasDoEvento(ev));
     this.renderizar();
   };
 
@@ -171,11 +196,13 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
     const r = this.rascunho;
     if (!r || ev.button !== 0 || r.aguardandoInicio) return;
     if (medidas().modoClique === 'clicar') return;
+    const canvas = this.canvasDoEvento(ev);
     const mundo = this.mundoDoEvento(ev);
     if (mundo && distancia3(this.pontos()[r.indice - 1]!, mundo) >= DISTANCIA_MINIMA_MM) {
-      this.posicionarPontoCorrente(mundo);
+      this.posicionarPontoCorrente(mundo, canvas);
     }
-    if (!r.moveu) return;
+    // Só conclui ao soltar se houve arrasto real (>= 10 px na tela); micro-tremor no 1º clique mantém o modo "clicar e clicar".
+    if (!r.moveu || !r.arrastouNaTela) return;
     this.avancar();
   };
 
@@ -193,11 +220,18 @@ export abstract class FerramentaMultiCliqueBase extends AnnotationTool {
       r.indice = proximo;
       r.aguardandoInicio = true;
       r.moveu = false;
+      r.arrastouNaTela = false;
     } else {
       const pontos = this.pontos();
       pontos[proximo] = [...pontos[r.indice]!] as Ponto;
       r.indice = proximo;
       r.moveu = false;
+      r.arrastouNaTela = false;
+      const vp = getEnabledElement(r.element)?.viewport;
+      if (vp) {
+        const c = vp.worldToCanvas(pontos[proximo]!);
+        r.origemCanvas = [c[0], c[1]];
+      }
     }
     r.annotation.invalidated = true;
     this.renderizar();
