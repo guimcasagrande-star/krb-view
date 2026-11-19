@@ -19,6 +19,7 @@ import {
   linhaAngulo,
   linhasRoi,
 } from './formatoMedidas';
+import { sufixoVolumeAutoPorDados } from './volumeElipsoide';
 
 type Ponto2 = CoreTypes.Point2;
 type DadosAnotacao = { label?: string; cachedStats?: Record<string, unknown> };
@@ -77,7 +78,7 @@ function estatisticas(data: DadosAnotacao, alvo: string): Record<string, unknown
 export function textoDistancia(data: DadosAnotacao, alvo: string): string[] | undefined {
   const s = estatisticas(data, alvo) as { length?: number; unit?: string } | undefined;
   if (!s || typeof s.length !== 'number' || Number.isNaN(s.length)) return undefined;
-  return [comprimentoComUnidade(s.length, s.unit, medidas())];
+  return [`${comprimentoComUnidade(s.length, s.unit, medidas())}${sufixoVolumeAutoPorDados(data)}`];
 }
 
 export function textoAngulo(data: DadosAnotacao, alvo: string): string[] | undefined {

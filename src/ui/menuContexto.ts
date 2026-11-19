@@ -87,6 +87,9 @@ const ICONES_ESQUEMATICOS: Record<string, string> = {
   OrthogonalLengths: svgEsquematico(
     '<path d="M3 12h18M3 9.5v5M21 9.5v5"/><path d="M12 4v16M9.5 4h5M9.5 20h5"/><path d="M12 8.5h3.5V12"/>',
   ),
+  EllipsoidVolume: svgEsquematico(
+    '<ellipse cx="12" cy="12" rx="9" ry="6"/><path d="M3 12h18M12 6v12" stroke-dasharray="2 2"/><path d="M8.5 15.5l7-7"/>',
+  ),
   MidlineShift: svgEsquematico(
     '<path d="M10 3v18" stroke-dasharray="2.5 2.5"/><path d="M10 12h8M15.5 9.5L18 12l-2.5 2.5"/><circle cx="18.5" cy="12" r="1.5" fill="currentColor"/>',
   ),

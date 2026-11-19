@@ -22,6 +22,7 @@ import { medidas } from '../state/preferencias';
 import { distancia3, FerramentaMultiCliqueBase, type Ponto } from './desenhoMultiClique';
 import { desenharTracinhos, formatarRazao } from './estiloMedidas';
 import { formatarComprimentoMm, formatarNumero } from './formatoMedidas';
+import { sufixoVolumeAutoPorUid } from './volumeElipsoide';
 
 type Ponto2 = CoreTypes.Point2;
 
@@ -72,7 +73,7 @@ abstract class FerramentaDoisSegmentosBase extends FerramentaMultiCliqueBase {
   protected abstract textoPrimeiroSegmento(d1: number): string;
 
   /** Linhas finais com os 2 segmentos completos. */
-  protected abstract textoFinal(p: Ponto[]): string[];
+  protected abstract textoFinal(p: Ponto[], ann?: Types.Annotation): string[];
 
   /** Gancho opcional para desenhar elementos extras (ex.: símbolo de ângulo reto 90°). */
   protected desenharExtrasDoisSegmentos(
@@ -145,7 +146,7 @@ abstract class FerramentaDoisSegmentosBase extends FerramentaMultiCliqueBase {
         svgDrawingHelper,
         annotation: ann,
         styleSpecifier: ctx.estiloSpec as never,
-        textLines: this.textoFinal(pontos),
+        textLines: this.textoFinal(pontos, ann),
         canvasCoordinates: [c0, c1, c2, c3],
       });
     }
@@ -476,10 +477,10 @@ export class MedidasOrtogonaisTool extends FerramentaDoisSegmentosBase {
     return `${mm(d1)} (trace a 2ª medida a 90°)`;
   }
 
-  protected textoFinal(p: Ponto[]): string[] {
+  protected textoFinal(p: Ponto[], ann?: Types.Annotation): string[] {
     const l1 = distancia3(p[0]!, p[1]!);
     const l2 = distancia3(p[2]!, p[3]!);
-    return [`${mm(l1)} × ${mm(l2)}`];
+    return [`${mm(l1)} × ${mm(l2)}${sufixoVolumeAutoPorUid(ann?.annotationUID)}`];
   }
 
   protected override desenharExtrasDoisSegmentos(

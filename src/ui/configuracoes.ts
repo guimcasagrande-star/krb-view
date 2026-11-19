@@ -170,6 +170,11 @@ function abaMedidas(): HTMLElement {
     linha('Tamanho do texto (px)', campoNumero(m.tamanhoTexto, 8, 40, 1, (v) => ((m.tamanhoTexto = v), mudou()))),
     linha('Espessura das linhas (px)', campoNumero(m.espessura, 0.5, 8, 0.5, (v) => ((m.espessura = v), mudou()))),
     linha('Tracinhos nas extremidades', campoCheck(m.tracinhos, (v) => ((m.tracinhos = v), mudou()))),
+    linha(
+      'Volume elipsoide automático (3 medidas em 3D)',
+      campoCheck(m.volumeElipsoideAuto, (v) => ((m.volumeElipsoideAuto = v), mudou())),
+      'Quando 3 medidas (Distância / Ortogonais) se cruzam em 3D no mesmo local (ex.: 2 no axial + 1 no sagital/coronal), mostra "(Vol. XX,X mL)" nos planos.',
+    ),
 
     el('h3', {}, 'Texto das medidas'),
     linha(

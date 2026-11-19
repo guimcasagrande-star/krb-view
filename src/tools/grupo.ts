@@ -38,6 +38,13 @@ import {
 import { PolilinhaTool } from './polilinha';
 import { SetaTool } from './seta';
 import { LesaoPetTool, VoiEsferaTool } from './voiEsfera';
+import {
+  cancelarGrupoVolumeEmAndamento,
+  EllipsoidVolumeTool,
+  iniciarVolumeElipsoideAuto,
+  NOME_VOLUME_ELIPSOIDE,
+  volumeElipsoideGrupoConcluido,
+} from './volumeElipsoide';
 import { ID_MOTOR, iniciarCornerstone } from '../viewer/iniciar';
 import { BrushTool, configuracaoDoPincel, FERRAMENTAS_SEGMENTACAO } from '../segmentation/ferramentas';
 
@@ -71,6 +78,7 @@ export const FERRAMENTAS_PRIMARIAS: FerramentaPrimaria[] = [
   { nome: CrosshairsTool.toolName, rotulo: 'Crosshairs', tecla: 'c', apenasMpr: true, categoria: 'navegacao' },
   { nome: LengthTool.toolName, rotulo: 'Distância', tecla: 'l', categoria: 'medida' },
   { nome: MedidasOrtogonaisTool.toolName, rotulo: 'Medidas ortogonais', tecla: 'g', categoria: 'medida' },
+  { nome: EllipsoidVolumeTool.toolName, rotulo: 'Volume elipsoide (3 eixos)', tecla: '', categoria: 'medida' },
   { nome: DesvioLinhaMediaTool.toolName, rotulo: 'Desvio linha média', tecla: 'k', categoria: 'medida' },
   { nome: ProporcaoLinearTool.toolName, rotulo: 'Proporção linear', tecla: 'q', categoria: 'medida' },
   { nome: EstenoseTool.toolName, rotulo: 'Relação de estenose', tecla: 'n', categoria: 'medida' },
@@ -221,6 +229,7 @@ function criarGrupoFerramentas(): void {
   aplicarPreferenciasInteracao();
   document.addEventListener(EVENTO_PREFERENCIAS, aplicarPreferenciasInteracao);
   eventTarget.addEventListener(EnumsTools.Events.ANNOTATION_COMPLETED, aoConcluirMedida);
+  iniciarVolumeElipsoideAuto();
 }
 
 /** Zoom a partir do centro do quadro ou do ponto do mouse, conforme as configurações. */
@@ -237,10 +246,13 @@ function ferramentaPadrao(): string {
 /** Medida concluída: se o usuário pediu, o botão esquerdo volta a passar cortes. */
 function aoConcluirMedida(evt: Event): void {
   if (!interacao().voltarAoScroll) return;
-  const nome = (evt as CustomEvent<{ annotation?: { metadata?: { toolName?: string } } }>).detail?.annotation?.metadata?.toolName;
+  const ann = (evt as CustomEvent<{ annotation?: Parameters<typeof volumeElipsoideGrupoConcluido>[0] }>).detail?.annotation;
+  const nome = ann?.metadata?.toolName;
   const atual = ferramentaPrimariaAtual();
   // Só quando a medida veio da ferramenta do botão esquerdo (não a do botão lateral, por exemplo).
   if (!nome || nome !== atual) return;
+  // Volume elipsoide (3 eixos): só volta ao scroll após traçar o 3º eixo (D3).
+  if (nome === NOME_VOLUME_ELIPSOIDE && !volumeElipsoideGrupoConcluido(ann)) return;
   if (!FERRAMENTAS_PRIMARIAS.some((f) => f.nome === atual && f.categoria === 'medida')) return;
   // Fora da pilha de chamadas da ferramenta, que ainda está terminando o próprio clique.
   setTimeout(() => {
@@ -524,6 +536,7 @@ export async function cancelar(): Promise<void> {
   for (const v of motor.getViewports()) {
     if (v.element instanceof HTMLDivElement) cancelActiveManipulations(v.element);
   }
+  cancelarGrupoVolumeEmAndamento();
   annotation.selection.deselectAnnotation();
   escolherFerramentaPrimaria(ferramentaPadrao());
   await redesenhar();

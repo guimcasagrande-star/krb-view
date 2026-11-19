@@ -19,6 +19,7 @@ import { DistanciaTool } from '../tools/estiloMedidas';
 import { PolilinhaTool } from '../tools/polilinha';
 import { SetaTool } from '../tools/seta';
 import { LesaoPetTool, VoiEsferaTool } from '../tools/voiEsfera';
+import { EllipsoidVolumeTool } from '../tools/volumeElipsoide';
 import { BrushTool, VasoTool } from '../segmentation/ferramentas';
 import {
   addTool,
@@ -103,6 +104,7 @@ export function iniciarCornerstone(): Promise<RenderingEngine> {
       PanTool,
       DistanciaTool,
       MedidasOrtogonaisTool,
+      EllipsoidVolumeTool,
       DesvioLinhaMediaTool,
       ProporcaoLinearTool,
       EstenoseTool,

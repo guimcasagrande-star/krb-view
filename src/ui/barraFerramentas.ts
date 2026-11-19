@@ -269,6 +269,7 @@ const LEGENDAS_CURTAS_FERRAMENTA: Record<string, string> = {
   Crosshairs: 'Eixos',
   Length: 'Distância',
   OrthogonalLengths: 'Ortogonal',
+  EllipsoidVolume: 'Vol. Elips.',
   MidlineShift: 'Desvio',
   LinearRatio: 'Proporção',
   StenosisRatio: 'Estenose',
@@ -1190,6 +1191,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const ORDEM_MEDIDAS_BASICAS = [
     'Length',
     'OrthogonalLengths',
+    'EllipsoidVolume',
     'Angle',
     'ArrowCustom',
     'EllipticalROI',

@@ -37,6 +37,8 @@ export interface PrefsMedidas {
   };
   /** Distância (px) em que um clique seleciona uma medida. */
   tolerancia: number;
+  /** Detecta automaticamente 3 medidas na mesma região 3D (ex.: axial + sagital/coronal) e mostra o volume elipsoide entre parênteses. */
+  volumeElipsoideAuto: boolean;
 }
 
 export interface Janela {
@@ -125,6 +127,7 @@ export const MEDIDAS_PADRAO: PrefsMedidas = {
   modoClique: 'arrastar',
   roi: { area: true, media: true, maximo: true, minimo: false, desvio: true, perimetro: false },
   tolerancia: 12,
+  volumeElipsoideAuto: true,
 };
 
 export const INTERACAO_PADRAO: PrefsInteracao = { zoomNoCentro: true, voltarAoScroll: true };
@@ -298,6 +301,7 @@ export function sanear(bruto: unknown): PrefsGerais {
   pm.casasValores = Math.round(numero(m.casasValores, pm.casasValores, 0, 4));
   pm.modoClique = m.modoClique === 'clicar' ? 'clicar' : 'arrastar';
   pm.tolerancia = numero(m.tolerancia, pm.tolerancia, 4, 40);
+  pm.volumeElipsoideAuto = typeof m.volumeElipsoideAuto === 'boolean' ? m.volumeElipsoideAuto : pm.volumeElipsoideAuto;
   const roi = (m.roi ?? {}) as Record<string, unknown>;
   for (const k of Object.keys(pm.roi) as Array<keyof PrefsMedidas['roi']>) {
     if (typeof roi[k] === 'boolean') pm.roi[k] = roi[k] as boolean;

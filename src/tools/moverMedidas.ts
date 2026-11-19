@@ -25,6 +25,7 @@ import { ajustarPontosOrtogonaisAoMoverAlca, MedidasOrtogonaisTool } from './med
 import { PolilinhaTool } from './polilinha';
 import { medidaNoPonto, noTexto } from './selecao';
 import { ehFerramentaVoi, NOME_LESAO_PET, NOME_VOI_ESFERA, recalcularVoi } from './voiEsfera';
+import { recalcularVolumesElipsoideAuto } from './volumeElipsoide';
 
 type Ponto3 = [number, number, number];
 
@@ -171,6 +172,7 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     const rect = a.element.getBoundingClientRect();
     const atual = viewport.canvasToWorld([ev.clientX - rect.left, ev.clientY - rect.top]);
     aplicarDeslocamento(a, [atual[0] - a.inicioMundo[0], atual[1] - a.inicioMundo[1], atual[2] - a.inicioMundo[2]]);
+    recalcularVolumesElipsoideAuto(false);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
     ev.preventDefault();
   };
@@ -183,6 +185,7 @@ export function iniciarMoverMedidas(area: HTMLElement): void {
     if (!a) return;
     a.element.classList.remove(CLASSE_ARRASTANDO);
     if (a.moveu && !a.soTexto && ehFerramentaVoi(a.ann.metadata?.toolName)) recalcularVoi(a.ann);
+    recalcularVolumesElipsoideAuto(false);
     utilitarios.triggerAnnotationRenderForViewportIds(idsDosViewports());
   };
 
