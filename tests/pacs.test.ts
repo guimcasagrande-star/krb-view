@@ -7,7 +7,10 @@ import {
   findStudies,
   retrieve,
   retrieveContexts,
+  retrieveMove,
   retrieveStudyParallel,
+  type IncomingServer,
+  type Listen,
   type ParallelRetrieveProgress,
   type ReceivedInstance,
   type Transport,
@@ -39,9 +42,11 @@ import {
   decodeAssociateAc,
   decodeAssociateRq,
   decodePData,
+  encodeAssociateAc,
   encodeAssociateRq,
   encodePData,
   encodeReleaseRp,
+  encodeReleaseRq,
   isValidAeTitle,
   type AssociateRequest,
 } from '../src/pacs/pdu.ts';
@@ -1263,5 +1268,384 @@ describe('retrieveStudyParallel', () => {
     expect(contextCounts[0]).toBeGreaterThan(100);
     expect(contextCounts[1]).toBeLessThanOrEqual(32);
     expect(summary).toEqual({ received: 0, failed: 0, warning: 0, cancelled: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('C-MOVE e receptor C-STORE SCP', () => {
+  const moveAcceptPdu = () =>
+    encodeAssociateAc({
+      calledAeTitle: SERVER.aeTitle,
+      callingAeTitle: ME,
+      contexts: [{ id: 1, result: 0, transferSyntax: TS.implicitVrLittleEndian }],
+      maxPduLength: 65536,
+      implementationClassUid: '1.2.3.4',
+      implementationVersionName: 'PACS_TESTE',
+    });
+
+  const cMovePending = (remaining: number, completed: number) =>
+    concat(
+      fragmentMessage(
+        1,
+        encodeCommand({
+          affectedSopClassUid: UID.studyRootMove,
+          commandField: COMMAND.cMoveRsp,
+          messageIdBeingRespondedTo: 1,
+          hasDataset: false,
+          status: STATUS.pending,
+          remaining,
+          completed,
+        }),
+        undefined,
+        0,
+      ),
+    );
+
+  const cMoveDone = (completed: number) =>
+    concat(
+      fragmentMessage(
+        1,
+        encodeCommand({
+          affectedSopClassUid: UID.studyRootMove,
+          commandField: COMMAND.cMoveRsp,
+          messageIdBeingRespondedTo: 1,
+          hasDataset: false,
+          status: STATUS.success,
+          remaining: 0,
+          completed,
+          failed: 0,
+          warning: 0,
+        }),
+        undefined,
+        0,
+      ),
+    );
+
+  function createLoopbackListener() {
+    let handler: ((t: Transport) => void) | undefined;
+    let closed = false;
+    let listenCalls = 0;
+    let listenedPort = 0;
+
+    const listen: Listen = async (port) => {
+      listenCalls++;
+      listenedPort = port;
+      closed = false;
+      const server: IncomingServer = {
+        onConnection(cb) {
+          handler = cb;
+        },
+        close() {
+          closed = true;
+          handler = undefined;
+        },
+      };
+      return server;
+    };
+
+    /** Simula o PACS abrindo uma conexão TCP de volta para a porta de escuta local. */
+    function dialBack() {
+      let scpOnData: (chunk: Uint8Array) => void = () => {};
+      let scpOnClose: (err?: Error) => void = () => {};
+      const fromScp: Uint8Array[] = [];
+      let peerOnData: (chunk: Uint8Array) => void = () => {};
+
+      const scpSide: Transport = {
+        send(data) {
+          fromScp.push(data.slice());
+          queueMicrotask(() => peerOnData(data));
+        },
+        close() {
+          queueMicrotask(() => scpOnClose());
+        },
+        onData(cb) {
+          scpOnData = cb;
+        },
+        onClose(cb) {
+          scpOnClose = cb;
+        },
+      };
+
+      if (!handler) throw new Error('listener não está escutando');
+      handler(scpSide);
+
+      return {
+        sendToScp(data: Uint8Array) {
+          scpOnData(data);
+        },
+        onFromScp(cb: (chunk: Uint8Array) => void) {
+          peerOnData = cb;
+        },
+        fromScp,
+      };
+    }
+
+    return {
+      listen,
+      dialBack,
+      stats: () => ({ listenCalls, listenedPort, closed }),
+    };
+  }
+
+  it('encodeAssociateAc faz round-trip com decodeAssociateAc', () => {
+    const pdu = encodeAssociateAc({
+      calledAeTitle: 'MEU_AE',
+      callingAeTitle: 'PACS_HOSP',
+      contexts: [
+        { id: 1, result: 0, transferSyntax: TS.explicitVrLittleEndian },
+        { id: 3, result: 4 },
+      ],
+      maxPduLength: 131072,
+      implementationClassUid: '1.2.826.0.1.3680043.8.498.1',
+      implementationVersionName: 'KRB_TEST',
+    });
+    expect(pdu[0]).toBe(PDU.associateAc);
+    const decoded = decodeAssociateAc(pdu.subarray(6));
+    expect(decoded.maxPduLength).toBe(131072);
+    expect(decoded.contexts).toEqual([
+      { id: 1, result: 0, transferSyntax: TS.explicitVrLittleEndian },
+      { id: 3, result: 4 },
+    ]);
+  });
+
+  it('retrieveMove recebe imagem via porta de escuta local e fecha o listener ao terminar', async () => {
+    const loopback = createLoopbackListener();
+    let seenDestination: string | undefined;
+
+    const connect = async (): Promise<Transport> => {
+      let writes = 0;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (err?: Error) => void = () => {};
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            queueMicrotask(() => onData(moveAcceptPdu()));
+            return;
+          }
+          if (writes === 2) {
+            // Decodifica o comando C-MOVE-RQ para conferir moveDestination
+            const pdvs = decodePData(data.subarray(6));
+            const cmdPdv = pdvs.find((p) => p.isCommand);
+            if (cmdPdv) seenDestination = decodeCommand(cmdPdv.data).moveDestination;
+
+            queueMicrotask(() => {
+              onData(cMovePending(1, 0));
+              // PACS conecta de volta na porta local para enviar o C-STORE
+              const back = loopback.dialBack();
+              const buf = new PduBuffer();
+              back.onFromScp((chunk) => {
+                buf.push(chunk);
+                for (let p = buf.next(); p; p = buf.next()) {
+                  if (p.type === PDU.associateAc) {
+                    const ac = decodeAssociateAc(p.body);
+                    expect(ac.contexts[0]).toEqual({
+                      id: 1,
+                      result: 0,
+                      transferSyntax: TS.explicitVrLittleEndian,
+                    });
+                    // Envia C-STORE-RQ
+                    const store = concat(
+                      fragmentMessage(
+                        1,
+                        encodeCommand({
+                          affectedSopClassUid: PET,
+                          commandField: COMMAND.cStoreRq,
+                          messageId: 7,
+                          priority: 0,
+                          hasDataset: true,
+                          affectedSopInstanceUid: '1.2.3.4.5.1',
+                        }),
+                        encodeImplicit([{ tag: '00100020', value: latin1('PAC1') }]),
+                        0,
+                      ),
+                    );
+                    back.sendToScp(store);
+                  } else if (p.type === PDU.pData) {
+                    const rspCmd = decodeCommand(decodePData(p.body)[0]!.data);
+                    expect(rspCmd.commandField).toBe(COMMAND.cStoreRsp);
+                    expect(rspCmd.status).toBe(STATUS.success);
+                    back.sendToScp(encodeReleaseRq());
+                  } else if (p.type === PDU.releaseRp) {
+                    onData(cMoveDone(1));
+                  }
+                }
+              });
+
+              back.sendToScp(
+                encodeAssociateRq({
+                  calledAeTitle: ME,
+                  callingAeTitle: SERVER.aeTitle,
+                  contexts: [
+                    {
+                      id: 1,
+                      abstractSyntax: PET,
+                      transferSyntaxes: [TS.explicitVrLittleEndian, TS.implicitVrLittleEndian],
+                    },
+                  ],
+                  maxPduLength: 65536,
+                  implementationClassUid: '1.2.3.4',
+                  implementationVersionName: 'PACS_TESTE',
+                }),
+              );
+            });
+            return;
+          }
+          if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const received: ReceivedInstance[] = [];
+    const summary = await retrieveMove(
+      SERVER,
+      { studyInstanceUid: '1.2.3.4' },
+      {
+        connect,
+        listen: loopback.listen,
+        listenerPort: 11112,
+        callingAeTitle: ME,
+        timeoutMs: 1000,
+        onInstance: (inst) => {
+          received.push(inst);
+        },
+      },
+    );
+
+    expect(seenDestination).toBe(ME);
+    expect(loopback.stats()).toEqual({ listenCalls: 1, listenedPort: 11112, closed: true });
+    expect(summary).toEqual({ received: 1, failed: 0, warning: 0, cancelled: false });
+    expect(received).toHaveLength(1);
+    expect(received[0]!.sopInstanceUid).toBe('1.2.3.4.5.1');
+    expect(received[0]!.transferSyntaxUid).toBe(TS.explicitVrLittleEndian);
+  });
+
+  it('retrieveStudyParallel em modo cmove compartilha um único listener entre séries', async () => {
+    const loopback = createLoopbackListener();
+    let seq = 0;
+
+    const connect = async (): Promise<Transport> => {
+      const idx = ++seq;
+      let writes = 0;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (err?: Error) => void = () => {};
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            queueMicrotask(() => onData(moveAcceptPdu()));
+          } else if (writes === 2) {
+            queueMicrotask(() => {
+              const back = loopback.dialBack();
+              const buf = new PduBuffer();
+              back.onFromScp((chunk) => {
+                buf.push(chunk);
+                for (let p = buf.next(); p; p = buf.next()) {
+                  if (p.type === PDU.associateAc) {
+                    back.sendToScp(
+                      concat(
+                        fragmentMessage(
+                          1,
+                          encodeCommand({
+                            affectedSopClassUid: PET,
+                            commandField: COMMAND.cStoreRq,
+                            messageId: idx,
+                            hasDataset: true,
+                            affectedSopInstanceUid: `1.2.3.${idx}.1`,
+                          }),
+                          new Uint8Array([1, 2, 3, 4]),
+                          0,
+                        ),
+                      ),
+                    );
+                  } else if (p.type === PDU.pData) {
+                    back.sendToScp(encodeReleaseRq());
+                  } else if (p.type === PDU.releaseRp) {
+                    onData(cMoveDone(1));
+                  }
+                }
+              });
+              back.sendToScp(
+                encodeAssociateRq({
+                  calledAeTitle: ME,
+                  callingAeTitle: SERVER.aeTitle,
+                  contexts: [{ id: 1, abstractSyntax: PET, transferSyntaxes: [TS.implicitVrLittleEndian] }],
+                  maxPduLength: 65536,
+                  implementationClassUid: '1.2.3.4',
+                  implementationVersionName: 'PACS_TESTE',
+                }),
+              );
+            });
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const completedSeries: string[] = [];
+    const summary = await retrieveStudyParallel(
+      { ...SERVER, retrieveMode: 'cmove' },
+      '1.2.3',
+      {
+        connect,
+        listen: loopback.listen,
+        listenerPort: 11112,
+        callingAeTitle: ME,
+        seriesList: [
+          { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.1', instanceCount: 1 },
+          { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.2', instanceCount: 1 },
+        ],
+        timeoutMs: 1000,
+        onInstance: () => {},
+        onSeriesComplete: (uid) => completedSeries.push(uid),
+      },
+    );
+
+    expect(loopback.stats()).toEqual({ listenCalls: 1, listenedPort: 11112, closed: true });
+    expect(completedSeries).toEqual(['1.2.3.1', '1.2.3.2']);
+    expect(summary).toEqual({ received: 2, failed: 0, warning: 0, cancelled: false });
+  });
+
+  it('parseConfig aceita modo cmove, conexoesMaximas e maxPdu', () => {
+    const cfg = parseConfig({
+      meuAeTitle: 'RADIANT',
+      servidores: [
+        {
+          nome: 'Hospital MV',
+          host: '10.36.3.24',
+          porta: 106,
+          aeTitle: 'DSVR2',
+          modo: 'cmove',
+          conexoesMaximas: 2,
+          maxPdu: 16384,
+        },
+      ],
+    });
+    expect(cfg.servers[0]).toMatchObject({
+      retrieveMode: 'cmove',
+      maxConnections: 2,
+      maxPduLength: 16384,
+    });
   });
 });

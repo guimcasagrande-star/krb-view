@@ -230,6 +230,50 @@ function readUserInformation(body: Uint8Array) {
   return out;
 }
 
+export interface AssociateAcceptResponse {
+  calledAeTitle: string;
+  callingAeTitle: string;
+  contexts: AcceptedContext[];
+  maxPduLength: number;
+  implementationClassUid: string;
+  implementationVersionName: string;
+}
+
+export function encodeAssociateAc(response: AssociateAcceptResponse): Uint8Array {
+  const contexts = response.contexts.map((c) => {
+    const parts: Uint8Array[] = [Uint8Array.of(c.id, 0, c.result, 0)];
+    if (c.result === 0 && c.transferSyntax) {
+      parts.push(item(0x40, ascii(c.transferSyntax)));
+    }
+    return item(0x21, concat(parts));
+  });
+  const userInformation = item(
+    0x50,
+    concat([
+      item(0x51, u32be(response.maxPduLength)),
+      item(0x52, ascii(response.implementationClassUid)),
+      item(0x55, ascii(response.implementationVersionName)),
+    ]),
+  );
+  return pdu(
+    PDU.associateAc,
+    concat([
+      u16be(1),
+      new Uint8Array(2),
+      aeTitle(response.calledAeTitle),
+      aeTitle(response.callingAeTitle),
+      new Uint8Array(32),
+      item(0x10, ascii(UID.applicationContext)),
+      ...contexts,
+      userInformation,
+    ]),
+  );
+}
+
+export function encodeAssociateRj(result: number, source: number, reason: number): Uint8Array {
+  return pdu(PDU.associateRj, Uint8Array.of(0, result, source, reason));
+}
+
 export function decodeAssociateAc(body: Uint8Array): AssociateAccept {
   if (body.length < 68) throw new PacsError('PDU_INVALIDA', 'Resposta de associação incompleta.');
   const accept: AssociateAccept = { contexts: [], maxPduLength: 0, roles: [] };

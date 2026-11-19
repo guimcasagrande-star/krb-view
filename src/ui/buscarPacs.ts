@@ -10,7 +10,7 @@ import { findSeries, findStudies, retrieveStudyParallel, type PacsServer } from 
 import { instancePath } from '../pacs/config.ts';
 import { PacsError } from '../pacs/errors.ts';
 import type { SeriesResult, StudyResult } from '../pacs/query.ts';
-import { connectTauri, definirServidoresPermitidos } from '../pacs/transporteTauri.ts';
+import { connectTauri, definirServidoresPermitidos, listenTauri } from '../pacs/transporteTauri.ts';
 import { parseHeader } from '../io/readHeader';
 import { formatPersonName } from '../io/organize';
 import { formatDatePtBr } from '../io/dicomTime';
@@ -719,11 +719,13 @@ async function mostrarSeries(area: HTMLElement, r: Resultado): Promise<void> {
       const estudoTotal = seriesOrdenadas.reduce((n, s) => n + (s.instanceCount ?? 0), 0);
       const resumoEstudo = await retrieveStudyParallel(r.servidor, r.estudo.studyInstanceUid, {
         connect: connectTauri,
+        listen: listenTauri,
+        listenerPort: cfg().portaEscuta,
         callingAeTitle: cfg().meuAeTitle,
         timeoutMs: 60_000,
         signal: controle.signal,
         seriesList: seriesOrdenadas,
-        concurrency: 4,
+        ...(r.servidor.maxConnections !== undefined ? { concurrency: r.servidor.maxConnections } : {}),
         onInstance: async (inst) => {
           // A série vem do cabeçalho do próprio arquivo recebido.
           const lido = parseHeader(inst.file, inst.sopInstanceUid);

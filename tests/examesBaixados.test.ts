@@ -121,10 +121,10 @@ describe('examesBaixados (IPC binário sem Base64)', () => {
     try {
       expect(carregarConfigPacs().limiteCacheGb).toBe(10);
 
-      salvarConfigPacs({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: 25 });
+      salvarConfigPacs({ meuAeTitle: 'TESTE', portaEscuta: 11112, servidores: [], limiteCacheGb: 25 });
       expect(carregarConfigPacs().limiteCacheGb).toBe(25);
 
-      salvarConfigPacs({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: 0 });
+      salvarConfigPacs({ meuAeTitle: 'TESTE', portaEscuta: 11112, servidores: [], limiteCacheGb: 0 });
       expect(carregarConfigPacs().limiteCacheGb).toBe(0);
 
       memoria.set('visualizador.pacs.v1', JSON.stringify({ meuAeTitle: 'TESTE', servidores: [], limiteCacheGb: -5 }));

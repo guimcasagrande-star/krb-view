@@ -69,6 +69,21 @@ export function parseConfig(json: unknown): PacsConfig {
       }
       if (tls !== true) fail(`servidor "${name}": "certificado" só vale com "tls": true.`);
     }
+    const modo = s['modo'];
+    if (modo !== undefined && modo !== 'cget' && modo !== 'cmove') {
+      fail(`servidor "${name}": "modo" deve ser "cget" ou "cmove".`);
+    }
+    const conexoesMaximas = s['conexoesMaximas'];
+    if (
+      conexoesMaximas !== undefined &&
+      (typeof conexoesMaximas !== 'number' || !Number.isInteger(conexoesMaximas) || conexoesMaximas < 1 || conexoesMaximas > 8)
+    ) {
+      fail(`servidor "${name}": "conexoesMaximas" deve ser um número de 1 a 8.`);
+    }
+    const maxPdu = s['maxPdu'];
+    if (maxPdu !== undefined && (typeof maxPdu !== 'number' || !Number.isInteger(maxPdu) || maxPdu < 4096)) {
+      fail(`servidor "${name}": "maxPdu" deve ser um inteiro >= 4096.`);
+    }
     servers.push({
       name: name.trim(),
       host,
@@ -76,6 +91,9 @@ export function parseConfig(json: unknown): PacsConfig {
       aeTitle: aeTitle.trim(),
       ...(tls === true ? { tls: true } : {}),
       ...(certificateSha256 ? { certificateSha256 } : {}),
+      ...(modo === 'cmove' ? { retrieveMode: 'cmove' as const } : {}),
+      ...(typeof conexoesMaximas === 'number' ? { maxConnections: conexoesMaximas } : {}),
+      ...(typeof maxPdu === 'number' ? { maxPduLength: maxPdu } : {}),
     });
   }
   return { myAeTitle: myAeTitle.trim(), servers };

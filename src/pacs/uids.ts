@@ -4,6 +4,7 @@ export const UID = {
   applicationContext: '1.2.840.10008.3.1.1.1',
   verification: '1.2.840.10008.1.1',
   studyRootFind: '1.2.840.10008.5.1.4.1.2.2.1',
+  studyRootMove: '1.2.840.10008.5.1.4.1.2.2.2',
   studyRootGet: '1.2.840.10008.5.1.4.1.2.2.3',
 } as const;
 

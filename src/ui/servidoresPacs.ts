@@ -20,8 +20,9 @@ const AVISO = 'Sem VPN ou DICOM TLS, os dados trafegam abertos.';
 
 /** Como o servidor aparece na coluna "Conexão". */
 function textoConexao(s: PacsServer): string {
-  if (!s.tls) return 'aberta';
-  return s.certificateSha256 ? '🔒 TLS' : '🔒 TLS (confirmar)';
+  const modo = s.retrieveMode === 'cmove' ? 'C-MOVE' : 'C-GET';
+  if (!s.tls) return `${modo} · aberta`;
+  return s.certificateSha256 ? `${modo} · 🔒 TLS` : `${modo} · 🔒 TLS (confirmar)`;
 }
 
 let caixa: HTMLDialogElement | undefined;
@@ -60,6 +61,9 @@ function validar(c: ConfigPacs): string | null {
         aeTitle: s.aeTitle,
         ...(s.tls ? { tls: true } : {}),
         ...(s.certificateSha256 ? { certificado: s.certificateSha256 } : {}),
+        ...(s.retrieveMode ? { modo: s.retrieveMode } : {}),
+        ...(s.maxConnections !== undefined ? { conexoesMaximas: s.maxConnections } : {}),
+        ...(s.maxPduLength !== undefined ? { maxPdu: s.maxPduLength } : {}),
       })),
     });
     return null;
@@ -96,6 +100,29 @@ function desenhar(): void {
     void guardar().then(mostrar);
   });
   const linhaAe = el('label', { class: 'cfg-linha' }, el('span', {}, 'AE title desta estação'), ae);
+
+  const portaEscuta = el('input', {
+    type: 'number',
+    value: String(config.portaEscuta),
+    min: '1',
+    max: '65535',
+    step: '1',
+  });
+  portaEscuta.title =
+    'Porta TCP local usada apenas em servidores configurados para C-MOVE (padrão 11112). Não pode conflitar com outro visualizador aberto na mesma porta.';
+  portaEscuta.addEventListener('change', () => {
+    const val = Math.round(Number(portaEscuta.value));
+    const sanitizado = Number.isFinite(val) && val >= 1 && val <= 65535 ? val : 11112;
+    portaEscuta.value = String(sanitizado);
+    config.portaEscuta = sanitizado;
+    void guardar().then(mostrar);
+  });
+  const linhaPortaEscuta = el(
+    'label',
+    { class: 'cfg-linha' },
+    el('span', {}, 'Porta de escuta local (C-MOVE)'),
+    portaEscuta,
+  );
 
   const limiteCache = el('input', {
     type: 'number',
@@ -179,7 +206,7 @@ function desenhar(): void {
 
   const adicionar = el('button', { type: 'button', textContent: '+ Adicionar servidor' });
   adicionar.addEventListener('click', () => formulario(-1));
-  corpo.append(aviso, linhaAe, linhaCache, tabela, adicionar, msg);
+  corpo.append(aviso, linhaAe, linhaPortaEscuta, linhaCache, tabela, adicionar, msg);
 
   function formulario(indice: number): void {
     const atual: PacsServer = indice >= 0 ? config.servidores[indice]! : { name: '', host: '', port: 104, aeTitle: '' };
@@ -187,6 +214,33 @@ function desenhar(): void {
     const host = el('input', { type: 'text', value: atual.host });
     const porta = el('input', { type: 'number', value: String(atual.port), min: '1', max: '65535' });
     const aet = el('input', { type: 'text', value: atual.aeTitle, maxLength: 16 });
+    const modoSel = el(
+      'select',
+      {},
+      el('option', { value: 'cget', textContent: 'C-GET (padrão — mesma conexão)' }),
+      el('option', { value: 'cmove', textContent: 'C-MOVE (usa porta de escuta local)' }),
+    );
+    modoSel.value = atual.retrieveMode === 'cmove' ? 'cmove' : 'cget';
+
+    const conexoesSel = el(
+      'select',
+      {},
+      el('option', { value: '', textContent: 'Padrão (4 no C-GET, 1 no C-MOVE)' }),
+      el('option', { value: '1', textContent: '1 (máxima compatibilidade)' }),
+      el('option', { value: '2', textContent: '2 conexões' }),
+      el('option', { value: '4', textContent: '4 conexões' }),
+    );
+    conexoesSel.value = atual.maxConnections ? String(atual.maxConnections) : '';
+
+    const pduSel = el(
+      'select',
+      {},
+      el('option', { value: '', textContent: 'Padrão (256 KB)' }),
+      el('option', { value: '65536', textContent: '64 KB' }),
+      el('option', { value: '16384', textContent: '16 KB (PACS mais antigos)' }),
+    );
+    pduSel.value = atual.maxPduLength ? String(atual.maxPduLength) : '';
+
     const seguro = el('input', { type: 'checkbox', checked: atual.tls === true });
     // Certificado já confirmado: mostra e deixa esquecer (para confirmar outro no próximo teste).
     let digital = atual.certificateSha256;
@@ -221,6 +275,9 @@ function desenhar(): void {
     cancelar.addEventListener('click', () => desenhar());
     salvar.addEventListener('click', async () => {
       const novo: PacsServer = { name: nome.value.trim(), host: host.value.trim(), port: Number(porta.value), aeTitle: aet.value.trim() };
+      if (modoSel.value === 'cmove') novo.retrieveMode = 'cmove';
+      if (conexoesSel.value) novo.maxConnections = Number(conexoesSel.value);
+      if (pduSel.value) novo.maxPduLength = Number(pduSel.value);
       if (seguro.checked) {
         novo.tls = true;
         // Endereço ou porta diferentes são outro servidor: o certificado precisa ser confirmado de novo.
@@ -246,6 +303,9 @@ function desenhar(): void {
       el('label', { class: 'cfg-linha' }, el('span', {}, 'Endereço (IP ou nome)'), host),
       el('label', { class: 'cfg-linha' }, el('span', {}, 'Porta'), porta),
       el('label', { class: 'cfg-linha' }, el('span', {}, 'AE title do servidor'), aet),
+      el('label', { class: 'cfg-linha' }, el('span', {}, 'Modo de download'), modoSel),
+      el('label', { class: 'cfg-linha' }, el('span', {}, 'Conexões simultâneas'), conexoesSel),
+      el('label', { class: 'cfg-linha' }, el('span', {}, 'Tamanho máx. de PDU'), pduSel),
       el(
         'label',
         { class: 'cfg-linha', title: 'Criptografa a conexão com o servidor (TLS 1.2 ou mais novo). O PACS precisa oferecer DICOM TLS nesta porta (é comum ser a 2762).' },

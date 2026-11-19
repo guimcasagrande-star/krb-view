@@ -22,6 +22,8 @@ export const COMMAND = {
   cGetRsp: 0x8010,
   cFindRq: 0x0020,
   cFindRsp: 0x8020,
+  cMoveRq: 0x0021,
+  cMoveRsp: 0x8021,
   cEchoRq: 0x0030,
   cEchoRsp: 0x8030,
   cCancelRq: 0x0fff,
@@ -40,6 +42,7 @@ export interface Command {
   affectedSopClassUid?: string;
   messageId?: number;
   messageIdBeingRespondedTo?: number;
+  moveDestination?: string;
   priority?: number;
   hasDataset: boolean;
   status?: number;
@@ -65,6 +68,9 @@ export function encodeCommand(command: Command): Uint8Array {
   us('00000100', command.commandField);
   us('00000110', command.messageId);
   us('00000120', command.messageIdBeingRespondedTo);
+  if (command.moveDestination !== undefined) {
+    elements.push({ tag: '00000600', value: latin1(command.moveDestination.trim()) });
+  }
   us('00000700', command.priority);
   us('00000800', command.hasDataset ? WITH_DATASET : NO_DATASET);
   us('00000900', command.status);
@@ -101,6 +107,7 @@ export function decodeCommand(bytes: Uint8Array): Command {
   set('affectedSopClassUid', decodeText(el.get('00000002')));
   set('messageId', readU16le(el.get('00000110')));
   set('messageIdBeingRespondedTo', readU16le(el.get('00000120')));
+  set('moveDestination', decodeText(el.get('00000600')));
   set('priority', readU16le(el.get('00000700')));
   set('status', readU16le(el.get('00000900')));
   set('errorComment', decodeText(el.get('00000902')));

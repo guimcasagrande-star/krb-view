@@ -4,7 +4,7 @@
  * Usa o objeto global `window.__TAURI__` (tauri.conf.json: `withGlobalTauri`), sem dependência npm.
  */
 
-import type { Connect, PacsServer, Transport } from './client.ts';
+import type { Connect, IncomingServer, Listen, PacsServer, Transport } from './client.ts';
 
 interface TauriChannel<T> {
   onmessage: ((message: T) => void) | null;
@@ -52,9 +52,10 @@ interface Conexao {
 }
 
 const conexoes = new Map<number, Conexao>();
+const escutas = new Map<number, (connId: number) => void>();
 let ouvindo: Promise<void> | undefined;
 
-/** Registra uma vez o ouvinte global de encerramento de conexão da ponte. */
+/** Registra uma vez os ouvintes globais da ponte TCP (fechamento e conexões de entrada). */
 function garantirOuvintes(t: TauriGlobal): Promise<void> {
   ouvindo ??= (async () => {
     await t.event.listen<{ id: number; erro?: string | null }>('pacs-fechou', (e) => {
@@ -65,8 +66,30 @@ function garantirOuvintes(t: TauriGlobal): Promise<void> {
       for (const f of c.aoFechar) f(erro);
       conexoes.delete(e.payload.id);
     });
+    await t.event.listen<{ escutaId: number; connId: number }>('pacs-entrada', (e) => {
+      escutas.get(e.payload.escutaId)?.(e.payload.connId);
+    });
   })();
   return ouvindo;
+}
+
+function criarTransporte(t: TauriGlobal, id: number, c: Conexao): Transport {
+  return {
+    send(data) {
+      void t.core.invoke('pacs_enviar', { id, dados: paraBase64(data) }).catch(() => undefined);
+    },
+    close() {
+      void t.core.invoke('pacs_fechar', { id }).catch(() => undefined);
+    },
+    onData(cb) {
+      c.aoReceber.push(cb);
+      for (const p of c.pendentes.splice(0)) cb(p);
+    },
+    onClose(cb) {
+      if (c.fechou) cb(c.fechou.erro);
+      else c.aoFechar.push(cb);
+    },
+  };
 }
 
 /** Informa ao Rust quais servidores podem ser acessados (só os cadastrados). */
@@ -126,22 +149,59 @@ export const connectTauri: Connect = async (host, port) => {
     throw new Error(String(e));
   }
   conexoes.set(id, c);
+  return criarTransporte(t, id, c);
+};
 
-  const transporte: Transport = {
-    send(data) {
-      void t.core.invoke('pacs_enviar', { id, dados: paraBase64(data) }).catch(() => undefined);
+/**
+ * `Listen` para `client.ts`: abre uma porta TCP local via ponte do Tauri para receber
+ * conexões C-STORE do PACS durante um download C-MOVE.
+ */
+export const listenTauri: Listen = async (port) => {
+  const t = tauri();
+  if (!t) throw new Error('a busca em PACS só funciona no programa instalado (Tauri).');
+  try {
+    await garantirOuvintes(t);
+  } catch (e) {
+    ouvindo = undefined;
+    throw new Error(`falha ao ouvir a ponte (${String(e)})`);
+  }
+
+  let escutaId: number;
+  try {
+    escutaId = await t.core.invoke<number>('pacs_escutar', { porta: port });
+  } catch (e) {
+    throw new Error(String(e));
+  }
+
+  const callbacks: ((transport: Transport) => void)[] = [];
+  const pendentes: Transport[] = [];
+
+  escutas.set(escutaId, (connId) => {
+    const c: Conexao = { aoReceber: [], aoFechar: [], pendentes: [] };
+    const canal = new t.core.Channel<ArrayBuffer | ArrayBufferView>();
+    canal.onmessage = (dado) => {
+      const bytes = paraUint8Array(dado);
+      if (c.aoReceber.length === 0) c.pendentes.push(bytes);
+      else for (const f of c.aoReceber) f(bytes);
+    };
+    conexoes.set(connId, c);
+    const transporte = criarTransporte(t, connId, c);
+    if (callbacks.length === 0) pendentes.push(transporte);
+    else for (const cb of callbacks) cb(transporte);
+    void t.core.invoke('pacs_aceitar_canal', { id: connId, canal }).catch(() => {
+      conexoes.delete(connId);
+    });
+  });
+
+  const server: IncomingServer = {
+    onConnection(cb) {
+      callbacks.push(cb);
+      for (const p of pendentes.splice(0)) cb(p);
     },
-    close() {
-      void t.core.invoke('pacs_fechar', { id }).catch(() => undefined);
-    },
-    onData(cb) {
-      c.aoReceber.push(cb);
-      for (const p of c.pendentes.splice(0)) cb(p);
-    },
-    onClose(cb) {
-      if (c.fechou) cb(c.fechou.erro);
-      else c.aoFechar.push(cb);
+    async close() {
+      escutas.delete(escutaId);
+      await t.core.invoke('pacs_parar_escuta', { id: escutaId }).catch(() => undefined);
     },
   };
-  return transporte;
+  return server;
 };

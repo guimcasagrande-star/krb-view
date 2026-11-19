@@ -25,12 +25,15 @@ import {
   PDU,
   PduBuffer,
   decodeAssociateAc,
+  decodeAssociateRq,
   decodePData,
   describeAssociateRj,
   encodeAbort,
+  encodeAssociateAc,
   encodeAssociateRq,
   encodeReleaseRp,
   encodeReleaseRq,
+  type AcceptedContext,
   type AssociateAccept,
   type PresentationContextRequest,
   type RawPdu,
@@ -76,6 +79,17 @@ export interface Transport {
 
 export type Connect = (host: string, port: number) => Promise<Transport>;
 
+/** Servidor TCP local (usado no C-MOVE para receber as conexões C-STORE do PACS). */
+export interface IncomingServer {
+  onConnection(callback: (transport: Transport) => void): void;
+  close(): Promise<void> | void;
+}
+
+export type Listen = (port: number) => Promise<IncomingServer>;
+
+/** Protocolo de download: C-GET (padrão, mesma conexão) ou C-MOVE (PACS conecta na porta de escuta). */
+export type RetrieveMode = 'cget' | 'cmove';
+
 export interface PacsServer {
   /** Nome para exibição. */
   name: string;
@@ -91,6 +105,12 @@ export interface PacsServer {
    * exatamente este certificado.
    */
   certificateSha256?: string;
+  /** Modo de download: 'cget' (padrão) ou 'cmove'. */
+  retrieveMode?: RetrieveMode;
+  /** Máximo de conexões simultâneas no download (1 a 8; padrão 4). */
+  maxConnections?: number;
+  /** Tamanho máximo de PDU em bytes (padrão 262 144). */
+  maxPduLength?: number;
 }
 
 export interface ClientOptions {
@@ -188,7 +208,7 @@ class Association {
           callingAeTitle: options.callingAeTitle,
           contexts,
           roles,
-          maxPduLength: options.maxPduLength ?? 262_144,
+          maxPduLength: options.maxPduLength ?? server.maxPduLength ?? 262_144,
           implementationClassUid: IMPLEMENTATION_CLASS_UID,
           implementationVersionName: IMPLEMENTATION_VERSION_NAME,
         }),
@@ -800,7 +820,411 @@ export async function retrieve(
 }
 
 // ---------------------------------------------------------------------------
-// C-GET Paralelo por Série (Alta Performance)
+// C-MOVE + Receptor C-STORE SCP (porta de escuta local)
+// ---------------------------------------------------------------------------
+
+const SUPPORTED_STORAGE_TRANSFER_SYNTAXES = new Set<string>([
+  ...IMAGE_TRANSFER_SYNTAX_GROUPS.flat(),
+  ...UNCOMPRESSED_TRANSFER_SYNTAXES,
+]);
+
+export interface MoveOptions extends RetrieveOptions {
+  /** Função para abrir a porta TCP de escuta local (recebe conexões C-STORE do PACS). */
+  listen: Listen;
+  /** Porta TCP de escuta local (padrão 11112). */
+  listenerPort?: number;
+  /** AE title de destino informado no C-MOVE-RQ (padrão: `callingAeTitle`). */
+  moveDestination?: string;
+}
+
+interface StoreScpSession {
+  stats(): { received: number; bytesReceived: number };
+  flush(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * Abre um receptor C-STORE SCP temporário na porta informada para receber as imagens
+ * enviadas pelo PACS em resposta a um ou mais comandos C-MOVE.
+ */
+async function startStoreScp(
+  listen: Listen,
+  port: number,
+  options: {
+    fallbackSourceAeTitle: string;
+    maxPduLength: number;
+    onInstance: (instance: ReceivedInstance) => void | Promise<void>;
+    onStoreReceived?: (bytes: number) => void;
+  },
+): Promise<StoreScpSession> {
+  let incomingServer: IncomingServer;
+  try {
+    incomingServer = await listen(port);
+  } catch (error) {
+    throw new PacsError(
+      'SEM_CONEXAO',
+      `Não foi possível abrir a porta de escuta local ${port} para C-MOVE: ${(error as Error).message}`,
+    );
+  }
+
+  let received = 0;
+  let bytesReceived = 0;
+  let writeError: Error | undefined;
+  const pendingWrites = new Set<Promise<void>>();
+  const activeTransports = new Set<Transport>();
+  const MAX_PENDING_WRITES = 16;
+
+  const sendDimse = (
+    transport: Transport,
+    contextId: number,
+    command: Command,
+    peerMaxPdu: number,
+  ): void => {
+    for (const pdu of fragmentMessage(contextId, encodeCommand(command), undefined, peerMaxPdu)) {
+      transport.send(pdu);
+    }
+  };
+
+  incomingServer.onConnection((transport) => {
+    activeTransports.add(transport);
+    const buffer = new PduBuffer();
+    const assembler = new MessageAssembler();
+    const accepted = new Map<number, { abstractSyntax: string; transferSyntax: string }>();
+    let peerMaxPdu = 0;
+    let peerAeTitle = options.fallbackSourceAeTitle;
+    let closed = false;
+    let processing: Promise<void> = Promise.resolve();
+
+    const closeTransport = () => {
+      if (closed) return;
+      closed = true;
+      activeTransports.delete(transport);
+      try {
+        transport.close();
+      } catch {
+        /* ignora */
+      }
+    };
+
+    const handlePdu = async (pdu: RawPdu): Promise<void> => {
+      if (closed) return;
+      if (pdu.type === PDU.associateRq) {
+        const rq = decodeAssociateRq(pdu.body);
+        peerMaxPdu = rq.maxPduLength;
+        if (rq.callingAeTitle) peerAeTitle = rq.callingAeTitle;
+
+        const acceptedContexts: AcceptedContext[] = rq.contexts.map((c) => {
+          if (c.abstractSyntax === UID.verification) {
+            const ts = c.transferSyntaxes.find((t) => UNCOMPRESSED_TRANSFER_SYNTAXES.includes(t));
+            if (ts) {
+              accepted.set(c.id, { abstractSyntax: c.abstractSyntax, transferSyntax: ts });
+              return { id: c.id, result: 0, transferSyntax: ts };
+            }
+            return { id: c.id, result: 4 };
+          }
+          const ts = c.transferSyntaxes.find((t) => SUPPORTED_STORAGE_TRANSFER_SYNTAXES.has(t));
+          if (ts) {
+            accepted.set(c.id, { abstractSyntax: c.abstractSyntax, transferSyntax: ts });
+            return { id: c.id, result: 0, transferSyntax: ts };
+          }
+          return { id: c.id, result: 4 };
+        });
+
+        transport.send(
+          encodeAssociateAc({
+            calledAeTitle: rq.calledAeTitle || options.fallbackSourceAeTitle,
+            callingAeTitle: rq.callingAeTitle || options.fallbackSourceAeTitle,
+            contexts: acceptedContexts,
+            maxPduLength: options.maxPduLength,
+            implementationClassUid: IMPLEMENTATION_CLASS_UID,
+            implementationVersionName: IMPLEMENTATION_VERSION_NAME,
+          }),
+        );
+        return;
+      }
+
+      if (pdu.type === PDU.pData) {
+        for (const pdv of decodePData(pdu.body)) {
+          const message = assembler.push(pdv);
+          if (!message) continue;
+
+          if (message.command.commandField === COMMAND.cEchoRq) {
+            sendDimse(
+              transport,
+              message.contextId,
+              {
+                affectedSopClassUid: message.command.affectedSopClassUid ?? UID.verification,
+                commandField: COMMAND.cEchoRsp,
+                messageIdBeingRespondedTo: message.command.messageId ?? 0,
+                hasDataset: false,
+                status: STATUS.success,
+              },
+              peerMaxPdu,
+            );
+            continue;
+          }
+
+          if (message.command.commandField === COMMAND.cStoreRq) {
+            const context = accepted.get(message.contextId);
+            const sopClassUid = message.command.affectedSopClassUid;
+            const sopInstanceUid = message.command.affectedSopInstanceUid;
+            const baseReply: Command = {
+              affectedSopClassUid: sopClassUid,
+              commandField: COMMAND.cStoreRsp,
+              messageIdBeingRespondedTo: message.command.messageId ?? 0,
+              hasDataset: false,
+              status: STATUS.success,
+              affectedSopInstanceUid: sopInstanceUid,
+            };
+
+            if (!context || !message.dataset || !isValidUid(sopClassUid) || !isValidUid(sopInstanceUid)) {
+              sendDimse(transport, message.contextId, { ...baseReply, status: 0xc000 }, peerMaxPdu);
+              continue;
+            }
+            if (writeError) {
+              sendDimse(transport, message.contextId, { ...baseReply, status: 0xa700 }, peerMaxPdu);
+              continue;
+            }
+
+            const part10File = buildPart10({
+              sopClassUid,
+              sopInstanceUid,
+              transferSyntaxUid: context.transferSyntax,
+              sourceAeTitle: peerAeTitle,
+              dataset: message.dataset,
+            });
+
+            let rawWrite: Promise<void>;
+            try {
+              rawWrite = Promise.resolve(
+                options.onInstance({
+                  sopClassUid,
+                  sopInstanceUid,
+                  transferSyntaxUid: context.transferSyntax,
+                  file: part10File,
+                }),
+              );
+            } catch (err) {
+              writeError ??= err instanceof Error ? err : new Error(String(err));
+              sendDimse(transport, message.contextId, { ...baseReply, status: 0xa700 }, peerMaxPdu);
+              continue;
+            }
+
+            const trackedWrite = rawWrite
+              .catch((err) => {
+                writeError ??= err instanceof Error ? err : new Error(String(err));
+              })
+              .finally(() => {
+                pendingWrites.delete(trackedWrite);
+              });
+            pendingWrites.add(trackedWrite);
+
+            sendDimse(transport, message.contextId, baseReply, peerMaxPdu);
+            received++;
+            bytesReceived += part10File.byteLength;
+            options.onStoreReceived?.(part10File.byteLength);
+
+            if (pendingWrites.size >= MAX_PENDING_WRITES) {
+              await Promise.race(pendingWrites);
+            }
+          }
+        }
+        return;
+      }
+
+      if (pdu.type === PDU.releaseRq) {
+        transport.send(encodeReleaseRp());
+        closeTransport();
+        return;
+      }
+
+      if (pdu.type === PDU.abort) {
+        closeTransport();
+      }
+    };
+
+    transport.onData((chunk) => {
+      if (closed) return;
+      processing = processing.then(async () => {
+        if (closed) return;
+        try {
+          buffer.push(chunk);
+          for (let pdu = buffer.next(); pdu; pdu = buffer.next()) {
+            await handlePdu(pdu);
+          }
+        } catch {
+          try {
+            transport.send(encodeAbort());
+          } catch {
+            /* ignora */
+          }
+          closeTransport();
+        }
+      });
+    });
+
+    transport.onClose(() => {
+      closed = true;
+      activeTransports.delete(transport);
+    });
+  });
+
+  return {
+    stats: () => ({ received, bytesReceived }),
+    flush: async () => {
+      if (pendingWrites.size > 0) {
+        await Promise.all(pendingWrites);
+      }
+      if (writeError) throw writeError;
+    },
+    close: async () => {
+      if (pendingWrites.size > 0) {
+        await Promise.allSettled(pendingWrites);
+      }
+      for (const t of activeTransports) {
+        try {
+          t.close();
+        } catch {
+          /* ignora */
+        }
+      }
+      activeTransports.clear();
+      await incomingServer.close();
+    },
+  };
+}
+
+async function retrieveMoveWithSession(
+  server: PacsServer,
+  request: RetrieveRequest,
+  options: ClientOptions & {
+    moveDestination?: string;
+    signal?: AbortSignal;
+    onProgress?: (progress: RetrieveProgress) => void;
+  },
+  scp: StoreScpSession,
+): Promise<RetrieveSummary> {
+  const identifier = buildRetrieveIdentifier(request.studyInstanceUid, request.seriesInstanceUid);
+  const contexts: PresentationContextRequest[] = [
+    { id: 1, abstractSyntax: UID.studyRootMove, transferSyntaxes: [TS.implicitVrLittleEndian] },
+  ];
+  const receivedBefore = scp.stats().received;
+
+  return withAssociation(server, options, contexts, [], async (association) => {
+    const moveContext = association.contextFor(UID.studyRootMove, 'download por C-MOVE');
+    const messageId = association.newMessageId();
+    association.send(
+      moveContext,
+      {
+        affectedSopClassUid: UID.studyRootMove,
+        commandField: COMMAND.cMoveRq,
+        messageId,
+        moveDestination: options.moveDestination ?? options.callingAeTitle,
+        priority: 0,
+        hasDataset: true,
+      },
+      identifier,
+    );
+
+    let cancelSent = false;
+    const cancel = () => {
+      if (cancelSent) return;
+      cancelSent = true;
+      try {
+        association.send(moveContext, {
+          commandField: COMMAND.cCancelRq,
+          messageIdBeingRespondedTo: messageId,
+          hasDataset: false,
+        });
+      } catch {
+        /* conexão já caiu */
+      }
+    };
+    if (options.signal?.aborted) cancel();
+    options.signal?.addEventListener('abort', cancel, { once: true });
+
+    try {
+      for (;;) {
+        const { command } = await association.nextMessage();
+        if (command.commandField !== COMMAND.cMoveRsp) {
+          throw new PacsError('DADOS_INVALIDOS', 'O servidor respondeu ao C-MOVE com um comando inesperado.');
+        }
+        if (isPending(command.status)) {
+          const st = scp.stats();
+          const seriesReceived = Math.max(0, st.received - receivedBefore);
+          options.onProgress?.(
+            command.remaining === undefined
+              ? { received: seriesReceived, bytesReceived: st.bytesReceived }
+              : { received: seriesReceived, remaining: command.remaining, bytesReceived: st.bytesReceived },
+          );
+          continue;
+        }
+        if (
+          command.status === STATUS.success ||
+          command.status === STATUS.subOperationsWithFailures ||
+          command.status === STATUS.cancel
+        ) {
+          await scp.flush();
+          const receivedInSeries = command.completed ?? Math.max(0, scp.stats().received - receivedBefore);
+          return {
+            received: receivedInSeries,
+            failed: command.failed ?? 0,
+            warning: command.warning ?? 0,
+            cancelled: command.status === STATUS.cancel,
+          };
+        }
+        throw new PacsError(
+          'DOWNLOAD_FALHOU',
+          `O download (C-MOVE) falhou: ${describeStatus(command.status ?? -1, command.errorComment)}.`,
+        );
+      }
+    } finally {
+      options.signal?.removeEventListener('abort', cancel);
+    }
+  });
+}
+
+/** Baixa um estudo ou uma série por C-MOVE, abrindo a porta de escuta local durante o download. */
+export async function retrieveMove(
+  server: PacsServer,
+  request: RetrieveRequest,
+  options: ClientOptions & MoveOptions,
+): Promise<RetrieveSummary> {
+  let latestRemaining: number | undefined;
+  const scp = await startStoreScp(options.listen, options.listenerPort ?? 11112, {
+    fallbackSourceAeTitle: server.aeTitle,
+    maxPduLength: options.maxPduLength ?? server.maxPduLength ?? 262_144,
+    onInstance: options.onInstance,
+    onStoreReceived: () => {
+      const st = scp.stats();
+      if (latestRemaining !== undefined && latestRemaining > 0) latestRemaining--;
+      options.onProgress?.(
+        latestRemaining === undefined
+          ? { received: st.received, bytesReceived: st.bytesReceived }
+          : { received: st.received, remaining: latestRemaining, bytesReceived: st.bytesReceived },
+      );
+    },
+  });
+  try {
+    return await retrieveMoveWithSession(
+      server,
+      request,
+      {
+        ...options,
+        onProgress: (p) => {
+          if (p.remaining !== undefined) latestRemaining = p.remaining;
+          options.onProgress?.(p);
+        },
+      },
+      scp,
+    );
+  } finally {
+    await scp.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// C-GET / C-MOVE Paralelo por Série (Alta Performance)
 // ---------------------------------------------------------------------------
 
 export interface ParallelRetrieveProgress {
@@ -818,14 +1242,20 @@ export interface ParallelRetrieveProgress {
 
 export interface ParallelRetrieveOptions extends Omit<RetrieveOptions, 'onProgress'> {
   /**
-   * Número máximo de conexões (associações C-GET) simultâneas no PACS.
-   * Padrão: 4 (seguro para a maioria dos PACS hospitalares como DCM4CHEE, Orthanc, Carestream).
+   * Número máximo de conexões (associações C-GET/C-MOVE) simultâneas no PACS.
+   * Padrão: `server.maxConnections` ou 4 (1 por padrão no C-MOVE se não configurado).
    */
   concurrency?: number;
   /**
    * Lista de séries já obtida via `findSeries` (evita fazer um novo C-FIND se a UI já tiver).
    */
   seriesList?: SeriesResult[];
+  /** Função para abrir a porta TCP local (necessária quando `server.retrieveMode === 'cmove'`). */
+  listen?: Listen;
+  /** Porta TCP de escuta local para C-MOVE (padrão 11112). */
+  listenerPort?: number;
+  /** AE title de destino no C-MOVE (padrão: `callingAeTitle`). */
+  moveDestination?: string;
   /**
    * Progresso global agregado de todas as conexões simultâneas.
    */
@@ -837,14 +1267,16 @@ export interface ParallelRetrieveOptions extends Omit<RetrieveOptions, 'onProgre
 }
 
 /**
- * Baixa um estudo inteiro abrindo múltiplas conexões C-GET em paralelo (uma por série).
+ * Baixa um estudo inteiro abrindo conexões C-GET (ou C-MOVE) por série.
  */
 export async function retrieveStudyParallel(
   server: PacsServer,
   studyInstanceUid: string,
   options: ClientOptions & ParallelRetrieveOptions,
 ): Promise<RetrieveSummary> {
-  const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, 8));
+  const isMove = server.retrieveMode === 'cmove';
+  const defaultConcurrency = server.maxConnections ?? (isMove ? 1 : 4);
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? defaultConcurrency, 8));
 
   // 1. Descobre as séries do estudo caso ainda não tenham sido passadas
   const series =
@@ -853,18 +1285,29 @@ export async function retrieveStudyParallel(
 
   // Se o PACS não retornou séries no C-FIND, faz fallback para o download único do estudo
   if (series.length === 0) {
+    const fallbackProgress = options.onProgress
+      ? (p: RetrieveProgress) =>
+          options.onProgress!({
+            received: p.received,
+            total: p.remaining !== undefined ? p.received + p.remaining : undefined,
+            bytesReceived: p.bytesReceived,
+            completedSeries: 0,
+            totalSeries: 1,
+          })
+      : undefined;
+    if (isMove) {
+      if (!options.listen) {
+        throw new PacsError('SEM_CONEXAO', 'O modo C-MOVE exige porta de escuta local (disponível no app instalado).');
+      }
+      return retrieveMove(server, { studyInstanceUid }, {
+        ...options,
+        listen: options.listen,
+        onProgress: fallbackProgress,
+      });
+    }
     return retrieve(server, { studyInstanceUid }, {
       ...options,
-      onProgress: options.onProgress
-        ? (p) =>
-            options.onProgress!({
-              received: p.received,
-              total: p.remaining !== undefined ? p.received + p.remaining : undefined,
-              bytesReceived: p.bytesReceived,
-              completedSeries: 0,
-              totalSeries: 1,
-            })
-        : undefined,
+      onProgress: fallbackProgress,
     });
   }
 
@@ -915,89 +1358,127 @@ export async function retrieveStudyParallel(
     });
   };
 
+  let sharedScp: StoreScpSession | undefined;
+  if (isMove) {
+    if (!options.listen) {
+      throw new PacsError('SEM_CONEXAO', 'O modo C-MOVE exige porta de escuta local (disponível no app instalado).');
+    }
+    sharedScp = await startStoreScp(options.listen, options.listenerPort ?? 11112, {
+      fallbackSourceAeTitle: server.aeTitle,
+      maxPduLength: options.maxPduLength ?? server.maxPduLength ?? 262_144,
+      onInstance: options.onInstance,
+      onStoreReceived: (bytes) => {
+        totalReceived++;
+        totalBytesReceived += bytes;
+        emitProgress();
+      },
+    });
+  }
+
   // 2. Cria os workers que consomem a fila de séries em paralelo
   const workerCount = Math.min(concurrency, queue.length);
   let activeWorkers = workerCount;
-  const workers = Array.from({ length: workerCount }, async () => {
-    let retriedAlone = false;
-    try {
-      while (queue.length > 0) {
-        if (options.signal?.aborted) {
-          anyCancelled = true;
-          break;
-        }
-        const currentSeries = queue.shift();
-        if (!currentSeries) break;
-
-        const seriesUid = currentSeries.seriesInstanceUid;
-        let lastSeriesReceived = 0;
-        let lastSeriesBytes = 0;
-
-        try {
-          const summary = await retrieve(
-            server,
-            {
-              studyInstanceUid,
-              seriesInstanceUid: seriesUid,
-            },
-            {
-              ...options,
-              onProgress: (p) => {
-                const delta = p.received - lastSeriesReceived;
-                lastSeriesReceived = p.received;
-                totalReceived += delta;
-                const deltaBytes = p.bytesReceived - lastSeriesBytes;
-                lastSeriesBytes = p.bytesReceived;
-                totalBytesReceived += deltaBytes;
-                if (p.remaining !== undefined) {
-                  remainingBySeries.set(seriesUid, p.remaining);
-                }
-                emitProgress();
-              },
-            },
-          );
-
-          remainingBySeries.delete(seriesUid);
-          completedSeries++;
-          totalFailed += summary.failed;
-          totalWarning += summary.warning;
-          if (summary.cancelled) anyCancelled = true;
-
-          emitProgress();
-          options.onSeriesComplete?.(seriesUid, summary);
-        } catch (err) {
-          const isAssociationLimit =
-            err instanceof PacsError &&
-            (err.code === 'ASSOCIACAO_RECUSADA' ||
-              err.code === 'SEM_CONEXAO' ||
-              err.code === 'SERVIDOR_OCUPADO' ||
-              (err.code === 'CONEXAO_FECHADA' && lastSeriesReceived === 0));
-          if (!isAssociationLimit) throw err;
-
-          if (lastSeriesReceived > 0) totalReceived -= lastSeriesReceived;
-          if (lastSeriesBytes > 0) totalBytesReceived -= lastSeriesBytes;
-          remainingBySeries.delete(seriesUid);
-
-          if (activeWorkers > 1) {
-            // PACS limitou associações simultâneas: devolve a série para a fila e encerra este worker excedente.
-            queue.unshift(currentSeries);
-            return;
+  try {
+    const workers = Array.from({ length: workerCount }, async () => {
+      let retriedAlone = false;
+      try {
+        while (queue.length > 0) {
+          if (options.signal?.aborted) {
+            anyCancelled = true;
+            break;
           }
-          if (completedSeries > 0 && !retriedAlone) {
-            // Outro worker já terminou depois que esta conexão foi recusada; tenta novamente sozinho uma vez.
-            retriedAlone = true;
-            queue.unshift(currentSeries);
-            continue;
+          const currentSeries = queue.shift();
+          if (!currentSeries) break;
+
+          const seriesUid = currentSeries.seriesInstanceUid;
+          let lastSeriesReceived = 0;
+          let lastSeriesBytes = 0;
+
+          try {
+            const summary = sharedScp
+              ? await retrieveMoveWithSession(
+                  server,
+                  { studyInstanceUid, seriesInstanceUid: seriesUid },
+                  {
+                    ...options,
+                    onProgress: (p) => {
+                      if (p.remaining !== undefined) {
+                        remainingBySeries.set(seriesUid, p.remaining);
+                      }
+                      emitProgress();
+                    },
+                  },
+                  sharedScp,
+                )
+              : await retrieve(
+                  server,
+                  {
+                    studyInstanceUid,
+                    seriesInstanceUid: seriesUid,
+                  },
+                  {
+                    ...options,
+                    onProgress: (p) => {
+                      const delta = p.received - lastSeriesReceived;
+                      lastSeriesReceived = p.received;
+                      totalReceived += delta;
+                      const deltaBytes = p.bytesReceived - lastSeriesBytes;
+                      lastSeriesBytes = p.bytesReceived;
+                      totalBytesReceived += deltaBytes;
+                      if (p.remaining !== undefined) {
+                        remainingBySeries.set(seriesUid, p.remaining);
+                      }
+                      emitProgress();
+                    },
+                  },
+                );
+
+            remainingBySeries.delete(seriesUid);
+            completedSeries++;
+            totalFailed += summary.failed;
+            totalWarning += summary.warning;
+            if (summary.cancelled) anyCancelled = true;
+
+            emitProgress();
+            options.onSeriesComplete?.(seriesUid, summary);
+          } catch (err) {
+            const isAssociationLimit =
+              err instanceof PacsError &&
+              (err.code === 'ASSOCIACAO_RECUSADA' ||
+                err.code === 'SEM_CONEXAO' ||
+                err.code === 'SERVIDOR_OCUPADO' ||
+                (err.code === 'CONEXAO_FECHADA' && lastSeriesReceived === 0));
+            if (!isAssociationLimit) throw err;
+
+            if (!sharedScp) {
+              if (lastSeriesReceived > 0) totalReceived -= lastSeriesReceived;
+              if (lastSeriesBytes > 0) totalBytesReceived -= lastSeriesBytes;
+            }
+            remainingBySeries.delete(seriesUid);
+
+            if (activeWorkers > 1) {
+              // PACS limitou associações simultâneas: devolve a série para a fila e encerra este worker excedente.
+              queue.unshift(currentSeries);
+              return;
+            }
+            if (completedSeries > 0 && !retriedAlone) {
+              // Outro worker já terminou depois que esta conexão foi recusada; tenta novamente sozinho uma vez.
+              retriedAlone = true;
+              queue.unshift(currentSeries);
+              continue;
+            }
+            throw err;
           }
-          throw err;
         }
+      } finally {
+        activeWorkers--;
       }
-    } finally {
-      activeWorkers--;
-    }
-  });
+    });
 
-  await Promise.all(workers);
+    await Promise.all(workers);
+  } finally {
+    await sharedScp?.close();
+  }
 
   return {
     received: totalReceived,

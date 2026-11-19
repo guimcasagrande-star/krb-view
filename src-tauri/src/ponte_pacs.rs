@@ -32,7 +32,7 @@ use tauri::{
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
     sync::mpsc,
 };
 use tokio_native_tls::TlsStream;
@@ -65,12 +65,21 @@ pub struct Ponte {
     servidores: Mutex<Vec<Servidor>>,
     proximo: AtomicU32,
     conexoes: Mutex<HashMap<u32, mpsc::UnboundedSender<Comando>>>,
+    escutas: Mutex<HashMap<u32, tauri::async_runtime::JoinHandle<()>>>,
+    pendentes_entrada: Mutex<HashMap<u32, TcpStream>>,
 }
 
 #[derive(Clone, Serialize)]
 struct Fechou {
     id: u32,
     erro: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Entrada {
+    escuta_id: u32,
+    conn_id: u32,
 }
 
 /// Define quais servidores podem ser acessados: os cadastrados.
@@ -294,6 +303,63 @@ pub fn pacs_enviar(estado: State<'_, Ponte>, id: u32, dados: String) -> Result<(
 pub fn pacs_fechar(estado: State<'_, Ponte>, id: u32) {
     if let Some(tx) = estado.conexoes.lock().unwrap().get(&id) {
         let _ = tx.send(Comando::Fechar);
+    }
+}
+
+/// Abre uma porta TCP local para receber conexões C-STORE do PACS durante um C-MOVE.
+#[tauri::command]
+pub async fn pacs_escutar(
+    app: AppHandle,
+    estado: State<'_, Ponte>,
+    porta: u16,
+) -> Result<u32, String> {
+    if porta == 0 {
+        return Err("Porta de escuta inválida.".into());
+    }
+    let listener = TcpListener::bind(("0.0.0.0", porta)).await.map_err(|e| {
+        format!(
+            "Não foi possível abrir a porta {porta} (verifique se outro programa como o RadiAnt já está usando): {e}"
+        )
+    })?;
+    let escuta_id = estado.proximo.fetch_add(1, Ordering::SeqCst) + 1;
+    let app_clone = app.clone();
+    let tarefa = tauri::async_runtime::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let _ = stream.set_nodelay(true);
+            let ponte = app_clone.state::<Ponte>();
+            let conn_id = ponte.proximo.fetch_add(1, Ordering::SeqCst) + 1;
+            ponte.pendentes_entrada.lock().unwrap().insert(conn_id, stream);
+            let _ = app_clone.emit("pacs-entrada", Entrada { escuta_id, conn_id });
+        }
+        app_clone.state::<Ponte>().escutas.lock().unwrap().remove(&escuta_id);
+    });
+    estado.escutas.lock().unwrap().insert(escuta_id, tarefa);
+
+    Ok(escuta_id)
+}
+
+/// Associa o canal binário da tela a uma conexão de entrada recém-aceita por `pacs_escutar`.
+#[tauri::command]
+pub fn pacs_aceitar_canal(
+    app: AppHandle,
+    estado: State<'_, Ponte>,
+    id: u32,
+    canal: Channel<InvokeResponseBody>,
+) -> Result<(), String> {
+    let Some(stream) = estado.pendentes_entrada.lock().unwrap().remove(&id) else {
+        return Err("Conexão de entrada não encontrada.".into());
+    };
+    let (tx, rx) = mpsc::unbounded_channel::<Comando>();
+    estado.conexoes.lock().unwrap().insert(id, tx);
+    ligar(app, id, rx, stream, canal);
+    Ok(())
+}
+
+/// Fecha a porta de escuta aberta por `pacs_escutar`.
+#[tauri::command]
+pub fn pacs_parar_escuta(estado: State<'_, Ponte>, id: u32) {
+    if let Some(tarefa) = estado.escutas.lock().unwrap().remove(&id) {
+        tarefa.abort();
     }
 }
 
