@@ -1,24 +1,35 @@
-# Visualizador DICOM pessoal
+# KRB View — Visualizador DICOM
 
-Visualizador DICOM leve para uso pessoal e estudo. **Não é dispositivo médico e não foi validado para diagnóstico.**
+Visualizador DICOM leve para uso pessoal e estudo, desenvolvido com Vite, TypeScript, Cornerstone3D e Tauri. **Não é dispositivo médico e não foi validado para diagnóstico.**
 
-Estado atual: a lógica de leitura, geometria, SUV, medidas em voxels e sincronização está pronta e testada. A interface ainda não existe; o roteiro para construí-la está em `PASSO-A-PASSO.md` e as regras do projeto em `CLAUDE.md`.
+## Principais recursos
+
+- Abertura local de pastas/arquivos DICOM (com suporte a JPEG Lossless, JPEG-LS, JPEG 2000 e RLE), MPR, MIP/MinIP, comparação sincronizada, PET/CT com SUV e fusão, reconstrução 3D, segmentação/volumetria (manual e integração local opcional com TotalSegmentator), medidas avançadas (incluindo volume elipsoide automático 3D e ferramenta de 3 eixos), cliente PACS local (C-ECHO, C-FIND, C-GET, C-MOVE e DICOM TLS) e exportação de exames em DICOM + DICOMDIR ou JPEG com anonimização opcional.
+- **100% local:** nenhum exame, metadado ou telemetria sai da máquina sem ação explícita do usuário.
 
 ## Comandos
 
-```
-npm install         instala as dependências
-npm test            roda os 168 testes
-npm run typecheck   confere os tipos
-npm run phantom     gera exames sintéticos em test-data/phantom
+```bash
+npm install         # instala as dependências
+npm test            # roda a suíte de testes unitários (Vitest)
+npm run typecheck   # confere os tipos TypeScript
+npm run build       # compila o frontend (Vite)
+npm run tauri build # compila o app e os instaladores Windows (.exe / .msi)
+npm run phantom     # gera exames sintéticos em test-data/phantom
 ```
 
-Requer Node.js 22 ou mais novo.
+Requer Node.js 22+ e Rust (para compilar o app Tauri).
 
 ## Phantom
 
-`npm run phantom` cria um PET/CT e uma TC anterior sintéticos, sem nenhum dado de paciente, com valores conhecidos (SUV 10,00 e 5,00 nas lesões, fundo 1,00; 40, 80 e 700 HU na TC). Serve de gabarito para conferir o visualizador a cada fase. Os valores estão no começo de `scripts/gerar-phantom.ts` e na Etapa 0 do `PASSO-A-PASSO.md`.
+`npm run phantom` cria um PET/CT e uma TC anterior sintéticos, sem nenhum dado de paciente, com valores conhecidos (SUV 10,00 e 5,00 nas lesões, fundo 1,00; 40, 80 e 700 HU na TC) para validação automatizada.
 
-## Desempenho
+## Assinatura de Código e Privacidade (Code Signing Policy)
 
-Preencher a cada fase: tempo até a primeira imagem, tempo de montagem do volume e uso de memória.
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Consulte a política completa de assinatura e privacidade em [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
+## Licença
+
+Distribuído sob a licença [MIT](LICENSE).
