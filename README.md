@@ -24,11 +24,9 @@ Requer Node.js 22+ e Rust (para compilar o app Tauri).
 
 `npm run phantom` cria um PET/CT e uma TC anterior sintéticos, sem nenhum dado de paciente, com valores conhecidos (SUV 10,00 e 5,00 nas lesões, fundo 1,00; 40, 80 e 700 HU na TC) para validação automatizada.
 
-## Assinatura de Código e Privacidade (Code Signing Policy)
+## Privacidade
 
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-Consulte a política completa de assinatura e privacidade em [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+O KRB View processa todos os exames, medidas, segmentações e exportações **100% localmente** na máquina do usuário. Nenhuma telemetria ou dado de paciente é enviado para servidores externos. Conexões de rede ocorrem apenas quando solicitadas explicitamente pelo usuário (PACS cadastrado ou verificação de atualizações no GitHub Releases).
 
 ## Licença
 

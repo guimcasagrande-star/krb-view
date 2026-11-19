@@ -38,116 +38,12 @@ jobs:
           npm test
           npm run typecheck
 
-      - name: Verificar se SignPath está configurado
-        id: signpath_check
-        shell: pwsh
-        env:
-          SIGNPATH_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-        run: |
-          $ativo = (-not [string]::IsNullOrWhiteSpace($env:SIGNPATH_TOKEN)) -and (-not [string]::IsNullOrWhiteSpace($env:SIGNPATH_ORG))
-          "enabled=$($ativo.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      # --- Caminho A: SignPath ativo (assina o .exe interno antes de empacotar e depois os instaladores) ---
-
-      - name: Compilar binário principal sem empacotar (SignPath)
-        if: steps.signpath_check.outputs.enabled == 'true'
-        run: npm run tauri build -- --no-bundle
-
-      - name: Enviar binário principal sem assinatura como artefato (SignPath)
-        id: upload_bin_unsigned
-        if: steps.signpath_check.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: krb-view-bin-unsigned
-          path: src-tauri/target/release/visualizador-dicom.exe
-
-      - name: Assinar binário principal via SignPath Foundation
-        if: steps.signpath_check.outputs.enabled == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'krb-view' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_BIN_ARTIFACT_CONFIG_SLUG || 'pe-binary' }}
-          github-artifact-id: ${{ steps.upload_bin_unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: ./signed-bin
-
-      - name: Substituir binário principal pelo assinado e gerar instaladores
-        if: steps.signpath_check.outputs.enabled == 'true'
-        shell: pwsh
-        run: |
-          Get-ChildItem -Path ./signed-bin -Filter "*.zip" | ForEach-Object {
-            Expand-Archive -Force -Path $_.FullName -DestinationPath ./signed-bin
-          }
-          $assinado = Get-ChildItem -Path ./signed-bin -Recurse -Filter "*.exe" | Select-Object -First 1
-          if (-not $assinado) { throw "Binário assinado não encontrado em ./signed-bin" }
-          Copy-Item -Force $assinado.FullName "src-tauri/target/release/visualizador-dicom.exe"
-          npx tauri bundle --no-binary-patching
-
-      - name: Reunir instaladores sem assinatura para envio ao SignPath
-        if: steps.signpath_check.outputs.enabled == 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path ./unsigned-installers | Out-Null
-          Copy-Item "src-tauri/target/release/bundle/nsis/*-setup.exe" ./unsigned-installers/
-          Copy-Item "src-tauri/target/release/bundle/msi/*.msi" ./unsigned-installers/
-
-      - name: Enviar instaladores sem assinatura como artefato (SignPath)
-        id: upload_installers_unsigned
-        if: steps.signpath_check.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: krb-view-installers-unsigned
-          path: ./unsigned-installers
-
-      - name: Assinar instaladores (.exe e .msi) via SignPath Foundation
-        if: steps.signpath_check.outputs.enabled == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'krb-view' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLERS_ARTIFACT_CONFIG_SLUG || 'zip-installers' }}
-          github-artifact-id: ${{ steps.upload_installers_unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: ./signed-installers
-
-      - name: Preparar instaladores assinados para publicação
-        if: steps.signpath_check.outputs.enabled == 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path ./signed-release | Out-Null
-          Get-ChildItem -Path ./signed-installers -Filter "*.zip" | ForEach-Object {
-            Expand-Archive -Force -Path $_.FullName -DestinationPath ./signed-installers
-          }
-          Get-ChildItem -Path ./signed-installers -Recurse -Include "*.exe","*.msi" | ForEach-Object {
-            Copy-Item -Force $_.FullName ./signed-release/
-          }
-
-      - name: Publicar instaladores assinados no GitHub Releases
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') && steps.signpath_check.outputs.enabled == 'true'
-        with:
-          generate_release_notes: true
-          files: |
-            signed-release/*.exe
-            signed-release/*.msi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # --- Caminho B: Sem SignPath configurado (mantém o workflow funcional até a aprovação) ---
-
-      - name: Gerar instaladores Tauri (.exe e .msi) sem assinatura
-        if: steps.signpath_check.outputs.enabled != 'true'
+      - name: Gerar instaladores Tauri (.exe e .msi)
         run: npm run tauri build
 
-      - name: Publicar no GitHub Releases (sem assinatura)
+      - name: Publicar no GitHub Releases
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') && steps.signpath_check.outputs.enabled != 'true'
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           generate_release_notes: true
           files: |
