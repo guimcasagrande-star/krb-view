@@ -204,7 +204,12 @@ export function describeStatus(status: number, comment?: string): string {
   else if (status === 0x0122) reason = 'o servidor não oferece esse serviço';
   else if (status === 0x0124) reason = 'esta estação não tem autorização para o pedido';
   else if (status === STATUS.cancel) reason = 'o pedido foi cancelado';
-  else if (status >= 0xc000 && status <= 0xcfff) reason = 'o servidor não conseguiu processar o pedido';
+  else if (status >= 0xc000 && status <= 0xcfff) {
+    reason =
+      comment && /key was not present in the dictionary/i.test(comment)
+        ? 'o servidor não reconheceu o AE title desta estação no dicionário de estações cadastradas (confira se o "AE title desta estação" está igual ao do RadiAnt)'
+        : 'o servidor não conseguiu processar o pedido';
+  }
   else reason = 'o servidor devolveu um erro';
   const code = `0x${status.toString(16).toUpperCase().padStart(4, '0')}`;
   return comment ? `${reason} (${code}: ${comment})` : `${reason} (${code})`;

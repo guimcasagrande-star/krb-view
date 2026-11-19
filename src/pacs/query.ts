@@ -4,7 +4,15 @@
  */
 
 import { PacsError } from './errors.ts';
-import { decodeText, encodeImplicit, latin1, parseImplicit, uidBytes, type ImplicitElement } from './implicit.ts';
+import {
+  decodeText,
+  encodeExplicit,
+  encodeImplicit,
+  latin1,
+  parseImplicit,
+  uidBytes,
+  type ImplicitElement,
+} from './implicit.ts';
 import { isValidUid } from './uids.ts';
 
 export interface StudyFilters {
@@ -52,6 +60,7 @@ const TAG = {
   queryRetrieveLevel: '00080052',
   modality: '00080060',
   modalitiesInStudy: '00080061',
+  institutionName: '00080080',
   referringPhysicianName: '00080090',
   studyDescription: '00081030',
   seriesDescription: '0008103e',
@@ -59,6 +68,7 @@ const TAG = {
   patientId: '00100020',
   patientBirthDate: '00100030',
   patientSex: '00100040',
+  patientAge: '00101010',
   studyInstanceUid: '0020000d',
   seriesInstanceUid: '0020000e',
   studyId: '00200010',
@@ -67,6 +77,32 @@ const TAG = {
   numberOfStudyRelatedInstances: '00201208',
   numberOfSeriesRelatedInstances: '00201209',
 } as const;
+
+const TAG_VR: Record<string, string> = {
+  [TAG.specificCharacterSet]: 'CS',
+  [TAG.studyDate]: 'DA',
+  [TAG.studyTime]: 'TM',
+  [TAG.accessionNumber]: 'SH',
+  [TAG.queryRetrieveLevel]: 'CS',
+  [TAG.modality]: 'CS',
+  [TAG.modalitiesInStudy]: 'CS',
+  [TAG.institutionName]: 'LO',
+  [TAG.referringPhysicianName]: 'PN',
+  [TAG.studyDescription]: 'LO',
+  [TAG.seriesDescription]: 'LO',
+  [TAG.patientName]: 'PN',
+  [TAG.patientId]: 'LO',
+  [TAG.patientBirthDate]: 'DA',
+  [TAG.patientSex]: 'CS',
+  [TAG.patientAge]: 'AS',
+  [TAG.studyInstanceUid]: 'UI',
+  [TAG.seriesInstanceUid]: 'UI',
+  [TAG.studyId]: 'SH',
+  [TAG.seriesNumber]: 'IS',
+  [TAG.numberOfStudyRelatedSeries]: 'IS',
+  [TAG.numberOfStudyRelatedInstances]: 'IS',
+  [TAG.numberOfSeriesRelatedInstances]: 'IS',
+};
 
 const DATE = /^\d{8}$/;
 
@@ -105,16 +141,17 @@ export function dateRange(from: string | undefined, to: string | undefined): str
   return a === b ? a : `${a}-${b}`;
 }
 
-function encodeQuery(values: Record<string, string>, forceCharset = false): Uint8Array {
+function encodeQuery(values: Record<string, string>, forceCharset = false, explicitVr = false): Uint8Array {
   const needsCharset = forceCharset || Object.values(values).some((v) => /[^\x00-\x7f]/.test(v));
   const elements: ImplicitElement[] = Object.entries(values).map(([tag, value]) => ({
     tag,
+    vr: TAG_VR[tag] ?? 'LO',
     value: tag === TAG.studyInstanceUid || tag === TAG.seriesInstanceUid ? uidBytes(value) : latin1(value),
   }));
   if (needsCharset && values[TAG.specificCharacterSet] === undefined) {
-    elements.push({ tag: TAG.specificCharacterSet, value: latin1('ISO_IR 100') });
+    elements.push({ tag: TAG.specificCharacterSet, vr: 'CS', value: latin1('ISO_IR 100') });
   }
-  return encodeImplicit(elements);
+  return explicitVr ? encodeExplicit(elements) : encodeImplicit(elements);
 }
 
 function normalizeStudyFilters(filters: StudyFilters): {
@@ -162,61 +199,96 @@ export function buildStudyQuery(filters: StudyFilters): Uint8Array {
   });
 }
 
+export interface FallbackQuery {
+  dataset: Uint8Array;
+  explicitVr: boolean;
+}
+
 /**
  * Variantes de compatibilidade do C-FIND de estudo para PACS que retornam erro 0xC001/0xA900
- * (ex.: Vivace / .NET PACS com `KeyNotFoundException` por chave obrigatória ausente como `StudyID`
- * ou por chave opcional não mapeada como `ModalitiesInStudy` / `NumberOfStudyRelatedSeries`).
+ * (ex.: Vivace / .NET PACS com `KeyNotFoundException` por esperar Explicit VR Little Endian,
+ * por exigir `Modality (0008,0060)` / `StudyID (0020,0010)` ou por rejeitar chaves opcionais).
  */
-export function buildStudyQueryFallbacks(filters: StudyFilters): Uint8Array[] {
+export function buildStudyQueryFallbacks(filters: StudyFilters): FallbackQuery[] {
   const { name, id, accession, modality, date } = normalizeStudyFilters(filters);
+
+  // A: Completo estilo RadiAnt + Modality (0008,0060) + StudyID + InstitutionName + PatientAge
+  const fullWithModality: Record<string, string> = {
+    [TAG.queryRetrieveLevel]: 'STUDY',
+    [TAG.patientName]: name,
+    [TAG.patientId]: id,
+    [TAG.patientBirthDate]: '',
+    [TAG.patientSex]: '',
+    [TAG.patientAge]: '',
+    [TAG.studyDate]: date,
+    [TAG.studyTime]: '',
+    [TAG.accessionNumber]: accession,
+    [TAG.modality]: modality,
+    [TAG.modalitiesInStudy]: modality,
+    [TAG.institutionName]: '',
+    [TAG.referringPhysicianName]: '',
+    [TAG.studyDescription]: '',
+    [TAG.studyInstanceUid]: '',
+    [TAG.studyId]: '',
+    [TAG.numberOfStudyRelatedSeries]: '',
+    [TAG.numberOfStudyRelatedInstances]: '',
+  };
+
+  // B: Padrão RadiAnt (sem 0008,0060, com StudyID e ModalitiesInStudy)
+  const radiantStandard: Record<string, string> = {
+    [TAG.queryRetrieveLevel]: 'STUDY',
+    [TAG.patientName]: name,
+    [TAG.patientId]: id,
+    [TAG.patientBirthDate]: '',
+    [TAG.patientSex]: '',
+    [TAG.studyDate]: date,
+    [TAG.studyTime]: '',
+    [TAG.accessionNumber]: accession,
+    [TAG.modalitiesInStudy]: modality,
+    [TAG.referringPhysicianName]: '',
+    [TAG.studyDescription]: '',
+    [TAG.studyInstanceUid]: '',
+    [TAG.studyId]: '',
+    [TAG.numberOfStudyRelatedSeries]: '',
+    [TAG.numberOfStudyRelatedInstances]: '',
+  };
+
+  // C: Mínimo PS3.4 (sem contadores 0020,1206/1208 e sem ModalitiesInStudy)
+  const minimalPs34: Record<string, string> = {
+    [TAG.queryRetrieveLevel]: 'STUDY',
+    [TAG.patientName]: name,
+    [TAG.patientId]: id,
+    [TAG.studyDate]: date,
+    [TAG.studyTime]: '',
+    [TAG.accessionNumber]: accession,
+    [TAG.studyDescription]: '',
+    [TAG.studyInstanceUid]: '',
+    [TAG.studyId]: '',
+  };
+
+  // D: Estritamente chaves obrigatórias PS3.4 Tabela C.6-5
+  const strictRequired: Record<string, string> = {
+    [TAG.queryRetrieveLevel]: 'STUDY',
+    [TAG.patientName]: name,
+    [TAG.patientId]: id,
+    [TAG.studyDate]: date,
+    [TAG.studyTime]: '',
+    [TAG.accessionNumber]: accession,
+    [TAG.studyInstanceUid]: '',
+    [TAG.studyId]: '',
+  };
+
   return [
-    // 1. Completo estilo RadiAnt (inclui StudyID, ReferringPhysicianName e SpecificCharacterSet)
-    encodeQuery(
-      {
-        [TAG.queryRetrieveLevel]: 'STUDY',
-        [TAG.patientName]: name,
-        [TAG.patientId]: id,
-        [TAG.patientBirthDate]: '',
-        [TAG.patientSex]: '',
-        [TAG.studyDate]: date,
-        [TAG.studyTime]: '',
-        [TAG.accessionNumber]: accession,
-        [TAG.modalitiesInStudy]: modality,
-        [TAG.referringPhysicianName]: '',
-        [TAG.studyDescription]: '',
-        [TAG.studyInstanceUid]: '',
-        [TAG.studyId]: '',
-        [TAG.numberOfStudyRelatedSeries]: '',
-        [TAG.numberOfStudyRelatedInstances]: '',
-      },
-      true,
-    ),
-    // 2. Mínimo PS3.4 (sem contadores 0020,1206/1208, sem ModalitiesInStudy e sem BirthDate/Sex)
-    encodeQuery(
-      {
-        [TAG.queryRetrieveLevel]: 'STUDY',
-        [TAG.patientName]: name,
-        [TAG.patientId]: id,
-        [TAG.studyDate]: date,
-        [TAG.studyTime]: '',
-        [TAG.accessionNumber]: accession,
-        [TAG.studyDescription]: '',
-        [TAG.studyInstanceUid]: '',
-        [TAG.studyId]: '',
-      },
-      true,
-    ),
-    // 3. Estritamente chaves obrigatórias PS3.4 Tabela C.6-5 (sem SpecificCharacterSet nem StudyDescription)
-    encodeQuery({
-      [TAG.queryRetrieveLevel]: 'STUDY',
-      [TAG.patientName]: name,
-      [TAG.patientId]: id,
-      [TAG.studyDate]: date,
-      [TAG.studyTime]: '',
-      [TAG.accessionNumber]: accession,
-      [TAG.studyInstanceUid]: '',
-      [TAG.studyId]: '',
-    }),
+    // Tenta primeiro em Explicit VR Little Endian (como o RadiAnt negocia com PACS .NET/Vivace)
+    { dataset: encodeQuery(radiantStandard, true, true), explicitVr: true },
+    { dataset: encodeQuery(fullWithModality, true, true), explicitVr: true },
+    { dataset: encodeQuery(minimalPs34, true, true), explicitVr: true },
+    { dataset: encodeQuery(strictRequired, false, true), explicitVr: true },
+    // E também em Implicit VR Little Endian
+    { dataset: encodeQuery(fullWithModality, true, false), explicitVr: false },
+    { dataset: encodeQuery(radiantStandard, true, false), explicitVr: false },
+    { dataset: encodeQuery(minimalPs34, true, false), explicitVr: false },
+    { dataset: encodeQuery(strictRequired, false, false), explicitVr: false },
   ];
 }
 
@@ -236,19 +308,33 @@ export function buildSeriesQuery(studyInstanceUid: string): Uint8Array {
   });
 }
 
-/** Variante mínima do C-FIND de série (sem `NumberOfSeriesRelatedInstances`) para PACS estritos. */
-export function buildSeriesQueryMinimal(studyInstanceUid: string): Uint8Array {
+/** Variantes de compatibilidade do C-FIND de série (Explicit VR e mínima sem `NumberOfSeriesRelatedInstances`). */
+export function buildSeriesQueryFallbacks(studyInstanceUid: string): FallbackQuery[] {
   if (!isValidUid(studyInstanceUid)) {
     throw new PacsError('UID_INVALIDO', 'Identificador de estudo inválido.');
   }
-  return encodeQuery({
+  const padrao: Record<string, string> = {
     [TAG.queryRetrieveLevel]: 'SERIES',
     [TAG.studyInstanceUid]: studyInstanceUid,
     [TAG.seriesInstanceUid]: '',
     [TAG.seriesNumber]: '',
     [TAG.modality]: '',
     [TAG.seriesDescription]: '',
-  });
+    [TAG.numberOfSeriesRelatedInstances]: '',
+  };
+  const minima: Record<string, string> = {
+    [TAG.queryRetrieveLevel]: 'SERIES',
+    [TAG.studyInstanceUid]: studyInstanceUid,
+    [TAG.seriesInstanceUid]: '',
+    [TAG.seriesNumber]: '',
+    [TAG.modality]: '',
+    [TAG.seriesDescription]: '',
+  };
+  return [
+    { dataset: encodeQuery(padrao, true, true), explicitVr: true },
+    { dataset: encodeQuery(minima, true, true), explicitVr: true },
+    { dataset: encodeQuery(minima, false, false), explicitVr: false },
+  ];
 }
 
 /** Identificador de C-GET para um estudo inteiro ou uma série. */

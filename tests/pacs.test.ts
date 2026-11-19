@@ -1758,7 +1758,7 @@ describe('C-MOVE e receptor C-STORE SCP', () => {
       { connect, callingAeTitle: ME, timeoutMs: 1000 },
     );
 
-    expect(attempts).toBe(3); // 1ª padrão (falha), 2ª completa c/ 00201206 (falha), 3ª mínima PS3.4 (sucesso!)
+    expect(attempts).toBe(4);
     expect(res.results).toHaveLength(1);
     expect(res.results[0]!.patientName).toBe('SILVA^MARIA');
   });

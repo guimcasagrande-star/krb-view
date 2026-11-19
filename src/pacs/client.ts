@@ -42,7 +42,7 @@ import {
 import {
   buildRetrieveIdentifier,
   buildSeriesQuery,
-  buildSeriesQueryMinimal,
+  buildSeriesQueryFallbacks,
   buildStudyQuery,
   buildStudyQueryFallbacks,
   parseSeriesResult,
@@ -440,8 +440,17 @@ async function find<T>(
   identifier: Uint8Array,
   parse: (dataset: Uint8Array) => T | undefined,
   limit: number,
+  explicitVr = false,
 ): Promise<FindResult<T>> {
-  const contexts = [{ id: 1, abstractSyntax: UID.studyRootFind, transferSyntaxes: [TS.implicitVrLittleEndian] }];
+  const contexts = [
+    {
+      id: 1,
+      abstractSyntax: UID.studyRootFind,
+      transferSyntaxes: explicitVr
+        ? [TS.explicitVrLittleEndian, TS.implicitVrLittleEndian]
+        : [TS.implicitVrLittleEndian],
+    },
+  ];
   return withAssociation(server, options, contexts, [], async (association) => {
     const contextId = association.contextFor(UID.studyRootFind, 'pesquisa de exames');
     const messageId = association.newMessageId();
@@ -508,7 +517,7 @@ export async function findStudies(
     let recovered: FindResult<StudyResult> | undefined;
     for (const altQuery of buildStudyQueryFallbacks(filters)) {
       try {
-        recovered = await find(server, options, altQuery, parseStudyResult, limit);
+        recovered = await find(server, options, altQuery.dataset, parseStudyResult, limit, altQuery.explicitVr);
         break;
       } catch (err) {
         if (!(err instanceof PacsError) || err.code !== 'PESQUISA_FALHOU') throw err;
@@ -542,7 +551,17 @@ export async function findSeries(
     if (!(firstError instanceof PacsError) || firstError.code !== 'PESQUISA_FALHOU') {
       throw firstError;
     }
-    found = await find(server, options, buildSeriesQueryMinimal(studyInstanceUid), parseSeriesResult, limit);
+    let recovered: FindResult<SeriesResult> | undefined;
+    for (const altQuery of buildSeriesQueryFallbacks(studyInstanceUid)) {
+      try {
+        recovered = await find(server, options, altQuery.dataset, parseSeriesResult, limit, altQuery.explicitVr);
+        break;
+      } catch (err) {
+        if (!(err instanceof PacsError) || err.code !== 'PESQUISA_FALHOU') throw err;
+      }
+    }
+    if (!recovered) throw firstError;
+    found = recovered;
   }
   found.results.sort(
     (a, b) =>
