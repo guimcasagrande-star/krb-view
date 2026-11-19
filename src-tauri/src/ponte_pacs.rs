@@ -113,7 +113,12 @@ async fn abrir_tls(host: &str, porta: u16) -> Result<(TlsStream<TcpStream>, Stri
         .map_err(|e| format!("falha na conexão segura (TLS): {e}"))?;
     let conector = tokio_native_tls::TlsConnector::from(conector);
     let fluxo = match tokio::time::timeout(TEMPO_CONEXAO, conector.connect(host, tcp)).await {
-        Err(_) => return Err("Tempo esgotado na conexão segura (10 s).".into()),
+        Err(_) => {
+            return Err(
+                "Tempo esgotado na conexão segura (10 s). Verifique se esta porta usa DICOM TLS (em geral é outra porta, como 2762)."
+                    .into(),
+            )
+        }
         Ok(Err(e)) => return Err(format!("falha na conexão segura (TLS): {e}")),
         Ok(Ok(f)) => f,
     };

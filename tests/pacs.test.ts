@@ -1132,4 +1132,136 @@ describe('retrieveStudyParallel', () => {
       }),
     ).rejects.toMatchObject({ code: 'SEM_CONEXAO' });
   });
+
+  it('reduz workers quando o PACS fecha silenciosamente conexões simultâneas excedentes', async () => {
+    let activeConnections = 0;
+    let maxActiveConnections = 0;
+    let closedSilently = 0;
+    let seq = 0;
+
+    const connect = async (): Promise<Transport> => {
+      const rejectSilently = activeConnections >= 1;
+      if (!rejectSilently) {
+        activeConnections++;
+        maxActiveConnections = Math.max(maxActiveConnections, activeConnections);
+      }
+      const connId = ++seq;
+      let writes = 0;
+      let closed = false;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            if (rejectSilently) {
+              closedSilently++;
+              queueMicrotask(() => onClose());
+              return;
+            }
+            queueMicrotask(() => onData(acceptPdu()));
+          } else if (writes === 2) {
+            setTimeout(() => {
+              if (closed) return;
+              onData(
+                concat([
+                  cGetPending(1),
+                  storeRqFor(`1.2.3.${connId}.1`, 10 + connId),
+                  cGetDone(1),
+                ]),
+              );
+            }, 15);
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          if (!rejectSilently) activeConnections--;
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const summary = await retrieveStudyParallel(SERVER, '1.2.3', {
+      connect,
+      callingAeTitle: ME,
+      concurrency: 3,
+      seriesList: [
+        { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.1', instanceCount: 1 },
+        { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.2', instanceCount: 1 },
+        { studyInstanceUid: '1.2.3', seriesInstanceUid: '1.2.3.3', instanceCount: 1 },
+      ],
+      imageClasses: [PET],
+      otherClasses: [],
+      timeoutMs: 1000,
+      onInstance: () => {},
+    });
+
+    expect(closedSilently).toBe(2);
+    expect(maxActiveConnections).toBe(1);
+    expect(summary).toEqual({ received: 3, failed: 0, warning: 0, cancelled: false });
+  });
+
+  it('tenta novamente com contextos compactos quando o PACS fecha a associação grande no C-GET', async () => {
+    const contextCounts: number[] = [];
+
+    const connect = async (): Promise<Transport> => {
+      let writes = 0;
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (error?: Error) => void = () => {};
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            const rq = decodeAssociateRq(data.subarray(6));
+            contextCounts.push(rq.contexts.length);
+            if (rq.contexts.length > 32) {
+              // Simula PACS que fecha a conexão ao receber 123 contextos de apresentação
+              queueMicrotask(() => onClose());
+              return;
+            }
+            queueMicrotask(() => onData(acceptPdu()));
+          } else if (writes === 2) {
+            queueMicrotask(() => onData(cGetDone(0)));
+          } else if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const summary = await retrieve(
+      SERVER,
+      { studyInstanceUid: '1.2.3' },
+      {
+        connect,
+        callingAeTitle: ME,
+        timeoutMs: 1000,
+        onInstance: () => {},
+      },
+    );
+
+    expect(contextCounts).toHaveLength(2);
+    expect(contextCounts[0]).toBeGreaterThan(100);
+    expect(contextCounts[1]).toBeLessThanOrEqual(32);
+    expect(summary).toEqual({ received: 0, failed: 0, warning: 0, cancelled: false });
+  });
 });

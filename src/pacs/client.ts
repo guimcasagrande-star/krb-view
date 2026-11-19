@@ -590,6 +590,23 @@ export function retrieveContexts(
   return { contexts, roles };
 }
 
+/**
+ * Versão compacta dos grupos de sintaxe de transferência: junta todas as sintaxes
+ * em um único contexto por classe SOP (reduz de 123 para 27 contextos), para PACS
+ * que fecham ou recusam pedidos de associação grandes.
+ */
+function compactTransferSyntaxGroups(
+  groups: readonly (readonly string[])[],
+): readonly (readonly string[])[] {
+  const flat: string[] = [];
+  for (const g of groups) {
+    for (const ts of g) {
+      if (!flat.includes(ts)) flat.push(ts);
+    }
+  }
+  return [flat];
+}
+
 /** Baixa um estudo ou uma série por C-GET. */
 export async function retrieve(
   server: PacsServer,
@@ -603,7 +620,26 @@ export async function retrieve(
     options.transferSyntaxGroups,
   );
 
-  return withAssociation(server, options, contexts, roles, async (association) => {
+  let association: Association;
+  try {
+    association = await Association.open(server, options, contexts, roles);
+  } catch (error) {
+    const canRetryCompact =
+      !options.transferSyntaxGroups &&
+      contexts.length > 32 &&
+      error instanceof PacsError &&
+      (error.code === 'CONEXAO_FECHADA' || error.code === 'ASSOCIACAO_RECUSADA');
+    if (!canRetryCompact) throw error;
+    const compact = retrieveContexts(
+      options.imageClasses,
+      options.otherClasses,
+      compactTransferSyntaxGroups(IMAGE_TRANSFER_SYNTAX_GROUPS),
+    );
+    association = await Association.open(server, options, compact.contexts, compact.roles);
+  }
+
+  try {
+    const summary = await (async () => {
     const getContext = association.contextFor(UID.studyRootGet, 'download por C-GET');
     const messageId = association.newMessageId();
     association.send(
@@ -754,7 +790,13 @@ export async function retrieve(
       }
       options.signal?.removeEventListener('abort', cancel);
     }
-  });
+    })();
+    await association.release();
+    return summary;
+  } catch (error) {
+    association.abort();
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -926,7 +968,10 @@ export async function retrieveStudyParallel(
         } catch (err) {
           const isAssociationLimit =
             err instanceof PacsError &&
-            (err.code === 'ASSOCIACAO_RECUSADA' || err.code === 'SEM_CONEXAO');
+            (err.code === 'ASSOCIACAO_RECUSADA' ||
+              err.code === 'SEM_CONEXAO' ||
+              err.code === 'SERVIDOR_OCUPADO' ||
+              (err.code === 'CONEXAO_FECHADA' && lastSeriesReceived === 0));
           if (!isAssociationLimit) throw err;
 
           if (lastSeriesReceived > 0) totalReceived -= lastSeriesReceived;
