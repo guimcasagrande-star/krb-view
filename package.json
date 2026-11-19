@@ -2,7 +2,7 @@
   "name": "visualizador-dicom",
   "description": "KRB View — Visualizador DICOM",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
