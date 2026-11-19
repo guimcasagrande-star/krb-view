@@ -52,6 +52,7 @@ const TAG = {
   queryRetrieveLevel: '00080052',
   modality: '00080060',
   modalitiesInStudy: '00080061',
+  referringPhysicianName: '00080090',
   studyDescription: '00081030',
   seriesDescription: '0008103e',
   patientName: '00100010',
@@ -60,6 +61,7 @@ const TAG = {
   patientSex: '00100040',
   studyInstanceUid: '0020000d',
   seriesInstanceUid: '0020000e',
+  studyId: '00200010',
   seriesNumber: '00200011',
   numberOfStudyRelatedSeries: '00201206',
   numberOfStudyRelatedInstances: '00201208',
@@ -103,22 +105,25 @@ export function dateRange(from: string | undefined, to: string | undefined): str
   return a === b ? a : `${a}-${b}`;
 }
 
-function encodeQuery(values: Record<string, string>): Uint8Array {
-  const needsCharset = Object.values(values).some((v) => /[^\x00-\x7f]/.test(v));
+function encodeQuery(values: Record<string, string>, forceCharset = false): Uint8Array {
+  const needsCharset = forceCharset || Object.values(values).some((v) => /[^\x00-\x7f]/.test(v));
   const elements: ImplicitElement[] = Object.entries(values).map(([tag, value]) => ({
     tag,
     value: tag === TAG.studyInstanceUid || tag === TAG.seriesInstanceUid ? uidBytes(value) : latin1(value),
   }));
-  if (needsCharset) elements.push({ tag: TAG.specificCharacterSet, value: latin1('ISO_IR 100') });
+  if (needsCharset && values[TAG.specificCharacterSet] === undefined) {
+    elements.push({ tag: TAG.specificCharacterSet, value: latin1('ISO_IR 100') });
+  }
   return encodeImplicit(elements);
 }
 
-/**
- * Identificador de C-FIND no nível de estudo.
- *
- * Exige pelo menos um filtro: uma consulta vazia pediria o PACS inteiro.
- */
-export function buildStudyQuery(filters: StudyFilters): Uint8Array {
+function normalizeStudyFilters(filters: StudyFilters): {
+  name: string;
+  id: string;
+  accession: string;
+  modality: string;
+  date: string;
+} {
   const name = filters.patientName ? patientNamePattern(filters.patientName) : '';
   const id = assertNoBackslash('O ID do paciente', (filters.patientId ?? '').trim());
   const accession = assertNoBackslash('O número de acesso', (filters.accessionNumber ?? '').trim());
@@ -130,6 +135,16 @@ export function buildStudyQuery(filters: StudyFilters): Uint8Array {
       'Informe pelo menos nome, ID do paciente, número de acesso ou data para pesquisar.',
     );
   }
+  return { name, id, accession, modality, date };
+}
+
+/**
+ * Identificador de C-FIND no nível de estudo.
+ *
+ * Exige pelo menos um filtro: uma consulta vazia pediria o PACS inteiro.
+ */
+export function buildStudyQuery(filters: StudyFilters): Uint8Array {
+  const { name, id, accession, modality, date } = normalizeStudyFilters(filters);
   return encodeQuery({
     [TAG.queryRetrieveLevel]: 'STUDY',
     [TAG.patientName]: name,
@@ -147,6 +162,64 @@ export function buildStudyQuery(filters: StudyFilters): Uint8Array {
   });
 }
 
+/**
+ * Variantes de compatibilidade do C-FIND de estudo para PACS que retornam erro 0xC001/0xA900
+ * (ex.: Vivace / .NET PACS com `KeyNotFoundException` por chave obrigatória ausente como `StudyID`
+ * ou por chave opcional não mapeada como `ModalitiesInStudy` / `NumberOfStudyRelatedSeries`).
+ */
+export function buildStudyQueryFallbacks(filters: StudyFilters): Uint8Array[] {
+  const { name, id, accession, modality, date } = normalizeStudyFilters(filters);
+  return [
+    // 1. Completo estilo RadiAnt (inclui StudyID, ReferringPhysicianName e SpecificCharacterSet)
+    encodeQuery(
+      {
+        [TAG.queryRetrieveLevel]: 'STUDY',
+        [TAG.patientName]: name,
+        [TAG.patientId]: id,
+        [TAG.patientBirthDate]: '',
+        [TAG.patientSex]: '',
+        [TAG.studyDate]: date,
+        [TAG.studyTime]: '',
+        [TAG.accessionNumber]: accession,
+        [TAG.modalitiesInStudy]: modality,
+        [TAG.referringPhysicianName]: '',
+        [TAG.studyDescription]: '',
+        [TAG.studyInstanceUid]: '',
+        [TAG.studyId]: '',
+        [TAG.numberOfStudyRelatedSeries]: '',
+        [TAG.numberOfStudyRelatedInstances]: '',
+      },
+      true,
+    ),
+    // 2. Mínimo PS3.4 (sem contadores 0020,1206/1208, sem ModalitiesInStudy e sem BirthDate/Sex)
+    encodeQuery(
+      {
+        [TAG.queryRetrieveLevel]: 'STUDY',
+        [TAG.patientName]: name,
+        [TAG.patientId]: id,
+        [TAG.studyDate]: date,
+        [TAG.studyTime]: '',
+        [TAG.accessionNumber]: accession,
+        [TAG.studyDescription]: '',
+        [TAG.studyInstanceUid]: '',
+        [TAG.studyId]: '',
+      },
+      true,
+    ),
+    // 3. Estritamente chaves obrigatórias PS3.4 Tabela C.6-5 (sem SpecificCharacterSet nem StudyDescription)
+    encodeQuery({
+      [TAG.queryRetrieveLevel]: 'STUDY',
+      [TAG.patientName]: name,
+      [TAG.patientId]: id,
+      [TAG.studyDate]: date,
+      [TAG.studyTime]: '',
+      [TAG.accessionNumber]: accession,
+      [TAG.studyInstanceUid]: '',
+      [TAG.studyId]: '',
+    }),
+  ];
+}
+
 /** Identificador de C-FIND no nível de série, para um estudo. */
 export function buildSeriesQuery(studyInstanceUid: string): Uint8Array {
   if (!isValidUid(studyInstanceUid)) {
@@ -160,6 +233,21 @@ export function buildSeriesQuery(studyInstanceUid: string): Uint8Array {
     [TAG.modality]: '',
     [TAG.seriesDescription]: '',
     [TAG.numberOfSeriesRelatedInstances]: '',
+  });
+}
+
+/** Variante mínima do C-FIND de série (sem `NumberOfSeriesRelatedInstances`) para PACS estritos. */
+export function buildSeriesQueryMinimal(studyInstanceUid: string): Uint8Array {
+  if (!isValidUid(studyInstanceUid)) {
+    throw new PacsError('UID_INVALIDO', 'Identificador de estudo inválido.');
+  }
+  return encodeQuery({
+    [TAG.queryRetrieveLevel]: 'SERIES',
+    [TAG.studyInstanceUid]: studyInstanceUid,
+    [TAG.seriesInstanceUid]: '',
+    [TAG.seriesNumber]: '',
+    [TAG.modality]: '',
+    [TAG.seriesDescription]: '',
   });
 }
 

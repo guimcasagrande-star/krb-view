@@ -42,7 +42,9 @@ import {
 import {
   buildRetrieveIdentifier,
   buildSeriesQuery,
+  buildSeriesQueryMinimal,
   buildStudyQuery,
+  buildStudyQueryFallbacks,
   parseSeriesResult,
   parseStudyResult,
   sortStudies,
@@ -494,7 +496,27 @@ export async function findStudies(
   filters: StudyFilters,
   options: ClientOptions & FindOptions,
 ): Promise<FindResult<StudyResult>> {
-  const found = await find(server, options, buildStudyQuery(filters), parseStudyResult, options.limit ?? 200);
+  const limit = options.limit ?? 200;
+  const primary = buildStudyQuery(filters);
+  let found: FindResult<StudyResult>;
+  try {
+    found = await find(server, options, primary, parseStudyResult, limit);
+  } catch (firstError) {
+    if (!(firstError instanceof PacsError) || firstError.code !== 'PESQUISA_FALHOU') {
+      throw firstError;
+    }
+    let recovered: FindResult<StudyResult> | undefined;
+    for (const altQuery of buildStudyQueryFallbacks(filters)) {
+      try {
+        recovered = await find(server, options, altQuery, parseStudyResult, limit);
+        break;
+      } catch (err) {
+        if (!(err instanceof PacsError) || err.code !== 'PESQUISA_FALHOU') throw err;
+      }
+    }
+    if (!recovered) throw firstError;
+    found = recovered;
+  }
   // ModalitiesInStudy é chave opcional: há PACS que ignoram o filtro. Refiltra aqui
   // quando o servidor devolveu a lista de modalidades.
   const modality = (filters.modality ?? '').trim().toUpperCase();
@@ -511,13 +533,17 @@ export async function findSeries(
   studyInstanceUid: string,
   options: ClientOptions & FindOptions,
 ): Promise<FindResult<SeriesResult>> {
-  const found = await find(
-    server,
-    options,
-    buildSeriesQuery(studyInstanceUid),
-    parseSeriesResult,
-    options.limit ?? 1000,
-  );
+  const limit = options.limit ?? 1000;
+  const primary = buildSeriesQuery(studyInstanceUid);
+  let found: FindResult<SeriesResult>;
+  try {
+    found = await find(server, options, primary, parseSeriesResult, limit);
+  } catch (firstError) {
+    if (!(firstError instanceof PacsError) || firstError.code !== 'PESQUISA_FALHOU') {
+      throw firstError;
+    }
+    found = await find(server, options, buildSeriesQueryMinimal(studyInstanceUid), parseSeriesResult, limit);
+  }
   found.results.sort(
     (a, b) =>
       (a.seriesNumber ?? Number.MAX_SAFE_INTEGER) - (b.seriesNumber ?? Number.MAX_SAFE_INTEGER) ||

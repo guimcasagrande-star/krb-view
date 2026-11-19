@@ -1648,4 +1648,118 @@ describe('C-MOVE e receptor C-STORE SCP', () => {
       maxPduLength: 16384,
     });
   });
+
+  it('findStudies faz fallback automático quando o PACS devolve 0xC001 por chave ausente ou opcional não suportada', async () => {
+    const findAcceptPdu = () =>
+      encodeAssociateAc({
+        calledAeTitle: SERVER.aeTitle,
+        callingAeTitle: ME,
+        contexts: [{ id: 1, result: 0, transferSyntax: TS.implicitVrLittleEndian }],
+        maxPduLength: 65536,
+        implementationClassUid: '1.2.3.4',
+        implementationVersionName: 'VIVACE_SIM',
+      });
+
+    let attempts = 0;
+    const connect = async (): Promise<Transport> => {
+      let writes = 0;
+      const assembler = new MessageAssembler();
+      let onData: (chunk: Uint8Array) => void = () => {};
+      let onClose: (err?: Error) => void = () => {};
+
+      return {
+        send(data) {
+          writes++;
+          if (writes === 1) {
+            queueMicrotask(() => onData(findAcceptPdu()));
+            return;
+          }
+          if (data[0] === PDU.releaseRq) {
+            queueMicrotask(() => onData(encodeReleaseRp()));
+            return;
+          }
+          if (data[0] === PDU.pData) {
+            for (const pdv of decodePData(data.subarray(6))) {
+              const msg = assembler.push(pdv);
+              if (!msg || !msg.dataset) continue;
+              attempts++;
+              const tags = parseImplicit(msg.dataset);
+              // Simula PACS Vivace: falha com 0xC001 se tiver 00201206 (opcional) ou se faltar 00200010 (StudyID)
+              if (tags.has('00201206') || !tags.has('00200010')) {
+                const errRsp = concat(
+                  fragmentMessage(
+                    1,
+                    encodeCommand({
+                      affectedSopClassUid: UID.studyRootFind,
+                      commandField: COMMAND.cFindRsp,
+                      messageIdBeingRespondedTo: msg.command.messageId ?? 1,
+                      hasDataset: false,
+                      status: 0xc001,
+                      errorComment: 'Error Handling C-FIND : The given key was not present in the dictionary.',
+                    }),
+                    undefined,
+                    0,
+                  ),
+                );
+                queueMicrotask(() => onData(errRsp));
+              } else {
+                const pending = concat(
+                  fragmentMessage(
+                    1,
+                    encodeCommand({
+                      affectedSopClassUid: UID.studyRootFind,
+                      commandField: COMMAND.cFindRsp,
+                      messageIdBeingRespondedTo: msg.command.messageId ?? 1,
+                      hasDataset: true,
+                      status: STATUS.pending,
+                    }),
+                    encodeImplicit([
+                      { tag: '00100010', value: latin1('SILVA^MARIA') },
+                      { tag: '0020000d', value: latin1('1.2.3.4.500', 0) },
+                      { tag: '00080020', value: latin1('20261119') },
+                    ]),
+                    0,
+                  ),
+                );
+                const done = concat(
+                  fragmentMessage(
+                    1,
+                    encodeCommand({
+                      affectedSopClassUid: UID.studyRootFind,
+                      commandField: COMMAND.cFindRsp,
+                      messageIdBeingRespondedTo: msg.command.messageId ?? 1,
+                      hasDataset: false,
+                      status: STATUS.success,
+                    }),
+                    undefined,
+                    0,
+                  ),
+                );
+                queueMicrotask(() => onData(concat([pending, done])));
+              }
+            }
+          }
+        },
+        close() {
+          queueMicrotask(() => onClose());
+        },
+        onData(cb) {
+          onData = cb;
+        },
+        onClose(cb) {
+          onClose = cb;
+        },
+      };
+    };
+
+    const res = await findStudies(
+      SERVER,
+      { patientName: 'silva', modality: 'CT' },
+      { connect, callingAeTitle: ME, timeoutMs: 1000 },
+    );
+
+    expect(attempts).toBe(3); // 1ª padrão (falha), 2ª completa c/ 00201206 (falha), 3ª mínima PS3.4 (sucesso!)
+    expect(res.results).toHaveLength(1);
+    expect(res.results[0]!.patientName).toBe('SILVA^MARIA');
+  });
 });
