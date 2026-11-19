@@ -303,6 +303,7 @@ fn main() {
             ponte_pacs::pacs_escutar,
             ponte_pacs::pacs_aceitar_canal,
             ponte_pacs::pacs_parar_escuta,
+            exames::exames_escolher_pasta,
             exames::exames_pasta_padrao,
             exames::exames_gravar,
             exames::exames_listar,

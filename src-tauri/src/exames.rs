@@ -63,6 +63,16 @@ fn juntar(base: &str, relativo: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
+pub async fn exames_escolher_pasta(titulo: Option<String>) -> Result<Option<String>, String> {
+    let mut dlg = rfd::AsyncFileDialog::new();
+    if let Some(t) = titulo {
+        dlg = dlg.set_title(t);
+    }
+    let escolhida = dlg.pick_folder().await;
+    Ok(escolhida.map(|p| p.path().to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 pub fn exames_pasta_padrao(app: AppHandle) -> Result<String, String> {
     let pasta = app
         .path()

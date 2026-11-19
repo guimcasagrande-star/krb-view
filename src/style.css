@@ -2234,3 +2234,24 @@ button.serie.arrastando-serie { opacity: 0.55; cursor: grabbing; }
   color: #fbbf24;
   border: 1px solid rgba(251, 191, 36, 0.35);
 }
+
+/* Exportar exame (DICOMDIR / JPEG) */
+#exportar-exame { background: var(--painel); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 16px 20px; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+#exportar-exame::backdrop { background: rgba(0, 0, 0, 0.6); }
+#exportar-exame h2 { margin: 0 0 12px; font-size: 16px; }
+.exportar-corpo { display: flex; flex-direction: column; gap: 8px; }
+.exportar-series-cab { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.exportar-series-acoes { display: flex; gap: 6px; }
+.exportar-series-lista { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; border: 1px solid var(--borda); border-radius: 4px; padding: 6px 8px; background: rgba(0, 0, 0, 0.18); }
+.exportar-serie-item { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 3px; cursor: pointer; font-size: 13px; }
+.exportar-serie-item:hover { background: var(--painel-hover); }
+.exportar-serie-mod { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; background: rgba(56, 189, 248, 0.16); color: #7dd3fc; min-width: 34px; text-align: center; }
+.exportar-serie-desc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exportar-serie-qtd { font-size: 12px; opacity: 0.75; white-space: nowrap; }
+.exportar-bloco-jpeg { display: flex; flex-direction: column; gap: 4px; padding-left: 10px; border-left: 2px solid var(--borda); }
+.exportar-nota { margin: 0; line-height: 1.4; }
+.exportar-progresso { width: 100%; height: 10px; }
+.exportar-status { margin: 2px 0; font-size: 12px; word-break: break-word; }
+.exportar-status.ok { color: #4ade80; }
+.exportar-status.aviso { color: #fbbf24; }
+.exportar-status.erro { color: #f87171; }

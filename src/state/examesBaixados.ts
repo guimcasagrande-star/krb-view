@@ -32,6 +32,17 @@ function deBase64(texto: string): Uint8Array {
   return out;
 }
 
+export function tauriDisponivel(): boolean {
+  return (globalThis as unknown as { __TAURI__?: TauriGlobal }).__TAURI__ !== undefined;
+}
+
+export async function escolherPastaDestino(titulo?: string): Promise<string | null> {
+  const res = await tauri().core.invoke<string | null>('exames_escolher_pasta', {
+    titulo: titulo ?? null,
+  });
+  return res ?? null;
+}
+
 /** Pasta de exames em uso: a escolhida pelo usuário ou a padrão (dados locais do programa). */
 export async function pastaDeExames(): Promise<string> {
   try {

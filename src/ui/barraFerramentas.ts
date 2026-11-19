@@ -60,6 +60,10 @@ async function exportarImagemAtiva(formato: 'png' | 'jpeg'): Promise<string | nu
   return exportar(formato);
 }
 
+function abrirExportarExame(): void {
+  void import('./exportarExame').then((m) => m.abrirExportarExame());
+}
+
 function abrirBuscarPacs(aba: AbaPacs = 'buscar'): void {
   void import('./buscarPacs').then((m) => m.abrirBuscarPacs(aba));
 }
@@ -594,7 +598,11 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   }
   menuAbrir.painel.append(
     divisorMenu(),
-    secaoMenu('Exportar imagem'),
+    secaoMenu('Exportar'),
+    itemMenu('Exportar exame (DICOMDIR / JPEG)…', undefined, () => abrirExportarExame(), menuAbrir.fechar, {
+      svg: ICONES_MENU.pasta,
+      destaque: true,
+    }),
     itemMenu('Exportar viewport em PNG', undefined, () => void exportar('png'), menuAbrir.fechar, {
       svg: ICONES_MENU.imagem,
       badge: 'PNG',
