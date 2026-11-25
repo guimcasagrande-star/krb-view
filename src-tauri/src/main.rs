@@ -257,6 +257,52 @@ fn gpu_definir_preferencia(modo: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn abrir_url_externa(url: String) -> Result<(), String> {
+    let limpo = url.trim();
+    let lower = limpo.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("Apenas endereços http:// ou https:// são permitidos.".to_string());
+    }
+    if limpo.len() > 2048
+        || limpo
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '"')
+    {
+        return Err("Endereço inválido.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(limpo)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Não foi possível abrir o navegador: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(limpo)
+            .spawn()
+            .map_err(|e| format!("Não foi possível abrir o navegador: {e}"))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(limpo)
+            .spawn()
+            .map_err(|e| format!("Não foi possível abrir o navegador: {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn aplicar_preferencia_gpu_webview2() {
     #[cfg(target_os = "windows")]
     {
@@ -333,7 +379,8 @@ fn main() {
             janela_secundaria_abrir,
             janela_configurar_exibicao,
             janela_alternar_tela_cheia,
-            gpu_definir_preferencia
+            gpu_definir_preferencia,
+            abrir_url_externa
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o visualizador");

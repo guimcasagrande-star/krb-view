@@ -4,6 +4,14 @@
  */
 
 import { sanearNivelFiltro } from '../viewer/filtroImagem';
+import {
+  LINKS_RAPIDOS_PADRAO,
+  MAX_LINKS_RAPIDOS,
+  normalizarUrlExterna,
+  sanearLinksRapidos,
+  extrairDominioCurto,
+  type LinkRapido,
+} from './linksRapidos';
 
 export interface PrefsMedidas {
   /** Cor das linhas das medidas. */
@@ -115,6 +123,8 @@ export interface PrefsGerais {
   preferenciaGpu: PreferenciaGpu;
   /** Filtro visual padrão (-5 Suave a +5 Nítido, 0 = Original) ao abrir séries de TC. */
   filtroImagemCtPadrao: number;
+  /** Links externos rápidos exibidos no menu "Links" da barra superior. */
+  linksRapidos: LinkRapido[];
   /** IDs dos itens opcionais ocultados na barra de ferramentas superior. */
   barraSuperiorOcultos: string[];
 }
@@ -234,6 +244,7 @@ export const ITENS_PERSONALIZAVEIS_BARRA: ReadonlyArray<ItemPersonalizavelBarra>
   { id: 'mpr', rotulo: 'MPR (R)' },
   { id: 'mip3d', rotulo: 'MIP 3D', retratoOcultar: true },
   { id: '3d', rotulo: '3D' },
+  { id: 'links', rotulo: 'Links rápidos' },
   { id: 'atalhos', rotulo: 'Ajuda de atalhos (?)', retratoOcultar: true },
 ];
 
@@ -277,6 +288,7 @@ function copiaPadrao(): PrefsGerais {
     qualidade3d: 'equilibrado',
     preferenciaGpu: 'alto-desempenho',
     filtroImagemCtPadrao: 0,
+    linksRapidos: LINKS_RAPIDOS_PADRAO.map((l) => ({ ...l })),
     barraSuperiorOcultos: [],
   };
 }
@@ -409,6 +421,7 @@ export function sanear(bruto: unknown): PrefsGerais {
   p.qualidade3d = qualidade3dValida(b.qualidade3d, p.qualidade3d);
   p.preferenciaGpu = preferenciaGpuValida(b.preferenciaGpu, p.preferenciaGpu);
   p.filtroImagemCtPadrao = sanearNivelFiltro(b.filtroImagemCtPadrao, p.filtroImagemCtPadrao);
+  p.linksRapidos = sanearLinksRapidos(b.linksRapidos);
   if (Array.isArray(b.barraSuperiorOcultos)) {
     const ocultos: string[] = [];
     for (const id of b.barraSuperiorOcultos) {
@@ -495,5 +508,45 @@ export function restaurarTelas(): void {
 
 export function restaurarFavoritosMenu(): void {
   atuais.favoritosMenu = [...FAVORITOS_MENU_PADRAO];
+  salvarPreferencias();
+}
+
+export function adicionarLinkRapido(
+  rotuloBruto: string,
+  urlBruta: string,
+): { ok: true; link: LinkRapido } | { ok: false; erro: string } {
+  if (atuais.linksRapidos.length >= MAX_LINKS_RAPIDOS) {
+    return { ok: false, erro: `Limite máximo de ${MAX_LINKS_RAPIDOS} links atingido.` };
+  }
+  const url = normalizarUrlExterna(urlBruta);
+  if (!url) {
+    return { ok: false, erro: 'Informe um endereço válido (ex.: https://exemplo.com).' };
+  }
+  const rotulo = (rotuloBruto.trim() || extrairDominioCurto(url)).slice(0, 60);
+  const id = `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const novo: LinkRapido = { id, rotulo, url, grupo: 'Personalizados' };
+  atuais.linksRapidos.push(novo);
+  salvarPreferencias();
+  return { ok: true, link: novo };
+}
+
+export function removerLinkRapido(id: string): void {
+  const antes = atuais.linksRapidos.length;
+  atuais.linksRapidos = atuais.linksRapidos.filter((l) => l.id !== id);
+  if (atuais.linksRapidos.length !== antes) {
+    salvarPreferencias();
+  }
+}
+
+export function restaurarLinksRapidos(): void {
+  const atuaisIds = new Set(atuais.linksRapidos.map((l) => l.id));
+  const personalizados = atuais.linksRapidos.filter(
+    (l) => !LINKS_RAPIDOS_PADRAO.some((p) => p.id === l.id),
+  );
+  // Se algum padrão foi removido, recoloca todos os padrões na ordem original mantendo os personalizados no final.
+  const faltavaPadrao = LINKS_RAPIDOS_PADRAO.some((p) => !atuaisIds.has(p.id));
+  atuais.linksRapidos = faltavaPadrao
+    ? [...LINKS_RAPIDOS_PADRAO.map((l) => ({ ...l })), ...personalizados]
+    : LINKS_RAPIDOS_PADRAO.map((l) => ({ ...l }));
   salvarPreferencias();
 }

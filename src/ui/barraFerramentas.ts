@@ -30,7 +30,16 @@ import {
   restaurar,
   teclaDaFerramenta,
 } from '../tools/grupo';
-import { EVENTO_PREFERENCIAS, preferencias, salvarPreferencias, telas } from '../state/preferencias';
+import {
+  adicionarLinkRapido,
+  EVENTO_PREFERENCIAS,
+  preferencias,
+  removerLinkRapido,
+  restaurarLinksRapidos,
+  salvarPreferencias,
+  telas,
+} from '../state/preferencias';
+import { abrirLinkExterno, LINKS_RAPIDOS_PADRAO } from '../state/linksRapidos';
 import { autoJanelaCorteAtual, copiarMedidasSelecionadas } from '../tools/utilidadesJanelaEMedidas';
 import type { AbaConfiguracoes } from './configuracoes';
 
@@ -1614,6 +1623,189 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   const config = botao('Ajustes', 'Configurações: medidas, barra, 3D/GPU, atalhos e janelas', () => abrirConfiguracoes(), ICONES_BARRA.config);
   config.setAttribute('aria-label', 'Configurações');
 
+  // Menu suspenso "Links" (sites de apoio ao laudo, com exclusão de qualquer item e adição de novos)
+  const iconeLinksBarra = svgBarra(
+    '<path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.2 4.72"/><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07l1.62-1.62"/>',
+  );
+  const iconeAbrirExterno = svgBarra(
+    '<path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/>',
+  );
+  const menuLinks = criarMenuSuspenso({
+    rotulo: 'Links',
+    svg: iconeLinksBarra,
+    dica: 'Links rápidos de radiologia, calculadoras, periódicos e IA (abre no navegador)',
+  });
+  menuLinks.contentor.dataset.itemBarra = 'links';
+  menuLinks.painel.classList.add('painel-links-rapidos');
+
+  const listaLinksEl = document.createElement('div');
+  listaLinksEl.className = 'lista-links-rapidos';
+
+  const rodapeLinksEl = document.createElement('div');
+  rodapeLinksEl.className = 'rodape-links-rapidos';
+
+  const btnAbrirFormLink = itemMenu(
+    '+ Adicionar link…',
+    undefined,
+    () => {
+      formNovoLink.hidden = false;
+      btnAbrirFormLink.hidden = true;
+      erroFormLink.hidden = true;
+      campoNomeLink.value = '';
+      campoUrlLink.value = '';
+      campoNomeLink.focus();
+    },
+    () => undefined,
+  );
+  btnAbrirFormLink.classList.add('item-menu-destaque');
+
+  const btnRestaurarLinks = itemMenu(
+    'Restaurar links padrão',
+    undefined,
+    () => {
+      restaurarLinksRapidos();
+      notificarPreferenciasParaOutraJanela();
+    },
+    () => undefined,
+  );
+
+  const formNovoLink = document.createElement('form');
+  formNovoLink.className = 'form-novo-link';
+  formNovoLink.hidden = true;
+
+  const campoNomeLink = document.createElement('input');
+  campoNomeLink.type = 'text';
+  campoNomeLink.className = 'campo-novo-link';
+  campoNomeLink.placeholder = 'Nome (ex.: ChatGPT)';
+  campoNomeLink.maxLength = 60;
+  campoNomeLink.setAttribute('aria-label', 'Nome do link');
+
+  const campoUrlLink = document.createElement('input');
+  campoUrlLink.type = 'text';
+  campoUrlLink.className = 'campo-novo-link';
+  campoUrlLink.placeholder = 'Endereço (ex.: https://site.com)';
+  campoUrlLink.setAttribute('aria-label', 'Endereço URL do link');
+
+  const erroFormLink = document.createElement('div');
+  erroFormLink.className = 'erro-novo-link';
+  erroFormLink.hidden = true;
+
+  const acoesFormLink = document.createElement('div');
+  acoesFormLink.className = 'acoes-novo-link';
+
+  const btnSalvarLink = document.createElement('button');
+  btnSalvarLink.type = 'submit';
+  btnSalvarLink.className = 'btn-acao-link primario';
+  btnSalvarLink.textContent = 'Adicionar';
+
+  const btnCancelarLink = document.createElement('button');
+  btnCancelarLink.type = 'button';
+  btnCancelarLink.className = 'btn-acao-link';
+  btnCancelarLink.textContent = 'Cancelar';
+
+  const fecharFormNovoLink = (): void => {
+    formNovoLink.hidden = true;
+    btnAbrirFormLink.hidden = false;
+    erroFormLink.hidden = true;
+  };
+
+  btnCancelarLink.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    fecharFormNovoLink();
+  });
+
+  for (const inp of [campoNomeLink, campoUrlLink]) {
+    inp.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        fecharFormNovoLink();
+      }
+    });
+  }
+
+  formNovoLink.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const res = adicionarLinkRapido(campoNomeLink.value, campoUrlLink.value);
+    if (!res.ok) {
+      erroFormLink.textContent = res.erro;
+      erroFormLink.hidden = false;
+      campoUrlLink.focus();
+      return;
+    }
+    fecharFormNovoLink();
+    notificarPreferenciasParaOutraJanela();
+  });
+
+  acoesFormLink.append(btnSalvarLink, btnCancelarLink);
+  formNovoLink.append(campoNomeLink, campoUrlLink, erroFormLink, acoesFormLink);
+  rodapeLinksEl.append(btnAbrirFormLink, formNovoLink, btnRestaurarLinks);
+  menuLinks.painel.append(listaLinksEl, divisorMenu(), rodapeLinksEl);
+
+  function renderizarMenuLinks(): void {
+    listaLinksEl.replaceChildren();
+    const links = preferencias().linksRapidos;
+    if (links.length === 0) {
+      const vazio = document.createElement('div');
+      vazio.className = 'links-rapidos-vazio';
+      vazio.textContent = 'Nenhum link na lista.';
+      listaLinksEl.append(vazio);
+    } else {
+      let grupoAtual: string | undefined;
+      for (const link of links) {
+        const grp = link.grupo || 'Links';
+        if (grp !== grupoAtual) {
+          grupoAtual = grp;
+          listaLinksEl.append(secaoMenu(grp));
+        }
+        const linhaEl = document.createElement('div');
+        linhaEl.className = 'linha-link-rapido';
+
+        const btnAbrir = document.createElement('button');
+        btnAbrir.type = 'button';
+        btnAbrir.className = 'item-menu-suspenso btn-abrir-link-rapido';
+        btnAbrir.title = `${link.rotulo} — ${link.url}`;
+        const conteudo = document.createElement('span');
+        conteudo.className = 'rotulo-com-icone';
+        const ic = document.createElement('span');
+        ic.className = 'icone-item-menu';
+        ic.innerHTML = iconeAbrirExterno;
+        const txt = document.createElement('span');
+        txt.className = 'texto-link-rapido';
+        txt.textContent = link.rotulo;
+        conteudo.append(ic, txt);
+        btnAbrir.append(conteudo);
+        btnAbrir.addEventListener('click', () => {
+          menuLinks.fechar();
+          abrirLinkExterno(link.url);
+        });
+
+        const btnApagar = document.createElement('button');
+        btnApagar.type = 'button';
+        btnApagar.className = 'btn-apagar-link';
+        btnApagar.textContent = '×';
+        btnApagar.title = `Remover "${link.rotulo}"`;
+        btnApagar.setAttribute('aria-label', `Remover link ${link.rotulo}`);
+        btnApagar.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          removerLinkRapido(link.id);
+          notificarPreferenciasParaOutraJanela();
+        });
+
+        linhaEl.append(btnAbrir, btnApagar);
+        listaLinksEl.append(linhaEl);
+      }
+    }
+
+    const idsAtuais = new Set(links.map((l) => l.id));
+    const faltaAlgumPadrao = LINKS_RAPIDOS_PADRAO.some((p) => !idsAtuais.has(p.id));
+    btnRestaurarLinks.hidden = !faltaAlgumPadrao;
+  }
+
+  renderizarMenuLinks();
+  document.addEventListener(EVENTO_PREFERENCIAS, renderizarMenuLinks);
+
   const ajuda = botao('Atalhos', 'Atalhos de teclado (tecla ?)', () => alternarAjuda(), ICONES_BARRA.ajuda);
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
   ajuda.dataset.itemBarra = 'atalhos';
@@ -1628,6 +1820,8 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     menuCine.contentor,
     separador(),
     grupoMpr3d,
+    separador(),
+    menuLinks.contentor,
     config,
     ajuda,
   );
