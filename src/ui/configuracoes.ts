@@ -25,6 +25,7 @@ import {
   TOTAL_FAVORITOS_MENU,
 } from '../state/preferencias';
 import { sincronizarPreferenciaGpuNativa } from '../viewer/iniciar';
+import { PRESETS_FILTRO_IMAGEM } from '../viewer/filtroImagem';
 import { ACOES_ATALHO, teclaDaAcao } from '../tools/atalhos';
 import { FERRAMENTAS_PRIMARIAS, teclaDaFerramenta } from '../tools/grupo';
 import { iconeFavoritoMenu, listarOpcoesFavoritosMenu } from './menuContexto';
@@ -899,6 +900,11 @@ const OPCOES_GPU: Array<[PreferenciaGpu, string]> = [
   ['auto', 'Automático do sistema (Windows)'],
 ];
 
+const OPCOES_FILTRO_CT: Array<[string, string]> = PRESETS_FILTRO_IMAGEM.map((preset) => [
+  String(preset.valor),
+  `${preset.rotulo} (${preset.valor === 0 ? '0' : preset.valor > 0 ? `+${String(preset.valor).replace('.', ',')}` : String(preset.valor).replace('.', ',')})`,
+]);
+
 function abaBarraE3d(): HTMLElement {
   const p = preferencias();
   const tl = telas();
@@ -932,6 +938,16 @@ function abaBarraE3d(): HTMLElement {
       'p',
       { class: 'cfg-dica' },
       'Em notebooks híbridos, o WebGL aplica a preferência aos novos contextos e o motor nativo WebView2 fixa a placa escolhida ao reiniciar o programa.',
+    ),
+
+    el('h3', {}, 'Aparência da imagem (TC)'),
+    linha(
+      'Filtro padrão ao abrir séries de TC',
+      campoSelect(String(p.filtroImagemCtPadrao), OPCOES_FILTRO_CT, (v) => {
+        p.filtroImagemCtPadrao = Number(v);
+        salvarENotificar();
+      }),
+      'Filtro visual inicial (Suave ↔ Nítido) aplicado ao abrir uma TC. Você sempre pode ajustar individualmente por viewport na barra superior ou pelo botão direito. Não altera HU/SUV.',
     ),
 
     el('h3', {}, 'Posição da barra de séries'),

@@ -29,7 +29,11 @@ function nomeDoArquivo(extensao: string): string {
 /** Devolve uma mensagem de erro em português, ou `null` se deu certo. */
 export async function exportarImagemAtiva(formato: 'png' | 'jpeg', comMedidas = true): Promise<string | null> {
   const el = viewportAtivo();
-  const canvasOrigem = el?.querySelector('canvas');
+  const todosCanvases = el ? Array.from(el.querySelectorAll('canvas')) : [];
+  const canvasOrigem =
+    todosCanvases.find((c) => c.style.display !== 'none' && c.width > 0 && c.height > 0) ??
+    todosCanvases[0] ??
+    null;
   if (!el || !canvasOrigem) return 'Abra uma imagem num viewport antes de exportar.';
 
   const saida = document.createElement('canvas');
@@ -41,7 +45,9 @@ export async function exportarImagemAtiva(formato: 'png' | 'jpeg', comMedidas = 
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, saida.width, saida.height);
   }
+  ctx.filter = canvasOrigem.style.filter || 'none';
   ctx.drawImage(canvasOrigem, 0, 0);
+  ctx.filter = 'none';
 
   if (comMedidas) {
     const svg = el.querySelector('svg.svg-layer');

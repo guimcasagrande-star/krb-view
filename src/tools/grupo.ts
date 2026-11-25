@@ -466,6 +466,9 @@ export function aplicarZoomFator(fator: number): Promise<void> {
   });
 }
 
+/** Disparado em `document` quando o usuário restaura o viewport ativo. */
+export const EVENTO_VIEWPORT_RESTAURADO = 'viewportRestaurado';
+
 /** Volta janela, zoom, pan, rotação, espelhamento, giro do plano e crosshairs ao estado inicial. */
 export async function restaurar(): Promise<void> {
   if (modoMprAtivo) {
@@ -481,6 +484,7 @@ export async function restaurar(): Promise<void> {
     v.resetProperties();
     v.resetCamera();
   }, true);
+  document.dispatchEvent(new CustomEvent(EVENTO_VIEWPORT_RESTAURADO));
 }
 
 /** Teclado: avança (delta > 0) ou volta (delta < 0) cortes no viewport ativo. */

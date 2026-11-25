@@ -3,6 +3,8 @@
  * Guardadas só neste computador, em localStorage. Nenhum dado de exame entra aqui.
  */
 
+import { sanearNivelFiltro } from '../viewer/filtroImagem';
+
 export interface PrefsMedidas {
   /** Cor das linhas das medidas. */
   cor: string;
@@ -111,6 +113,8 @@ export interface PrefsGerais {
   qualidade3d: Qualidade3d;
   /** Preferência de adaptador gráfico (notebooks híbridos com GPU integrada + dedicada). */
   preferenciaGpu: PreferenciaGpu;
+  /** Filtro visual padrão (-5 Suave a +5 Nítido, 0 = Original) ao abrir séries de TC. */
+  filtroImagemCtPadrao: number;
   /** IDs dos itens opcionais ocultados na barra de ferramentas superior. */
   barraSuperiorOcultos: string[];
 }
@@ -220,6 +224,7 @@ export const ITENS_PERSONALIZAVEIS_BARRA: ReadonlyArray<ItemPersonalizavelBarra>
   { id: 'localizar', rotulo: 'Localizar 3D (X)' },
   { id: 'inclinar', rotulo: 'Girar plano oblíquo (I)', retratoOcultar: true },
   { id: 'segmentar', rotulo: 'Segmentar' },
+  { id: 'filtroImagem', rotulo: 'Filtro (Suave / Nítido)' },
   { id: 'girar', rotulo: 'Girar / Espelhar / Inverter' },
   { id: 'restaurar', rotulo: 'Botão Restaurar rápido', retratoOcultar: true },
   { id: 'mouse', rotulo: 'Menu Mouse', retratoOcultar: true },
@@ -271,6 +276,7 @@ function copiaPadrao(): PrefsGerais {
     favoritosMenu: [...FAVORITOS_MENU_PADRAO],
     qualidade3d: 'equilibrado',
     preferenciaGpu: 'alto-desempenho',
+    filtroImagemCtPadrao: 0,
     barraSuperiorOcultos: [],
   };
 }
@@ -402,6 +408,7 @@ export function sanear(bruto: unknown): PrefsGerais {
 
   p.qualidade3d = qualidade3dValida(b.qualidade3d, p.qualidade3d);
   p.preferenciaGpu = preferenciaGpuValida(b.preferenciaGpu, p.preferenciaGpu);
+  p.filtroImagemCtPadrao = sanearNivelFiltro(b.filtroImagemCtPadrao, p.filtroImagemCtPadrao);
   if (Array.isArray(b.barraSuperiorOcultos)) {
     const ocultos: string[] = [];
     for (const id of b.barraSuperiorOcultos) {

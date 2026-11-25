@@ -29,7 +29,14 @@ import { FERRAMENTA_LOCALIZADOR_3D } from '../tools/localizador3d';
 import { medidaNoPonto } from '../tools/selecao';
 import { autoJanelaCorteAtual, copiarMedidasSelecionadas } from '../tools/utilidadesJanelaEMedidas';
 import { petEmSuv, TETOS_SUV } from '../viewer/exibicaoInicial';
-import { alternarMaximizado, alternarMpr, itensMenuPlano } from '../viewer/viewport2d';
+import {
+  alternarMaximizado,
+  alternarMpr,
+  definirFiltroImagemAtivo,
+  filtroImagemAtivo,
+  itensMenuPlano,
+} from '../viewer/viewport2d';
+import { PRESETS_FILTRO_IMAGEM, rotuloFiltroImagem } from '../viewer/filtroImagem';
 import type { AbaConfiguracoes } from './configuracoes';
 
 function abrirConfiguracoes(aba?: AbaConfiguracoes): void {
@@ -409,10 +416,19 @@ function montarItens(sobreMedida: boolean): EntradaMenuFlutuante[] {
   for (const f of FERRAMENTAS_PRIMARIAS) {
     if (f.categoria === 'navegacao' && (!f.apenasMpr || mpr)) itens.push(itemFerramenta(f));
   }
+  const nivelFiltro = filtroImagemAtivo();
   itens.push(
     'divisor',
     { rotulo: 'Medidas', filhos: FERRAMENTAS_PRIMARIAS.filter((f) => f.categoria === 'medida').map(itemFerramenta) },
     { rotulo: 'Janela', filhos: itensJanela() },
+    {
+      rotulo: nivelFiltro === 0 ? 'Filtro de imagem' : `Filtro (${rotuloFiltroImagem(nivelFiltro)})`,
+      filhos: PRESETS_FILTRO_IMAGEM.map<EntradaMenuFlutuante>((preset) => ({
+        rotulo: preset.rotulo,
+        marcado: nivelFiltro === preset.valor,
+        acao: () => definirFiltroImagemAtivo(preset.valor),
+      })),
+    },
   );
   const planos = itensMenuPlano();
   if (planos.length > 0) itens.push({ rotulo: 'Plano', filhos: planos });

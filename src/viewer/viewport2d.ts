@@ -35,6 +35,8 @@ import {
   valorNoPonto,
 } from './voxelsCache';
 import { ajustarZoomAoConteudo, exibicaoPadraoPet } from './exibicaoInicial';
+import { aplicarFiltroVisualElemento, sanearNivelFiltro } from './filtroImagem';
+import { preferencias } from '../state/preferencias';
 import { SynchronizerManager, synchronizers, ToolGroupManager } from '@cornerstonejs/tools';
 import { nearestIndex } from '../compare/sync';
 import { type FusionCandidate, findFusionCandidates } from '../pet/fusionPairing';
@@ -56,6 +58,7 @@ import {
   definirLinhasReferencia,
   botaoAtribuido,
   EVENTO_BOTOES_MUDARAM,
+  EVENTO_VIEWPORT_RESTAURADO,
   ferramentaPrimariaAtual,
   FERRAMENTAS_PRIMARIAS,
   ID_GRUPO,
@@ -261,6 +264,10 @@ export interface EstadoViewports {
   sincroniaEstudo: boolean;
   /** Linhas de referência entre cortes de planos diferentes. */
   linhasReferencia: boolean;
+  /** Filtro visual (Suave <-> Nítido, -5..+5, 0 = Original) do viewport ativo. */
+  filtroImagemAtivo: number;
+  /** Verdadeiro quando o viewport ativo aceita filtro visual (2D ou MPR com imagem). */
+  suportaFiltroImagemAtivo: boolean;
 }
 
 export interface ElementosViewport2d {
@@ -298,6 +305,8 @@ interface Slot {
   planoSlot: PlanoSlot;
   modoSlab: ModoSlab;
   slabMm: number;
+  /** Filtro visual por viewport (-5 Suave a +5 Nítido; 0 = Original). */
+  filtroImagem: number;
   planoMpr?: PlanoMprOverlay;
   habilitado: boolean;
   montandoVolume: boolean;
@@ -525,6 +534,8 @@ function estadoAtual(): EstadoViewports {
     maximizado: maximizado !== null,
     sincroniaEstudo: sincroniaEstudoLigada,
     linhasReferencia: linhasReferenciaLigadas,
+    filtroImagemAtivo: slot?.filtroImagem ?? 0,
+    suportaFiltroImagemAtivo: Boolean(slot && slot.pilha && slot.planoSlot !== '3d'),
     comparacao: {
       ativo: compararAtivo,
       rolagemLigada: compararAtivo ? rolagemCompararLigada && linkRolagemComparar !== null : sincroniaEstudoLigada,
@@ -945,6 +956,7 @@ function sincronizar(): void {
     x.botaoDadosPet.hidden = x.celula.hidden || !x.pilha?.instances.some((i) => i.modality === 'PT');
     atualizarBotaoVoltarSlot(x);
     atualizarScrubberSlot(x);
+    aplicarFiltroAoSlot(x);
   }
   document.dispatchEvent(new CustomEvent<EstadoViewports>(EVENTO_ESTADO_VIEWPORTS, { detail: estadoAtual() }));
 }
@@ -2242,6 +2254,7 @@ async function exibirSlot(
         voiPadraoDaPilha(stack);
       if (voi) vp.setProperties({ voiRange: voi, invert: voiPreservado?.invert ?? pet?.invert });
       else if (pet) vp.setProperties({ invert: true });
+      aplicarFiltroAoSlot(slot);
 
       if (slot.planoSlot === 'mip-rotatorio') {
         aplicarCameraMipRotatorio(vp, 0);
@@ -2305,6 +2318,7 @@ async function exibirSlot(
       if (pet) viewport.setProperties({ invert: true, ...(pet.voiRange ? { voiRange: pet.voiRange } : {}) });
       ajustarZoomAoConteudo(viewport, ids[inicial]!, stack.instances[0]?.modality);
     }
+    aplicarFiltroAoSlot(slot);
     viewport.render();
     slot.overlay.atualizar();
     esconderMensagem(slot);
@@ -2722,6 +2736,34 @@ async function alternarPlanoAoLado(plano: 'mip-rotatorio' | '3d'): Promise<void>
   }
 }
 
+/** Retorna o filtro visual padrão para uma pilha (preferência de TC quando for CT; 0 nas demais). */
+function filtroPadraoParaPilha(stack: StackNode | null | undefined): number {
+  const ehCt = !!stack?.instances.some((i) => i.modality === 'CT');
+  return ehCt ? sanearNivelFiltro(preferencias().filtroImagemCtPadrao, 0) : 0;
+}
+
+/** Aplica o filtro visual (Suave / Nítido) aos canvases de imagem do slot sem alterar HU/SUV nem medidas. */
+function aplicarFiltroAoSlot(slot: Slot): void {
+  const nivelEfetivo = !slot.pilha || slot.planoSlot === '3d' ? 0 : slot.filtroImagem;
+  aplicarFiltroVisualElemento(slot.elemento, slot.idViewport, nivelEfetivo);
+}
+
+/** Nível de filtro visual (-5 Suave a +5 Nítido; 0 = Original) do viewport ativo. */
+export function filtroImagemAtivo(): number {
+  return slots[ativo]?.filtroImagem ?? 0;
+}
+
+/** Define o filtro visual apenas do viewport ativo (por viewport) e atualiza a exibição. */
+export function definirFiltroImagemAtivo(nivel: number): void {
+  const slot = slots[ativo];
+  if (!slot?.pilha || slot.planoSlot === '3d') return;
+  const saneado = sanearNivelFiltro(nivel, 0);
+  if (slot.filtroImagem === saneado) return;
+  slot.filtroImagem = saneado;
+  aplicarFiltroAoSlot(slot);
+  sincronizar();
+}
+
 /**
  * Muda o modo de projeção do slab ('normal', 'mip', 'minip' ou 'media') no viewport ativo
  * (ou nos 3 planos quando no modo MPR), funcionando inclusive no plano 'original' sem
@@ -3045,10 +3087,14 @@ async function montarLayoutMpr(
     }
 
     const voiInicial = (resPet?.ok ? voiTcDaFusao(stack) : undefined) ?? voiPadraoDaPilha(stack);
+    const filtroInicialMpr =
+      slots[ativo]?.pilha?.id === stack.id ? slots[ativo]!.filtroImagem : filtroPadraoParaPilha(stack);
 
     for (let i = 0; i < 3; i++) {
       const vp = vps[i]!;
+      slots[i]!.filtroImagem = filtroInicialMpr;
       if (voiInicial) vp.setProperties({ voiRange: voiInicial });
+      aplicarFiltroAoSlot(slots[i]!);
       aplicarSlabAoViewport(vp, modoSlabMpr, slabMprMm);
       vp.render();
       esconderMensagem(slots[i]!);
@@ -3631,6 +3677,7 @@ export async function abrirPilha2d(stack: StackNode): Promise<void> {
   slot.planoSlot = 'original';
   slot.modoSlab = 'normal';
   slot.slabMm = 1;
+  slot.filtroImagem = filtroPadraoParaPilha(stack);
   slot.volumePilhaId = null;
   slot.corteSalvo = undefined;
   esconderAvisoVolume(slot);
@@ -4180,6 +4227,7 @@ function criarSlot(indice: number): Slot {
     planoSlot: 'original',
     modoSlab: 'normal',
     slabMm: 1,
+    filtroImagem: 0,
     habilitado: false,
     montandoVolume: false,
     pilha: null,
@@ -4454,6 +4502,13 @@ export function configurarViewport2d(elementos: ElementosViewport2d): void {
   });
   document.addEventListener(EVENTO_MODO_SEGMENTACAO, () => {
     for (const s of slots) atualizarBotaoVoltarSlot(s);
+  });
+  document.addEventListener(EVENTO_VIEWPORT_RESTAURADO, () => {
+    const s = slots[ativo];
+    if (s && s.filtroImagem !== 0) {
+      s.filtroImagem = 0;
+      sincronizar();
+    }
   });
   iniciarVoiEsfera();
   // Girar plano: o ponto fixo é o centro do crosshair (MPR) ou a cruzinha do ┼ Localizar.

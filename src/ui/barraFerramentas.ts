@@ -102,6 +102,7 @@ import {
   alternarMpr,
   alternarSincronizacaoJanelaComparar,
   alternarSincronizacaoZoomPanComparar,
+  definirFiltroImagemAtivo,
   definirLayout,
   definirModoSlabAtivo,
   definirPlanoSlotAtivo,
@@ -123,6 +124,14 @@ import {
   proximoLayout,
   zerarVinculoRolagemComparar,
 } from '../viewer/viewport2d';
+import {
+  FILTRO_IMAGEM_MAX,
+  FILTRO_IMAGEM_MIN,
+  FILTRO_IMAGEM_PASSO,
+  PRESETS_FILTRO_IMAGEM,
+  rotuloBotaoFiltroImagem,
+  rotuloFiltroImagem,
+} from '../viewer/filtroImagem';
 
 function svgBarra(conteudo: string): string {
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${conteudo}</svg>`;
@@ -1317,7 +1326,67 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   botaoSegmentar.dataset.itemBarra = 'segmentar';
   grupoNavegacao.append(menuMedidas.contentor, botaoSegmentar);
 
-  // 5. Menu de Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar) + Mouse
+  // 5. Menu de Filtro de Imagem (Suave <-> Nítido), Transformações (Girar, Espelhar, Inverter, Restaurar) + Mouse
+  const iconeFiltroImagem = svgBarra(
+    '<path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="11" cy="17" r="2" fill="currentColor"/>',
+  );
+  const menuFiltroImagem = criarMenuSuspenso({
+    rotulo: 'Filtro',
+    svg: iconeFiltroImagem,
+    dica: 'Ajustar filtro visual do viewport ativo entre Suave e Nítido (não altera HU/SUV)',
+  });
+  menuFiltroImagem.contentor.dataset.itemBarra = 'filtroImagem';
+
+  const caixaFiltro = document.createElement('div');
+  caixaFiltro.className = 'painel-filtro-imagem';
+
+  const cabecalhoFiltro = document.createElement('div');
+  cabecalhoFiltro.className = 'filtro-imagem-cabecalho';
+  const tituloFiltro = document.createElement('span');
+  tituloFiltro.textContent = 'Filtro (viewport ativo)';
+  const valorFiltroEl = document.createElement('strong');
+  valorFiltroEl.className = 'filtro-imagem-valor';
+  valorFiltroEl.textContent = 'Original';
+  cabecalhoFiltro.append(tituloFiltro, valorFiltroEl);
+
+  const sliderFiltro = document.createElement('input');
+  sliderFiltro.type = 'range';
+  sliderFiltro.className = 'filtro-imagem-slider';
+  sliderFiltro.min = String(FILTRO_IMAGEM_MIN);
+  sliderFiltro.max = String(FILTRO_IMAGEM_MAX);
+  sliderFiltro.step = String(FILTRO_IMAGEM_PASSO);
+  sliderFiltro.value = '0';
+  sliderFiltro.setAttribute('aria-label', 'Filtro de imagem entre Suave e Nítido');
+  sliderFiltro.addEventListener('input', () => {
+    definirFiltroImagemAtivo(Number(sliderFiltro.value));
+  });
+
+  const escalaFiltro = document.createElement('div');
+  escalaFiltro.className = 'filtro-imagem-escala';
+  escalaFiltro.innerHTML = '<span>Suave</span><span>Original</span><span>Nítido</span>';
+
+  const notaFiltro = document.createElement('div');
+  notaFiltro.className = 'filtro-imagem-nota';
+  notaFiltro.textContent = 'Só altera a exibição na tela (não altera HU/SUV).';
+
+  caixaFiltro.append(cabecalhoFiltro, sliderFiltro, escalaFiltro);
+  menuFiltroImagem.painel.append(caixaFiltro, secaoMenu('Predefinições'));
+
+  const botoesPresetFiltro: Array<{ valor: number; botao: HTMLButtonElement }> = [];
+  for (const preset of PRESETS_FILTRO_IMAGEM) {
+    const item = itemMenu(
+      preset.rotulo,
+      preset.valor === 0 ? '0' : preset.valor > 0 ? `+${String(preset.valor).replace('.', ',')}` : String(preset.valor).replace('.', ','),
+      () => definirFiltroImagemAtivo(preset.valor),
+      menuFiltroImagem.fechar,
+    );
+    item.title = preset.descricao;
+    botoesPresetFiltro.push({ valor: preset.valor, botao: item });
+    menuFiltroImagem.painel.append(item);
+  }
+  menuFiltroImagem.painel.append(notaFiltro);
+
+  // Transformações da Imagem (Girar, Espelhar, Inverter, Restaurar)
   const grupoImagem = document.createElement('div');
   grupoImagem.className = 'grupo-botoes';
 
@@ -1429,7 +1498,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
   menuTransformar.contentor.dataset.itemBarra = 'girar';
   botaoRestaurarRapido.dataset.itemBarra = 'restaurar';
   menuMouse.contentor.dataset.itemBarra = 'mouse';
-  grupoImagem.append(menuTransformar.contentor, botaoRestaurarRapido, menuMouse.contentor);
+  grupoImagem.append(menuFiltroImagem.contentor, menuTransformar.contentor, botaoRestaurarRapido, menuMouse.contentor);
 
   // 6. Cine (Tocar/Pausar + Velocidade em q/s)
   const menuCine = criarMenuSuspenso({
@@ -1544,6 +1613,7 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
 
   const config = botao('Ajustes', 'Configurações: medidas, barra, 3D/GPU, atalhos e janelas', () => abrirConfiguracoes(), ICONES_BARRA.config);
   config.setAttribute('aria-label', 'Configurações');
+
   const ajuda = botao('Atalhos', 'Atalhos de teclado (tecla ?)', () => alternarAjuda(), ICONES_BARRA.ajuda);
   ajuda.setAttribute('aria-label', 'Atalhos de teclado');
   ajuda.dataset.itemBarra = 'atalhos';
@@ -1699,6 +1769,22 @@ export function iniciarBarraFerramentas(contentor: HTMLElement): void {
     itemZoomMenu.setAttribute('aria-pressed', String(comp.zoomPanLigado));
 
     const temPilha = e.pilhaId !== null;
+    const nivelFiltro = e.filtroImagemAtivo;
+    menuFiltroImagem.botaoPrincipal.disabled = !e.suportaFiltroImagemAtivo;
+    menuFiltroImagem.botaoSeta.disabled = !e.suportaFiltroImagemAtivo;
+    menuFiltroImagem.botaoPrincipal.setAttribute('aria-pressed', String(nivelFiltro !== 0));
+    definirConteudoBotaoBarra(
+      menuFiltroImagem.botaoPrincipal,
+      iconeFiltroImagem,
+      `${rotuloBotaoFiltroImagem(nivelFiltro)} ▾`,
+    );
+    sliderFiltro.value = String(nivelFiltro);
+    sliderFiltro.disabled = !e.suportaFiltroImagemAtivo;
+    valorFiltroEl.textContent = rotuloFiltroImagem(nivelFiltro);
+    for (const p of botoesPresetFiltro) {
+      p.botao.setAttribute('aria-pressed', String(p.valor === nivelFiltro));
+    }
+
     menuCine.botaoPrincipal.disabled = !temPilha || e.mprAtivo;
     menuCine.botaoSeta.disabled = !temPilha || e.mprAtivo || emMipRotatorio;
     definirConteudoBotaoBarra(
